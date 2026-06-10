@@ -27,10 +27,13 @@
 #include "ota_manager.h"
 #include "device_security.h"
 #include "sys_monitor.h"
+#include "home_ui.h"
+#include "local_api.h"
+#include "user_config.h"
 
 static const char *TAG = "main";
 
-#define DEFAULT_BROKER_URI CONFIG_CCP_DEFAULT_BROKER_URI
+#define DEFAULT_BROKER_URI CCP_CFG_MQTT_BROKER_URI
 
 /* ------------------------------------------------------------ helpers */
 
@@ -77,8 +80,8 @@ static void load_active_or_recovery(void)
         ESP_LOGW(TAG, "running recovery layout");
         return;
     }
-    ui_renderer_show_boot_screen("Waiting for content...",
-                                 storage_sd_mounted() ? "SD ready" : "No SD card");
+    /* no server package installed -> built-in home suite */
+    home_ui_show_home();
 }
 
 /* --------------------------------------------------------------- hooks */
@@ -269,18 +272,50 @@ static void start_online_services(void)
     }
 }
 
+/*
+ * WiFi events arrive on the system event-loop task whose stack is tiny —
+ * never do UI/MQTT/httpd work there. The handler only sets bits; this
+ * worker (8KB stack) does the heavy lifting.
+ */
+#include "freertos/event_groups.h"
+
+#define NETEVT_CONNECTED    BIT0
+#define NETEVT_PROVISIONING BIT1
+#define NETEVT_DISCONNECTED BIT2
+
+static EventGroupHandle_t s_net_events;
+
 static void on_net_event(net_state_t state)
 {
     switch (state) {
-    case NET_STATE_PROVISIONING:
-        ui_renderer_show_provisioning_screen(net_manager_ap_ssid());
-        break;
-    case NET_STATE_CONNECTED:
-        ESP_LOGI(TAG, "network up");
-        start_online_services();
-        break;
-    default:
-        break;
+    case NET_STATE_PROVISIONING:  xEventGroupSetBits(s_net_events, NETEVT_PROVISIONING); break;
+    case NET_STATE_CONNECTED:     xEventGroupSetBits(s_net_events, NETEVT_CONNECTED); break;
+    case NET_STATE_DISCONNECTED:  xEventGroupSetBits(s_net_events, NETEVT_DISCONNECTED); break;
+    default: break;
+    }
+}
+
+static void net_worker_task(void *arg)
+{
+    while (true) {
+        EventBits_t bits = xEventGroupWaitBits(
+            s_net_events, NETEVT_CONNECTED | NETEVT_PROVISIONING | NETEVT_DISCONNECTED,
+            pdTRUE, pdFALSE, portMAX_DELAY);
+
+        if (bits & NETEVT_PROVISIONING) {
+            home_ui_show_wifi_setup(net_manager_ap_ssid());
+        }
+        if (bits & NETEVT_DISCONNECTED) {
+            home_ui_network_changed(false, NULL);
+        }
+        if (bits & NETEVT_CONNECTED) {
+            char ip[16];
+            net_manager_ip(ip, sizeof(ip));
+            ESP_LOGI(TAG, "network up (%s)", ip);
+            home_ui_network_changed(true, ip);
+            local_api_start();
+            start_online_services();
+        }
     }
 }
 
@@ -316,8 +351,9 @@ void app_main(void)
     ESP_ERROR_CHECK(device_security_init());
     ESP_ERROR_CHECK(display_engine_start());
 
-    ui_renderer_show_boot_screen("Booting...", device_security_id());
-    ccp_board_set_brightness(80);
+    /* built-in UI: config from SD/LittleFS, applies brightness */
+    ESP_ERROR_CHECK(home_ui_init());
+    home_ui_show_welcome("Starting...");
 
     if (audio_engine_init() != ESP_OK) {
         ESP_LOGW(TAG, "audio unavailable");
@@ -342,9 +378,16 @@ void app_main(void)
     ESP_ERROR_CHECK(wasm_engine_init(&wasm_hooks));
     ESP_ERROR_CHECK(sync_manager_init(on_package_activated));
 
-    load_active_or_recovery();
-
+    s_net_events = xEventGroupCreate();
+    xTaskCreatePinnedToCore(net_worker_task, "net_worker", 8192, NULL, 4, NULL, 0);
     ESP_ERROR_CHECK(net_manager_start(on_net_event));
+
+    /* let the welcome splash breathe, then enter the home/package UI
+     * (unless the captive portal took over the screen) */
+    vTaskDelay(pdMS_TO_TICKS(1800));
+    if (net_manager_state() != NET_STATE_PROVISIONING) {
+        load_active_or_recovery();
+    }
     ESP_ERROR_CHECK(sys_monitor_start(on_telemetry, 30));
 
     xTaskCreatePinnedToCore(health_gate_task, "health", 4096, NULL, 6, NULL, 0);

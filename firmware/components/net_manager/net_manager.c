@@ -210,7 +210,8 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
             return;
         }
         set_state(NET_STATE_DISCONNECTED);
-        vTaskDelay(pdMS_TO_TICKS(1000 * (s_retry > 10 ? 10 : s_retry)));
+        /* no delay here: this runs on the event-loop task. esp_wifi paces
+         * reconnects internally; portal fallback caps the retry count. */
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         s_retry = 0;

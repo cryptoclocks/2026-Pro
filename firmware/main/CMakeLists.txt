@@ -3,5 +3,5 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES board_bsp display_engine storage net_manager connectivity
              sync_manager ui_renderer wasm_engine audio_engine ota_manager
-             device_security sys_monitor json
+             device_security sys_monitor home_ui local_api json
 )
