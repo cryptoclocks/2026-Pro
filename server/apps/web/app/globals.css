@@ -1,15 +1,50 @@
 @import "tailwindcss";
 
 :root {
-  --ccp-bg: #0b0e11;
-  --ccp-panel: #12161c;
-  --ccp-border: #2b3139;
-  --ccp-fg: #eaecef;
-  --ccp-muted: #6b7280;
-  --ccp-accent: #f0b90b;
+  --ccp-bg: #0a0f0e;
+  --ccp-panel: #111917;
+  --ccp-panel-2: #16211e;
+  --ccp-border: #24332f;
+  --ccp-fg: #eaf2f0;
+  --ccp-muted: #7c8c88;
+  --ccp-accent: #15c3a6; /* brand teal (matches the logo) */
+  --ccp-accent-2: #0e7c7b;
+  --ccp-green: #0ecb81;
+  --ccp-red: #f6465d;
 }
 
 body {
-  background: var(--ccp-bg);
+  background:
+    radial-gradient(1100px 600px at 80% -10%, rgba(21, 195, 166, 0.10), transparent 60%),
+    var(--ccp-bg);
   color: var(--ccp-fg);
+  min-height: 100vh;
+}
+
+/* --- small component layer --- */
+.card {
+  background: var(--ccp-panel);
+  border: 1px solid var(--ccp-border);
+  border-radius: 16px;
+}
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  border-radius: 10px; padding: 7px 14px; font-size: 14px; font-weight: 600;
+  border: 1px solid var(--ccp-border); color: var(--ccp-fg);
+  background: var(--ccp-panel-2); cursor: pointer; transition: all .15s;
+}
+.btn:hover { border-color: var(--ccp-accent); color: var(--ccp-accent); }
+.btn-primary {
+  background: var(--ccp-accent); color: #04110e; border-color: transparent;
+}
+.btn-primary:hover { filter: brightness(1.08); color: #04110e; }
+.btn-danger:hover { border-color: var(--ccp-red); color: var(--ccp-red); }
+.dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; }
+.input, .select {
+  background: var(--ccp-bg); border: 1px solid var(--ccp-border);
+  border-radius: 8px; padding: 6px 10px; color: var(--ccp-fg); font-size: 14px;
+}
+.pill {
+  font-size: 11px; padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--ccp-border); color: var(--ccp-muted);
 }

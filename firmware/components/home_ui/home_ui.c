@@ -5,6 +5,7 @@
 #include "net_manager.h"
 #include "device_security.h"
 #include "ota_manager.h"
+#include "audio_engine.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -50,6 +51,7 @@ typedef struct {
 } page_t;
 
 #define MAX_SYMBOLS 4
+#define MAX_ALERTS  8
 
 typedef enum { THEME_GOLD, THEME_MINT, THEME_NEON } clock_theme_t;
 typedef enum { CRYPTO_STYLE_CHART, CRYPTO_STYLE_BIG } crypto_style_t;
@@ -70,6 +72,11 @@ typedef struct {
     crypto_style_t crypto_style;
     bool currency_thb;
     int fetch_interval_s;
+    char timeframe[8];          /* chart history candles: 15m / 1h / 4h / 1d */
+    /* price alerts — unlocked when the owner links the device via app login */
+    struct { char symbol[16]; bool above; double price; } alerts[MAX_ALERTS];
+    int alert_count;
+    bool alerts_unlocked;
     int slide_interval_s;
     slide_fx_t slide_fx;
     char slide_order[MAX_SLIDES][32];
@@ -104,6 +111,9 @@ static struct {
     lv_chart_series_t *spark_ser;
     int32_t spark_min, spark_max; /* running range of pushed points */
     int spark_points;
+    lv_obj_t *btn_tf_lbl;
+    volatile int tf_idx;
+    volatile bool need_history;  /* poll task should (re)fetch klines */
     TaskHandle_t poll_task;
     volatile bool poll_run;
     volatile int cur_symbol;
@@ -123,6 +133,12 @@ static struct {
     int slide_idx;
     lv_obj_t *slide_img, *slide_hint;
     lv_timer_t *slide_timer;
+
+    /* price alerts */
+    lv_obj_t *alert_overlay;
+    volatile int alert_cur;             /* rule index currently showing, -1 = none */
+    int64_t alert_snooze_until[MAX_ALERTS];
+    bool alert_off[MAX_ALERTS];         /* Stop = disabled for this session */
 
     /* menu */
     lv_obj_t *menu;
@@ -152,6 +168,7 @@ static void cfg_defaults(home_cfg_t *c)
     c->crypto_style = CRYPTO_STYLE_CHART;
     c->currency_thb = false;
     c->fetch_interval_s = CCP_CFG_CRYPTO_POLL_S;
+    strcpy(c->timeframe, "15m");
     c->slide_interval_s = CCP_CFG_SLIDE_INTERVAL_S;
     c->slide_fx = SLIDE_FX_FADE;
     c->slide_return_first = CCP_CFG_SLIDE_RETURN_FIRST;
@@ -229,6 +246,36 @@ static void cfg_apply_json(home_cfg_t *c, const cJSON *root)
             it->valueint >= 5) {
             c->fetch_interval_s = it->valueint;
         }
+        const cJSON *tf = cJSON_GetObjectItem(crypto, "timeframe");
+        if (cJSON_IsString(tf)) {
+            strlcpy(c->timeframe, tf->valuestring, sizeof(c->timeframe));
+        }
+        const cJSON *alerts = cJSON_GetObjectItem(crypto, "alerts");
+        if (cJSON_IsArray(alerts)) {
+            c->alert_count = 0;
+            const cJSON *a;
+            cJSON_ArrayForEach(a, alerts) {
+                if (c->alert_count >= MAX_ALERTS) {
+                    break;
+                }
+                const cJSON *asym = cJSON_GetObjectItem(a, "symbol");
+                const cJSON *adir = cJSON_GetObjectItem(a, "dir");
+                const cJSON *apr  = cJSON_GetObjectItem(a, "price");
+                if (cJSON_IsString(asym) && cJSON_IsNumber(apr) && apr->valuedouble > 0) {
+                    strlcpy(c->alerts[c->alert_count].symbol, asym->valuestring, 16);
+                    c->alerts[c->alert_count].above =
+                        !(cJSON_IsString(adir) && !strcmp(adir->valuestring, "below"));
+                    c->alerts[c->alert_count].price = apr->valuedouble;
+                    c->alert_count++;
+                }
+            }
+        }
+    }
+    /* app login writes owner block -> unlocks the alert feature */
+    const cJSON *owner = cJSON_GetObjectItem(root, "owner");
+    if (owner) {
+        const cJSON *em = cJSON_GetObjectItem(owner, "email");
+        c->alerts_unlocked = cJSON_IsString(em) && em->valuestring[0] != '\0';
     }
     const cJSON *slide = cJSON_GetObjectItem(root, "slideshow");
     if (slide) {
@@ -375,7 +422,7 @@ static void clock_tick(lv_timer_t *t)
     static const char *MO[] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
     lv_label_set_text_fmt(s.lbl_time, "%02d:%02d", tm.tm_hour, tm.tm_min);
-    lv_label_set_text_fmt(s.lbl_sec, ":%02d", tm.tm_sec);
+    lv_label_set_text_fmt(s.lbl_sec, "%02d", tm.tm_sec);
     lv_label_set_text_fmt(s.lbl_date, "%s  %d %s %d",
                           WD[tm.tm_wday], tm.tm_mday, MO[tm.tm_mon], tm.tm_year + 1900);
 }
@@ -386,33 +433,61 @@ static void build_clock_page(page_t *page)
 
     const clock_theme_t th = s.cfg.clock_theme;
 
-    /* near-fullscreen time: 48pt scaled 2.2x (~105px tall) */
+    /* near-fullscreen time: montserrat 48pt scaled ~3.05x */
+#define CLOCK_TIME_SCALE 780          /* 256 = 1x */
+#define CLOCK_TIME_Y     (-18)        /* time block center offset from screen center */
     s.lbl_time = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_48
     lv_obj_set_style_text_font(s.lbl_time, &lv_font_montserrat_48, 0);
 #endif
     lv_obj_set_style_text_color(s.lbl_time, lv_color_hex(THEMES[th].time), 0);
-    lv_obj_set_style_transform_scale(s.lbl_time, 563, 0); /* 256 = 1x */
+    lv_obj_set_style_transform_scale(s.lbl_time, CLOCK_TIME_SCALE, 0);
     lv_obj_set_style_transform_pivot_x(s.lbl_time, lv_pct(50), 0);
     lv_obj_set_style_transform_pivot_y(s.lbl_time, lv_pct(50), 0);
-    lv_label_set_text(s.lbl_time, "--:--");
-    lv_obj_align(s.lbl_time, LV_ALIGN_CENTER, 0, -36);
+    lv_label_set_text(s.lbl_time, "00:00");   /* measure with real digits */
+    lv_obj_align(s.lbl_time, LV_ALIGN_CENTER, 0, CLOCK_TIME_Y);
 
+    /* measure the (unscaled) text box, then derive the visual extents */
+    lv_obj_update_layout(scr);
+    lv_coord_t tw = lv_obj_get_width(s.lbl_time);
+    lv_coord_t thh = lv_obj_get_height(s.lbl_time);
+    int vis_hw = (tw * CLOCK_TIME_SCALE / 256) / 2;  /* visual half-width */
+    int vis_hh = (thh * CLOCK_TIME_SCALE / 256) / 2; /* visual half-height */
+    lv_label_set_text(s.lbl_time, "--:--");
+
+    /* seconds: small, hugging the bottom-right corner of the minutes digits */
     s.lbl_sec = lv_label_create(scr);
-#if LV_FONT_MONTSERRAT_28
-    lv_obj_set_style_text_font(s.lbl_sec, &lv_font_montserrat_28, 0);
+#if LV_FONT_MONTSERRAT_20
+    lv_obj_set_style_text_font(s.lbl_sec, &lv_font_montserrat_20, 0);
 #endif
     lv_obj_set_style_text_color(s.lbl_sec, lv_color_hex(THEMES[th].accent), 0);
     lv_label_set_text(s.lbl_sec, "");
-    lv_obj_align(s.lbl_sec, LV_ALIGN_CENTER, 0, 54);
+    lv_obj_align(s.lbl_sec, LV_ALIGN_CENTER, vis_hw + 12, CLOCK_TIME_Y + vis_hh - 22);
 
+    /* date: just below the time block */
     s.lbl_date = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_20
     lv_obj_set_style_text_font(s.lbl_date, &lv_font_montserrat_20, 0);
 #endif
     lv_obj_set_style_text_color(s.lbl_date, lv_color_hex(THEMES[th].date), 0);
     lv_label_set_text(s.lbl_date, "");
-    lv_obj_align(s.lbl_date, LV_ALIGN_BOTTOM_MID, 0, -26);
+    lv_obj_align(s.lbl_date, LV_ALIGN_CENTER, 0, CLOCK_TIME_Y + vis_hh + 12);
+
+    /* brand logo bottom-center (uploaded to /pages/clock/assets/logo.png) */
+    const char *logo_dirs[2] = { STORAGE_SD_BASE, STORAGE_LFS_BASE };
+    for (int i = 0; i < 2; i++) {
+        char p[80];
+        snprintf(p, sizeof(p), "%s/pages/clock/assets/logo.png", logo_dirs[i]);
+        struct stat st;
+        if (stat(p, &st) == 0) {
+            lv_obj_t *logo = lv_image_create(scr);
+            char lvp[96];
+            snprintf(lvp, sizeof(lvp), "A:%s", p);
+            lv_image_set_src(logo, lvp);
+            lv_obj_align(logo, LV_ALIGN_BOTTOM_MID, 0, -6);
+            break;
+        }
+    }
 
     if (!s.clock_timer) {
         s.clock_timer = lv_timer_create(clock_tick, 1000, NULL);
@@ -577,10 +652,121 @@ static void fetch_thb_rate(char *body, size_t body_len)
     cJSON_Delete(root);
 }
 
+/* fill the chart with history in one shot (range computed up front) */
+static void chart_set_history(const double *vals, int n)
+{
+    if (!display_engine_lock(500)) {
+        return;
+    }
+    if (s.spark && s.spark_ser && n > 0) {
+        int32_t lo = (int32_t)vals[0], hi = (int32_t)vals[0];
+        for (int i = 1; i < n; i++) {
+            int32_t v = (int32_t)vals[i];
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+        int32_t pad = (hi - lo) / 10 + hi / 200;
+        if (pad < 4) pad = 4;
+        lv_chart_set_all_value(s.spark, s.spark_ser, LV_CHART_POINT_NONE);
+        lv_chart_set_range(s.spark, LV_CHART_AXIS_PRIMARY_Y, lo - pad, hi + pad);
+        for (int i = 0; i < n; i++) {
+            lv_chart_set_next_value(s.spark, s.spark_ser, (int32_t)vals[i]);
+        }
+        s.spark_min = lo;
+        s.spark_max = hi;
+        s.spark_points = n;
+        lv_chart_refresh(s.spark);
+    }
+    display_engine_unlock();
+}
+
+/* Binance klines = instant chart history (close prices, field index 4) */
+static void fetch_klines(char *body, size_t body_len)
+{
+    char url[160];
+    snprintf(url, sizeof(url),
+             "https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d",
+             s.cfg.symbols[s.cur_symbol], s.cfg.timeframe, SPARK_POINTS);
+    int n = http_get_text(url, body, body_len);
+    if (n <= 0) {
+        return;
+    }
+    cJSON *root = cJSON_ParseWithLength(body, n);
+    if (!root) {
+        return;
+    }
+    double vals[SPARK_POINTS];
+    int cnt = 0;
+    if (cJSON_IsArray(root)) {
+        const cJSON *k;
+        cJSON_ArrayForEach(k, root) {
+            if (cnt >= SPARK_POINTS) {
+                break;
+            }
+            const cJSON *close = cJSON_GetArrayItem(k, 4);
+            if (cJSON_IsString(close)) {
+                vals[cnt++] = atof(close->valuestring);
+            }
+        }
+    }
+    cJSON_Delete(root);
+    if (cnt > 0) {
+        chart_set_history(vals, cnt);
+    }
+    ESP_LOGI(TAG, "klines %s %s: %d points",
+             s.cfg.symbols[s.cur_symbol], s.cfg.timeframe, cnt);
+}
+
+/* evaluate alert rules against live prices (one fetch per distinct symbol) */
+static void alert_show(int idx, double price);
+
+static void check_alerts(char *body, size_t body_len)
+{
+    char cached_sym[16] = "";
+    double cached_price = 0;
+    int64_t now = (int64_t)esp_log_timestamp();
+    for (int i = 0; i < s.cfg.alert_count; i++) {
+        if (s.alert_off[i] || s.alert_snooze_until[i] > now) {
+            continue; /* stopped or snoozed */
+        }
+        double price;
+        if (!strcmp(cached_sym, s.cfg.alerts[i].symbol)) {
+            price = cached_price;
+        } else {
+            char url[128];
+            snprintf(url, sizeof(url),
+                     "https://api.binance.com/api/v3/ticker/price?symbol=%s",
+                     s.cfg.alerts[i].symbol);
+            int n = http_get_text(url, body, body_len);
+            if (n <= 0) {
+                continue;
+            }
+            cJSON *root = cJSON_ParseWithLength(body, n);
+            const cJSON *p = root ? cJSON_GetObjectItem(root, "price") : NULL;
+            price = cJSON_IsString(p) ? atof(p->valuestring) : 0;
+            cJSON_Delete(root);
+            if (price <= 0) {
+                continue;
+            }
+            strlcpy(cached_sym, s.cfg.alerts[i].symbol, sizeof(cached_sym));
+            cached_price = price;
+        }
+        bool hit = s.cfg.alerts[i].above ? (price > s.cfg.alerts[i].price)
+                                         : (price < s.cfg.alerts[i].price);
+        if (hit) {
+            s.alert_cur = i;
+            alert_show(i, price);
+            break; /* one alert at a time */
+        }
+    }
+}
+
+#define POLL_BODY_LEN 24576 /* 60 klines ≈ 12KB JSON */
+
 static void crypto_poll_task(void *arg)
 {
     /* PSRAM scratch keeps this task's stack small despite TLS work */
-    char *body = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
+    char *body = heap_caps_malloc(POLL_BODY_LEN, MALLOC_CAP_SPIRAM);
     if (!body) {
         s.poll_task = NULL;
         vTaskDelete(NULL);
@@ -597,14 +783,20 @@ static void crypto_poll_task(void *arg)
         /* THB rate: fetch lazily, refresh hourly */
         if (s.cfg.currency_thb &&
             (s.usd_thb_rate <= 0 || esp_log_timestamp() - s.rate_fetched_ms > 3600 * 1000)) {
-            fetch_thb_rate(body, 8192);
+            fetch_thb_rate(body, POLL_BODY_LEN);
+        }
+
+        /* chart history first so the graph is full immediately */
+        if (s.need_history) {
+            s.need_history = false;
+            fetch_klines(body, POLL_BODY_LEN);
         }
 
         char url[128];
         snprintf(url, sizeof(url),
                  "https://api.binance.com/api/v3/ticker/24hr?symbol=%s",
                  s.cfg.symbols[s.cur_symbol]);
-        int n = http_get_text(url, body, 8192);
+        int n = http_get_text(url, body, POLL_BODY_LEN);
         if (n > 0) {
             cJSON *root = cJSON_Parse(body);
             if (root) {
@@ -619,6 +811,11 @@ static void crypto_poll_task(void *arg)
                 }
                 cJSON_Delete(root);
             }
+        }
+
+        /* price alerts (feature unlocked by app login) */
+        if (s.cfg.alerts_unlocked && s.cfg.alert_count > 0 && !s.alert_overlay) {
+            check_alerts(body, POLL_BODY_LEN);
         }
 
         int interval = s.cfg.fetch_interval_s > 0 ? s.cfg.fetch_interval_s : 10;
@@ -672,6 +869,19 @@ static void crypto_symbol_btn_cb(lv_event_t *e)
     }
     s.spark_points = 0; /* restart range tracking for the new symbol */
     crypto_render();
+    s.need_history = true;
+    s.force_fetch = true;
+}
+
+static const char *TIMEFRAMES[] = { "15m", "1h", "4h", "1d" };
+#define TIMEFRAME_COUNT 4
+
+static void crypto_tf_btn_cb(lv_event_t *e)
+{
+    s.tf_idx = (s.tf_idx + 1) % TIMEFRAME_COUNT;
+    strlcpy(s.cfg.timeframe, TIMEFRAMES[s.tf_idx], sizeof(s.cfg.timeframe));
+    lv_label_set_text(s.btn_tf_lbl, s.cfg.timeframe);
+    s.need_history = true;
     s.force_fetch = true;
 }
 
@@ -772,6 +982,21 @@ static void build_crypto_page(page_t *page)
         lv_chart_set_div_line_count(s.spark, 3, 0);
         s.spark_ser = lv_chart_add_series(s.spark, lv_color_hex(COL_ACCENT),
                                           LV_CHART_AXIS_PRIMARY_Y);
+
+        /* timeframe cycle button under the chart, bottom-left */
+        lv_obj_t *tf_btn = lv_button_create(scr);
+        lv_obj_set_size(tf_btn, 64, 30);
+        lv_obj_align(tf_btn, LV_ALIGN_BOTTOM_LEFT, 16, -4);
+        lv_obj_set_style_bg_color(tf_btn, lv_color_hex(COL_PANEL), 0);
+        lv_obj_set_style_border_width(tf_btn, 1, 0);
+        lv_obj_set_style_border_color(tf_btn, lv_color_hex(COL_BORDER), 0);
+        lv_obj_set_style_radius(tf_btn, 8, 0);
+        lv_obj_set_style_shadow_width(tf_btn, 0, 0);
+        s.btn_tf_lbl = lv_label_create(tf_btn);
+        lv_obj_set_style_text_color(s.btn_tf_lbl, lv_color_hex(COL_FG), 0);
+        lv_label_set_text(s.btn_tf_lbl, s.cfg.timeframe);
+        lv_obj_center(s.btn_tf_lbl);
+        lv_obj_add_event_cb(tf_btn, crypto_tf_btn_cb, LV_EVENT_CLICKED, NULL);
     }
 
     s.lbl_updated = lv_label_create(scr);
@@ -781,11 +1006,141 @@ static void build_crypto_page(page_t *page)
 
     crypto_update_header();
 
+    /* timeframe index from config, fresh history for the (re)built chart */
+    s.tf_idx = 0;
+    for (int i = 0; i < TIMEFRAME_COUNT; i++) {
+        if (!strcmp(s.cfg.timeframe, TIMEFRAMES[i])) {
+            s.tf_idx = i;
+            break;
+        }
+    }
+    s.need_history = true;
+
     if (!s.poll_task) {
         s.poll_run = true;
         xTaskCreatePinnedToCore(crypto_poll_task, "crypto_poll", 10240, NULL, 3,
                                 &s.poll_task, 0);
     }
+}
+
+/* ============================================================== alerts */
+
+static void alert_snooze_cb(lv_event_t *e)
+{
+    /* runs in the LVGL task, lock already held */
+    if (s.alert_overlay) {
+        lv_obj_delete(s.alert_overlay);
+        s.alert_overlay = NULL;
+    }
+    if (s.alert_cur >= 0 && s.alert_cur < MAX_ALERTS) {
+        s.alert_snooze_until[s.alert_cur] =
+            (int64_t)esp_log_timestamp() + 5 * 60 * 1000;
+    }
+    s.alert_cur = -1;
+    audio_engine_stop();
+}
+
+static void alert_stop_cb(lv_event_t *e)
+{
+    /* Stop = disable this rule until reboot / next config reload */
+    if (s.alert_overlay) {
+        lv_obj_delete(s.alert_overlay);
+        s.alert_overlay = NULL;
+    }
+    if (s.alert_cur >= 0 && s.alert_cur < MAX_ALERTS) {
+        s.alert_off[s.alert_cur] = true;
+    }
+    s.alert_cur = -1;
+    audio_engine_stop();
+}
+
+/* full-screen alert on the top layer (covers any page, no screen swap) */
+static void alert_show(int idx, double price)
+{
+    if (!display_engine_lock(500)) {
+        return;
+    }
+    if (s.alert_overlay) {
+        display_engine_unlock();
+        return;
+    }
+    const bool above = s.cfg.alerts[idx].above;
+    char base[12];
+    symbol_base(s.cfg.alerts[idx].symbol, base, sizeof(base));
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    s.alert_overlay = ov;
+    lv_obj_set_size(ov, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(ov, lv_color_hex(0x200808), 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(ov, 4, 0);
+    lv_obj_set_style_border_color(ov, lv_color_hex(COL_RED), 0);
+    lv_obj_set_style_radius(ov, 0, 0);
+    lv_obj_remove_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(ov);
+#if LV_FONT_MONTSERRAT_28
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+#endif
+    lv_obj_set_style_text_color(title, lv_color_hex(COL_RED), 0);
+    lv_label_set_text(title, LV_SYMBOL_BELL "  PRICE ALERT");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
+
+    lv_obj_t *what = lv_label_create(ov);
+#if LV_FONT_MONTSERRAT_48
+    lv_obj_set_style_text_font(what, &lv_font_montserrat_48, 0);
+#endif
+    lv_obj_set_style_text_color(what, lv_color_hex(COL_FG), 0);
+    lv_label_set_text_fmt(what, "%s %s %.6g", base, above ? ">" : "<",
+                          s.cfg.alerts[idx].price);
+    lv_obj_align(what, LV_ALIGN_CENTER, 0, -46);
+
+    lv_obj_t *nowlbl = lv_label_create(ov);
+#if LV_FONT_MONTSERRAT_28
+    lv_obj_set_style_text_font(nowlbl, &lv_font_montserrat_28, 0);
+#endif
+    lv_obj_set_style_text_color(nowlbl,
+                                lv_color_hex(above ? COL_GREEN : COL_RED), 0);
+    lv_label_set_text_fmt(nowlbl, "now  %.6g USDT", price);
+    lv_obj_align(nowlbl, LV_ALIGN_CENTER, 0, 8);
+
+    /* Snooze (5 min) on the left, Stop (disable rule) on the right */
+    lv_obj_t *snz = lv_button_create(ov);
+    lv_obj_set_size(snz, 200, 56);
+    lv_obj_align(snz, LV_ALIGN_BOTTOM_LEFT, 20, -16);
+    lv_obj_set_style_bg_color(snz, lv_color_hex(COL_ACCENT), 0);
+    lv_obj_set_style_radius(snz, 12, 0);
+    lv_obj_t *snzl = lv_label_create(snz);
+#if LV_FONT_MONTSERRAT_20
+    lv_obj_set_style_text_font(snzl, &lv_font_montserrat_20, 0);
+#endif
+    lv_obj_set_style_text_color(snzl, lv_color_hex(0x000000), 0);
+    lv_label_set_text(snzl, LV_SYMBOL_MUTE "  SNOOZE 5m");
+    lv_obj_center(snzl);
+    lv_obj_add_event_cb(snz, alert_snooze_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *stp = lv_button_create(ov);
+    lv_obj_set_size(stp, 200, 56);
+    lv_obj_align(stp, LV_ALIGN_BOTTOM_RIGHT, -20, -16);
+    lv_obj_set_style_bg_color(stp, lv_color_hex(COL_RED), 0);
+    lv_obj_set_style_radius(stp, 12, 0);
+    lv_obj_t *stpl = lv_label_create(stp);
+#if LV_FONT_MONTSERRAT_20
+    lv_obj_set_style_text_font(stpl, &lv_font_montserrat_20, 0);
+#endif
+    lv_obj_set_style_text_color(stpl, lv_color_hex(0xFFFFFF), 0);
+    lv_label_set_text(stpl, LV_SYMBOL_STOP "  STOP");
+    lv_obj_center(stpl);
+    lv_obj_add_event_cb(stp, alert_stop_cb, LV_EVENT_CLICKED, NULL);
+
+    display_engine_unlock();
+
+    char wav[80];
+    snprintf(wav, sizeof(wav), "%s/pages/crypto/assets/alert.wav",
+             storage_sd_mounted() ? STORAGE_SD_BASE : STORAGE_LFS_BASE);
+    audio_engine_play_file(wav, true); /* loops until snooze */
+    ESP_LOGI(TAG, "ALERT %s %s %.6g (now %.6g)", base, above ? ">" : "<",
+             s.cfg.alerts[idx].price, price);
 }
 
 /* ============================================================ slideshow */
@@ -911,14 +1266,17 @@ static void build_slideshow_page(page_t *page)
                   "Downloading sample photos..."
                 : LV_SYMBOL_IMAGE "  No images found\n\n"
                   "Connect WiFi for sample photos, or put\n"
-                  "PNG/JPG (320x240) in /pages/slideshow/assets/\n"
+                  "PNG (480x320) in /pages/slideshow/assets/\n"
                   "(SD card) or upload from the mobile app");
         lv_obj_center(s.slide_hint);
         return;
     }
 
     s.slide_img = lv_image_create(scr);
+    lv_obj_set_size(s.slide_img, LV_HOR_RES, LV_VER_RES);
     lv_obj_center(s.slide_img);
+    /* scale any non-fullscreen image to cover the 480x320 panel */
+    lv_image_set_inner_align(s.slide_img, LV_IMAGE_ALIGN_CONTAIN);
     s.slide_idx = 0;
     slide_show_current();
 
@@ -1218,6 +1576,15 @@ static void destroy_pages(void)
     s.last_usd_price = 0;
     s.lbl_price = NULL;
     s.coin_logo = NULL;
+    s.btn_tf_lbl = NULL;
+    if (s.alert_overlay) {
+        lv_obj_delete(s.alert_overlay);
+        s.alert_overlay = NULL;
+        audio_engine_stop();
+    }
+    s.alert_cur = -1;
+    memset(s.alert_off, 0, sizeof(s.alert_off));
+    memset(s.alert_snooze_until, 0, sizeof(s.alert_snooze_until));
     if (s.menu) { lv_obj_delete(s.menu); s.menu = NULL; }
     for (int i = 0; i < s.page_count; i++) {
         if (s.pages[i].screen) {

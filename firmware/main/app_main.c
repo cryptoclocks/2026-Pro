@@ -410,18 +410,22 @@ static void seed_slideshow_if_empty(void)
     }
     const char *dir = home_ui_slideshow_dir();
     storage_mkdirs(dir);
+    /* PNG, not JPEG: LVGL's lodepng decodes the whole image reliably, while
+     * its tiled tjpgd path renders blank on this panel. placehold.co serves
+     * baseline 480x320 PNGs (the panel's exact resolution). */
+    static const char *seed_colors[3] = { "0E7C7B", "1F3A93", "8E44AD" };
     int ok = 0;
-    for (int i = 1; i <= 3; i++) {
-        char url[96], dest[128], tmp[136];
-        snprintf(url, sizeof(url), "https://picsum.photos/320/240.jpg?random=%d", i);
-        snprintf(dest, sizeof(dest), "%s/sample%d.jpg", dir, i);
+    for (int i = 0; i < 3; i++) {
+        char url[160], dest[128], tmp[136];
+        snprintf(url, sizeof(url),
+                 "https://placehold.co/480x320/%s/FFFFFF/png?text=CryptoClock+%d",
+                 seed_colors[i], i + 1);
+        snprintf(dest, sizeof(dest), "%s/sample%d.png", dir, i + 1);
         struct stat st;
         if (stat(dest, &st) == 0 && st.st_size > 0) {
             ok++; /* already there from an earlier boot */
             continue;
         }
-        /* each ?random=N serves a different image, so a Range-resume would
-         * splice two images together — always download fresh to .part */
         snprintf(tmp, sizeof(tmp), "%s.part", dest);
         unlink(tmp);
         if (conn_http_download(url, tmp, NULL, 20000) == ESP_OK &&

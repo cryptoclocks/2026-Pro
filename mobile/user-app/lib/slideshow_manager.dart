@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'device_api.dart';
 import 'main.dart' show ccpAccent, ccpMuted, ccpPanel;
@@ -42,13 +43,21 @@ class _SlideshowManagerState extends State<SlideshowManager> {
 
   Future<void> _upload() async {
     final picker = ImagePicker();
-    final img = await picker.pickImage(
-        source: ImageSource.gallery, maxWidth: 320, maxHeight: 240, imageQuality: 85);
-    if (img == null) return;
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked == null) return;
     setState(() => _busy = true);
     try {
-      final name = 'p${DateTime.now().millisecondsSinceEpoch % 100000}.jpg';
-      await widget.api.uploadFile('$_dir/$name', await File(img.path).readAsBytes());
+      // Decode, fit to the 480x320 panel, re-encode as PNG. The display's
+      // PNG decoder is reliable; its JPEG path is not.
+      final raw = await File(picked.path).readAsBytes();
+      final decoded = img.decodeImage(raw);
+      if (decoded == null) throw Exception('Unsupported image');
+      final fitted = img.copyResize(decoded,
+          width: 480, height: 320, maintainAspect: true,
+          backgroundColor: img.ColorRgb8(0, 0, 0));
+      final png = img.encodePng(fitted, level: 6);
+      final name = 'p${DateTime.now().millisecondsSinceEpoch % 100000}.png';
+      await widget.api.uploadFile('$_dir/$name', png);
       await _refresh();
     } catch (e) {
       if (mounted) {

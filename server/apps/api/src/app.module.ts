@@ -5,6 +5,7 @@ import { MqttModule } from "./mqtt/mqtt.module";
 import { DevicesModule } from "./devices/devices.module";
 import { PayloadsModule } from "./payloads/payloads.module";
 import { BillingModule } from "./billing/billing.module";
+import { MarketplaceModule } from "./marketplace/marketplace.module";
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { BillingModule } from "./billing/billing.module";
     DevicesModule,
     PayloadsModule,
     BillingModule,
+    MarketplaceModule,
   ],
 })
 export class AppModule {}

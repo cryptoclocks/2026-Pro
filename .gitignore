@@ -26,5 +26,8 @@ server/**/.env.local
 server/**/.env*.local
 !server/.env.example
 
+# mobile app secrets (Supabase keys) — never commit
+mobile/**/lib/secrets.dart
+
 # --- vendor reference materials (1GB of datasheets/tools — keep local only) ---
 JC3248W535EN/

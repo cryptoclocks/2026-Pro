@@ -49,6 +49,13 @@ CONFIG_LV_USE_QRCODE=y
 # PNG/JPG decoders for SD-card images (slideshow, avatars, assets)
 CONFIG_LV_USE_LODEPNG=y
 CONFIG_LV_USE_TJPGD=y
+# decoded-image cache: 0 = decoded PNG/JPEG never gets a draw buffer -> images
+# silently don't render. Give the cache 3MB of PSRAM (holds several frames).
+CONFIG_LV_CACHE_DEF_SIZE=3145728
+# surface decoder failures on the console
+CONFIG_LV_USE_LOG=y
+CONFIG_LV_LOG_LEVEL_WARN=y
+CONFIG_LV_LOG_PRINTF=y
 CONFIG_LV_USE_FS_POSIX=y
 CONFIG_LV_FS_POSIX_LETTER=65
 CONFIG_LV_FS_POSIX_PATH=""
