@@ -13,6 +13,7 @@ dependencies:
   multicast_dns: ^0.3.2
   url_launcher: ^6.3.0
   shared_preferences: ^2.3.0
+  image_picker: ^1.1.0
 
 dev_dependencies:
   flutter_lints: ^4.0.0

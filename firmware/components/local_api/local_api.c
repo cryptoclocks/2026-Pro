@@ -10,6 +10,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -144,6 +147,134 @@ static esp_err_t h_identify(httpd_req_t *req)
     return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
 
+/* ------------------------------------------------ file management (SD) */
+
+static bool rel_path_safe(const char *p)
+{
+    return p && strncmp(p, "pages/", 6) == 0 && !strstr(p, "..") && !strchr(p, '\\');
+}
+
+/** GET /api/v1/files?dir=pages/slideshow/assets */
+static esp_err_t h_files(httpd_req_t *req)
+{
+    char query[128] = {0}, rel[96] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    httpd_query_key_value(query, "dir", rel, sizeof(rel));
+    if (!rel_path_safe(rel)) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "dir must be under pages/");
+    }
+    char full[160];
+    snprintf(full, sizeof(full), "%s/%s", STORAGE_SD_BASE, rel);
+
+    cJSON *arr = cJSON_CreateArray();
+    DIR *dir = opendir(full);
+    if (dir) {
+        struct dirent *de;
+        while ((de = readdir(dir)) != NULL) {
+            if (de->d_name[0] == '.') {
+                continue;
+            }
+            char fpath[300];
+            snprintf(fpath, sizeof(fpath), "%s/%s", full, de->d_name);
+            struct stat st;
+            if (stat(fpath, &st) == 0 && S_ISREG(st.st_mode)) {
+                cJSON *f = cJSON_CreateObject();
+                cJSON_AddStringToObject(f, "name", de->d_name);
+                cJSON_AddNumberToObject(f, "size", (double)st.st_size);
+                cJSON_AddItemToArray(arr, f);
+            }
+        }
+        closedir(dir);
+    }
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "sd_mounted", storage_sd_mounted());
+    cJSON_AddItemToObject(root, "files", arr);
+    return send_json(req, root);
+}
+
+/** POST /api/v1/upload?path=pages/slideshow/assets/<name> — raw image body */
+static esp_err_t h_upload(httpd_req_t *req)
+{
+    if (!storage_sd_mounted()) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no SD card");
+    }
+    char query[160] = {0}, rel[120] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    httpd_query_key_value(query, "path", rel, sizeof(rel));
+    if (!rel_path_safe(rel)) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "path must be under pages/");
+    }
+    if (req->content_len <= 0 || req->content_len > 512 * 1024) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "size limit 512KB");
+    }
+
+    char full[180];
+    snprintf(full, sizeof(full), "%s/%s", STORAGE_SD_BASE, rel);
+    char *slash = strrchr(full, '/');
+    if (slash) {
+        *slash = '\0';
+        storage_mkdirs(full);
+        *slash = '/';
+    }
+
+    if (!storage_sd_lock(5000)) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SD busy");
+    }
+    FILE *f = fopen(full, "wb");
+    if (!f) {
+        storage_sd_unlock();
+        return httpd_resp_send_500(req);
+    }
+    char *buf = malloc(4096);
+    int remaining = req->content_len;
+    esp_err_t err = ESP_OK;
+    while (remaining > 0 && buf) {
+        int rd = httpd_req_recv(req, buf, remaining > 4096 ? 4096 : remaining);
+        if (rd <= 0 || fwrite(buf, 1, rd, f) != (size_t)rd) {
+            err = ESP_FAIL;
+            break;
+        }
+        remaining -= rd;
+    }
+    free(buf);
+    fclose(f);
+    storage_sd_unlock();
+    if (err != ESP_OK) {
+        unlink(full);
+        return httpd_resp_send_500(req);
+    }
+    ESP_LOGI(TAG, "uploaded %s (%d bytes)", rel, req->content_len);
+    home_ui_reload(); /* new slideshow content shows immediately */
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
+/** POST /api/v1/delete  {"path":"pages/slideshow/assets/x.jpg"} */
+static esp_err_t h_delete(httpd_req_t *req)
+{
+    char body[200] = {0};
+    int rd = httpd_req_recv(req, body, sizeof(body) - 1);
+    if (rd <= 0) {
+        return httpd_resp_send_500(req);
+    }
+    cJSON *root = cJSON_Parse(body);
+    const cJSON *jp = root ? cJSON_GetObjectItem(root, "path") : NULL;
+    if (!cJSON_IsString(jp) || !rel_path_safe(jp->valuestring)) {
+        cJSON_Delete(root);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "path must be under pages/");
+    }
+    char full[180];
+    snprintf(full, sizeof(full), "%s/%s", STORAGE_SD_BASE, jp->valuestring);
+    cJSON_Delete(root);
+    int ok = unlink(full) == 0;
+    if (ok) {
+        home_ui_reload();
+    }
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, ok ? "{\"ok\":true}" : "{\"ok\":false}",
+                           HTTPD_RESP_USE_STRLEN);
+}
+
 static esp_err_t h_wifi_reset(httpd_req_t *req)
 {
     httpd_resp_set_type(req, "application/json");
@@ -174,6 +305,9 @@ esp_err_t local_api_start(void)
         { .uri = "/api/v1/brightness", .method = HTTP_POST, .handler = h_brightness },
         { .uri = "/api/v1/identify",   .method = HTTP_POST, .handler = h_identify },
         { .uri = "/api/v1/wifi/reset", .method = HTTP_POST, .handler = h_wifi_reset },
+        { .uri = "/api/v1/files",      .method = HTTP_GET,  .handler = h_files },
+        { .uri = "/api/v1/upload",     .method = HTTP_POST, .handler = h_upload },
+        { .uri = "/api/v1/delete",     .method = HTTP_POST, .handler = h_delete },
     };
     for (size_t i = 0; i < sizeof(routes) / sizeof(routes[0]); i++) {
         httpd_register_uri_handler(s_httpd, &routes[i]);

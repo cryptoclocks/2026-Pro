@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include <time.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -48,18 +49,40 @@ typedef struct {
     lv_obj_t *screen;
 } page_t;
 
+#define MAX_SYMBOLS 4
+
+typedef enum { THEME_GOLD, THEME_MINT, THEME_NEON } clock_theme_t;
+typedef enum { CRYPTO_STYLE_CHART, CRYPTO_STYLE_BIG } crypto_style_t;
+typedef enum { SLIDE_FX_FADE, SLIDE_FX_SLIDE, SLIDE_FX_NONE } slide_fx_t;
+
 typedef struct {
     char pages[MAX_PAGES][16];
     int page_count;
+    bool dynamic_mode;          /* false = swipe only, true = auto-advance */
+    int page_delay_s;
     int tz_offset_min;
     int brightness;
     char profile_name[32];
     char profile_title[32];
-    char crypto_symbol[16];
-    char crypto_display[20];
+    clock_theme_t clock_theme;
+    char symbols[MAX_SYMBOLS][16];
+    int symbol_count;
+    crypto_style_t crypto_style;
+    bool currency_thb;
+    int fetch_interval_s;
     int slide_interval_s;
+    slide_fx_t slide_fx;
+    char slide_order[MAX_SLIDES][32];
+    int slide_order_count;
     bool slide_return_first;
 } home_cfg_t;
+
+/* clock theme palettes: time / seconds / date */
+static const struct { uint32_t time, accent, date; } THEMES[] = {
+    [THEME_GOLD] = { 0xEAECEF, 0xF0B90B, 0x848E9C },
+    [THEME_MINT] = { 0xE8FFF6, 0x0ECB81, 0x6BA292 },
+    [THEME_NEON] = { 0xE0F7FF, 0x00D1FF, 0x7A6FF0 },
+};
 
 static struct {
     home_cfg_t cfg;
@@ -76,11 +99,21 @@ static struct {
 
     /* crypto */
     lv_obj_t *lbl_price, *lbl_change, *lbl_updated, *crypto_dot;
+    lv_obj_t *lbl_pair, *btn_symbol_lbl, *btn_cur_lbl, *coin_logo;
     lv_obj_t *spark;
     lv_chart_series_t *spark_ser;
     TaskHandle_t poll_task;
     volatile bool poll_run;
+    volatile int cur_symbol;
+    volatile bool force_fetch;
+    double last_usd_price;
+    double last_chg_pct;
+    double usd_thb_rate;        /* 0 = not fetched yet */
+    int64_t rate_fetched_ms;
     int64_t last_quote_ms;
+
+    /* dynamic page mode */
+    lv_timer_t *advance_timer;
 
     /* slideshow */
     char slides[MAX_SLIDES][96];
@@ -102,13 +135,23 @@ static void cfg_defaults(home_cfg_t *c)
     strcpy(c->pages[1], "crypto");
     strcpy(c->pages[2], "slideshow");
     c->page_count = 3;
+    c->dynamic_mode = false;
+    c->page_delay_s = 10;
     c->tz_offset_min = CCP_CFG_TZ_OFFSET_MIN;
     c->brightness = CCP_CFG_DEFAULT_BRIGHTNESS;
     strlcpy(c->profile_name, CCP_CFG_PROFILE_NAME, sizeof(c->profile_name));
     strlcpy(c->profile_title, CCP_CFG_PROFILE_TITLE, sizeof(c->profile_title));
-    strlcpy(c->crypto_symbol, CCP_CFG_CRYPTO_SYMBOL, sizeof(c->crypto_symbol));
-    strlcpy(c->crypto_display, CCP_CFG_CRYPTO_DISPLAY, sizeof(c->crypto_display));
+    c->clock_theme = THEME_GOLD;
+    strlcpy(c->symbols[0], CCP_CFG_CRYPTO_SYMBOL, 16);
+    strlcpy(c->symbols[1], "ETHUSDT", 16);
+    strlcpy(c->symbols[2], "BNBUSDT", 16);
+    strlcpy(c->symbols[3], "DOGEUSDT", 16);
+    c->symbol_count = 4;
+    c->crypto_style = CRYPTO_STYLE_CHART;
+    c->currency_thb = false;
+    c->fetch_interval_s = CCP_CFG_CRYPTO_POLL_S;
     c->slide_interval_s = CCP_CFG_SLIDE_INTERVAL_S;
+    c->slide_fx = SLIDE_FX_FADE;
     c->slide_return_first = CCP_CFG_SLIDE_RETURN_FIRST;
 }
 
@@ -138,12 +181,52 @@ static void cfg_apply_json(home_cfg_t *c, const cJSON *root)
         if (cJSON_IsString(n)) strlcpy(c->profile_name, n->valuestring, sizeof(c->profile_name));
         if (cJSON_IsString(t)) strlcpy(c->profile_title, t->valuestring, sizeof(c->profile_title));
     }
+    const cJSON *mode = cJSON_GetObjectItem(root, "display_mode");
+    if (cJSON_IsString(mode)) {
+        c->dynamic_mode = (strcmp(mode->valuestring, "dynamic") == 0);
+    }
+    if ((it = cJSON_GetObjectItem(root, "page_delay_s")) && cJSON_IsNumber(it) && it->valueint >= 3) {
+        c->page_delay_s = it->valueint;
+    }
+    const cJSON *clock = cJSON_GetObjectItem(root, "clock");
+    if (clock) {
+        const cJSON *th = cJSON_GetObjectItem(clock, "theme");
+        if (cJSON_IsString(th)) {
+            if (!strcmp(th->valuestring, "mint")) c->clock_theme = THEME_MINT;
+            else if (!strcmp(th->valuestring, "neon")) c->clock_theme = THEME_NEON;
+            else c->clock_theme = THEME_GOLD;
+        }
+    }
     const cJSON *crypto = cJSON_GetObjectItem(root, "crypto");
     if (crypto) {
-        const cJSON *sym = cJSON_GetObjectItem(crypto, "symbol");
-        const cJSON *disp = cJSON_GetObjectItem(crypto, "display");
-        if (cJSON_IsString(sym)) strlcpy(c->crypto_symbol, sym->valuestring, sizeof(c->crypto_symbol));
-        if (cJSON_IsString(disp)) strlcpy(c->crypto_display, disp->valuestring, sizeof(c->crypto_display));
+        const cJSON *syms = cJSON_GetObjectItem(crypto, "symbols");
+        if (cJSON_IsArray(syms) && cJSON_GetArraySize(syms) > 0) {
+            c->symbol_count = 0;
+            const cJSON *sj;
+            cJSON_ArrayForEach(sj, syms) {
+                if (cJSON_IsString(sj) && c->symbol_count < MAX_SYMBOLS) {
+                    strlcpy(c->symbols[c->symbol_count++], sj->valuestring, 16);
+                }
+            }
+        }
+        const cJSON *sym = cJSON_GetObjectItem(crypto, "symbol"); /* legacy single */
+        if (cJSON_IsString(sym)) {
+            strlcpy(c->symbols[0], sym->valuestring, 16);
+            if (c->symbol_count == 0) c->symbol_count = 1;
+        }
+        const cJSON *style = cJSON_GetObjectItem(crypto, "style");
+        if (cJSON_IsString(style)) {
+            c->crypto_style = !strcmp(style->valuestring, "big") ? CRYPTO_STYLE_BIG
+                                                                 : CRYPTO_STYLE_CHART;
+        }
+        const cJSON *cur = cJSON_GetObjectItem(crypto, "currency");
+        if (cJSON_IsString(cur)) {
+            c->currency_thb = (strcmp(cur->valuestring, "THB") == 0);
+        }
+        if ((it = cJSON_GetObjectItem(crypto, "fetch_interval_s")) && cJSON_IsNumber(it) &&
+            it->valueint >= 5) {
+            c->fetch_interval_s = it->valueint;
+        }
     }
     const cJSON *slide = cJSON_GetObjectItem(root, "slideshow");
     if (slide) {
@@ -152,6 +235,22 @@ static void cfg_apply_json(home_cfg_t *c, const cJSON *root)
         }
         if ((it = cJSON_GetObjectItem(slide, "return_to_first")) && cJSON_IsBool(it)) {
             c->slide_return_first = cJSON_IsTrue(it);
+        }
+        const cJSON *fx = cJSON_GetObjectItem(slide, "effect");
+        if (cJSON_IsString(fx)) {
+            if (!strcmp(fx->valuestring, "slide")) c->slide_fx = SLIDE_FX_SLIDE;
+            else if (!strcmp(fx->valuestring, "none")) c->slide_fx = SLIDE_FX_NONE;
+            else c->slide_fx = SLIDE_FX_FADE;
+        }
+        const cJSON *order = cJSON_GetObjectItem(slide, "order");
+        if (cJSON_IsArray(order)) {
+            c->slide_order_count = 0;
+            const cJSON *oj;
+            cJSON_ArrayForEach(oj, order) {
+                if (cJSON_IsString(oj) && c->slide_order_count < MAX_SLIDES) {
+                    strlcpy(c->slide_order[c->slide_order_count++], oj->valuestring, 32);
+                }
+            }
         }
     }
 }
@@ -283,12 +382,14 @@ static void build_clock_page(page_t *page)
 {
     lv_obj_t *scr = page->screen;
 
+    const clock_theme_t th = s.cfg.clock_theme;
+
     /* big time, center-left */
     s.lbl_time = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_48
     lv_obj_set_style_text_font(s.lbl_time, &lv_font_montserrat_48, 0);
 #endif
-    lv_obj_set_style_text_color(s.lbl_time, lv_color_hex(COL_FG), 0);
+    lv_obj_set_style_text_color(s.lbl_time, lv_color_hex(THEMES[th].time), 0);
     lv_label_set_text(s.lbl_time, "--:--");
     lv_obj_align(s.lbl_time, LV_ALIGN_CENTER, -30, -50);
 
@@ -296,7 +397,7 @@ static void build_clock_page(page_t *page)
 #if LV_FONT_MONTSERRAT_28
     lv_obj_set_style_text_font(s.lbl_sec, &lv_font_montserrat_28, 0);
 #endif
-    lv_obj_set_style_text_color(s.lbl_sec, lv_color_hex(COL_ACCENT), 0);
+    lv_obj_set_style_text_color(s.lbl_sec, lv_color_hex(THEMES[th].accent), 0);
     lv_label_set_text(s.lbl_sec, "");
     lv_obj_align_to(s.lbl_sec, s.lbl_time, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -6);
 
@@ -304,7 +405,7 @@ static void build_clock_page(page_t *page)
 #if LV_FONT_MONTSERRAT_20
     lv_obj_set_style_text_font(s.lbl_date, &lv_font_montserrat_20, 0);
 #endif
-    lv_obj_set_style_text_color(s.lbl_date, lv_color_hex(COL_MUTED), 0);
+    lv_obj_set_style_text_color(s.lbl_date, lv_color_hex(THEMES[th].date), 0);
     lv_label_set_text(s.lbl_date, "");
     lv_obj_align(s.lbl_date, LV_ALIGN_CENTER, 0, 4);
 
@@ -319,9 +420,12 @@ static void build_clock_page(page_t *page)
     lv_obj_set_style_pad_all(card, 8, 0);
     lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* avatar: image from SD if present, else initial in a gold circle */
-    const char *avatar_path = STORAGE_SD_BASE "/pages/clock/assets/avatar.png";
+    /* avatar: image from SD if present (png or jpg), else initial in a circle */
+    char avatar_path[80] = STORAGE_SD_BASE "/pages/clock/assets/avatar.png";
     struct stat st;
+    if (storage_sd_mounted() && stat(avatar_path, &st) != 0) {
+        strcpy(avatar_path, STORAGE_SD_BASE "/pages/clock/assets/avatar.jpg");
+    }
     if (storage_sd_mounted() && stat(avatar_path, &st) == 0) {
         lv_obj_t *img = lv_image_create(card);
         char lv_path[128];
@@ -370,19 +474,24 @@ static void build_clock_page(page_t *page)
 
 /* ============================================================== crypto */
 
-static void crypto_apply_quote(double last, double chg_pct)
+static const char *symbol_base(const char *sym, char *buf, size_t len)
 {
-    if (!display_engine_lock(200)) {
-        return;
+    strlcpy(buf, sym, len);
+    char *q = strstr(buf, "USDT");
+    if (q && q != buf) {
+        *q = '\0';
     }
-    char buf[48];
-    if (last >= 1000) {
-        /* thousands separator for readability */
-        long whole = (long)last;
-        int frac = (int)((last - whole) * 100);
-        char raw[24];
+    return buf;
+}
+
+static void format_price(char *out, size_t out_len, double price, bool thb)
+{
+    const char *prefix = thb ? "THB " : "$";
+    if (price >= 1000) {
+        long whole = (long)price;
+        int frac = (int)((price - whole) * 100);
+        char raw[24], sep[32];
         snprintf(raw, sizeof(raw), "%ld", whole);
-        char sep[32];
         int len = strlen(raw), si = 0;
         for (int i = 0; i < len; i++) {
             sep[si++] = raw[i];
@@ -392,19 +501,52 @@ static void crypto_apply_quote(double last, double chg_pct)
             }
         }
         sep[si] = 0;
-        snprintf(buf, sizeof(buf), "$%s.%02d", sep, frac);
+        snprintf(out, out_len, "%s%s.%02d", prefix, sep, frac);
+    } else if (price >= 1) {
+        snprintf(out, out_len, "%s%.2f", prefix, price);
     } else {
-        snprintf(buf, sizeof(buf), "$%.4f", last);
+        snprintf(out, out_len, "%s%.4f", prefix, price);
     }
+}
+
+/* re-render price/change from cached state (call under display lock) */
+static void crypto_render(void)
+{
+    if (!s.lbl_price) {
+        return;
+    }
+    if (s.last_usd_price <= 0) {
+        lv_label_set_text(s.lbl_price, "--");
+        lv_label_set_text(s.lbl_change, s.net_connected ? "loading..." : "offline");
+        return;
+    }
+    double price = s.last_usd_price;
+    bool thb = s.cfg.currency_thb && s.usd_thb_rate > 0;
+    if (thb) {
+        price *= s.usd_thb_rate;
+    }
+    char buf[48];
+    format_price(buf, sizeof(buf), price, thb);
     lv_label_set_text(s.lbl_price, buf);
 
-    snprintf(buf, sizeof(buf), "%+.2f%% (24h)", chg_pct);
+    snprintf(buf, sizeof(buf), "%+.2f%% (24h)", s.last_chg_pct);
     lv_label_set_text(s.lbl_change, buf);
-    lv_color_t col = lv_color_hex(chg_pct < 0 ? COL_RED : COL_GREEN);
+    lv_color_t col = lv_color_hex(s.last_chg_pct < 0 ? COL_RED : COL_GREEN);
     lv_obj_set_style_text_color(s.lbl_change, col, 0);
     lv_obj_set_style_bg_color(s.crypto_dot, col, 0);
+    lv_label_set_text(s.lbl_updated,
+                      s.cfg.currency_thb && s.usd_thb_rate <= 0
+                          ? "Binance · fetching THB rate..." : "Binance · live");
+}
 
-    lv_label_set_text(s.lbl_updated, "Binance · live");
+static void crypto_apply_quote(double last, double chg_pct)
+{
+    if (!display_engine_lock(200)) {
+        return;
+    }
+    s.last_usd_price = last;
+    s.last_chg_pct = chg_pct;
+    crypto_render();
     if (s.spark && s.spark_ser) {
         lv_chart_set_next_value(s.spark, s.spark_ser, (int32_t)last);
         lv_chart_refresh(s.spark);
@@ -413,73 +555,213 @@ static void crypto_apply_quote(double last, double chg_pct)
     display_engine_unlock();
 }
 
+/** GET url into buf; returns body length or <0. Logs failures. */
+static int http_get_text(const char *url, char *buf, size_t buf_len)
+{
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = 8000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size = 2048,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        return -1;
+    }
+    int total = -1;
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err == ESP_OK) {
+        esp_http_client_fetch_headers(client);
+        int status = esp_http_client_get_status_code(client);
+        if (status == 200) {
+            total = 0;
+            int rd;
+            while ((rd = esp_http_client_read(client, buf + total,
+                                              (int)buf_len - 1 - total)) > 0) {
+                total += rd;
+                if (total >= (int)buf_len - 1) {
+                    break;
+                }
+            }
+            buf[total] = '\0';
+        } else {
+            ESP_LOGW(TAG, "GET %s -> HTTP %d", url, status);
+        }
+    } else {
+        ESP_LOGW(TAG, "GET %s failed: %s", url, esp_err_to_name(err));
+    }
+    esp_http_client_cleanup(client);
+    return total;
+}
+
+static void fetch_thb_rate(char *body, size_t body_len)
+{
+    /* free, no API key: https://open.er-api.com/v6/latest/USD */
+    int n = http_get_text("https://open.er-api.com/v6/latest/USD", body, body_len);
+    if (n <= 0) {
+        return;
+    }
+    cJSON *root = cJSON_Parse(body);
+    if (!root) {
+        return;
+    }
+    const cJSON *rates = cJSON_GetObjectItem(root, "rates");
+    const cJSON *thb = rates ? cJSON_GetObjectItem(rates, "THB") : NULL;
+    if (cJSON_IsNumber(thb) && thb->valuedouble > 1) {
+        s.usd_thb_rate = thb->valuedouble;
+        s.rate_fetched_ms = esp_log_timestamp();
+        ESP_LOGI(TAG, "USD->THB rate: %.2f", s.usd_thb_rate);
+    }
+    cJSON_Delete(root);
+}
+
 static void crypto_poll_task(void *arg)
 {
-    char url[128];
-    snprintf(url, sizeof(url),
-             "https://api.binance.com/api/v3/ticker/24hr?symbol=%s", s.cfg.crypto_symbol);
+    /* PSRAM scratch keeps this task's stack small despite TLS work */
+    char *body = heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
+    if (!body) {
+        s.poll_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
 
     while (s.poll_run) {
         if (!s.net_connected) {
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
-        esp_http_client_config_t cfg = {
-            .url = url,
-            .timeout_ms = 8000,
-            .crt_bundle_attach = esp_crt_bundle_attach,
-            .buffer_size = 2048,
-        };
-        esp_http_client_handle_t client = esp_http_client_init(&cfg);
-        if (client) {
-            char body[1536];
-            int total = 0;
-            if (esp_http_client_open(client, 0) == ESP_OK) {
-                esp_http_client_fetch_headers(client);
-                int rd;
-                while ((rd = esp_http_client_read(client, body + total,
-                                                  sizeof(body) - 1 - total)) > 0) {
-                    total += rd;
-                    if (total >= (int)sizeof(body) - 1) {
-                        break;
-                    }
-                }
-                body[total] = '\0';
-            }
-            esp_http_client_cleanup(client);
+        s.force_fetch = false;
 
-            if (total > 0) {
-                cJSON *root = cJSON_Parse(body);
-                if (root) {
-                    const cJSON *lp = cJSON_GetObjectItem(root, "lastPrice");
-                    const cJSON *cp = cJSON_GetObjectItem(root, "priceChangePercent");
-                    if (cJSON_IsString(lp) && cJSON_IsString(cp)) {
-                        crypto_apply_quote(atof(lp->valuestring), atof(cp->valuestring));
-                    }
-                    cJSON_Delete(root);
+        /* THB rate: fetch lazily, refresh hourly */
+        if (s.cfg.currency_thb &&
+            (s.usd_thb_rate <= 0 || esp_log_timestamp() - s.rate_fetched_ms > 3600 * 1000)) {
+            fetch_thb_rate(body, 8192);
+        }
+
+        char url[128];
+        snprintf(url, sizeof(url),
+                 "https://api.binance.com/api/v3/ticker/24hr?symbol=%s",
+                 s.cfg.symbols[s.cur_symbol]);
+        int n = http_get_text(url, body, 8192);
+        if (n > 0) {
+            cJSON *root = cJSON_Parse(body);
+            if (root) {
+                const cJSON *lp = cJSON_GetObjectItem(root, "lastPrice");
+                const cJSON *cp = cJSON_GetObjectItem(root, "priceChangePercent");
+                if (cJSON_IsString(lp) && cJSON_IsString(cp)) {
+                    crypto_apply_quote(atof(lp->valuestring), atof(cp->valuestring));
+                } else {
+                    const cJSON *msg = cJSON_GetObjectItem(root, "msg");
+                    ESP_LOGW(TAG, "binance: %s",
+                             cJSON_IsString(msg) ? msg->valuestring : "unexpected payload");
                 }
+                cJSON_Delete(root);
             }
         }
-        for (int i = 0; i < CCP_CFG_CRYPTO_POLL_S * 10 && s.poll_run; i++) {
+
+        int interval = s.cfg.fetch_interval_s > 0 ? s.cfg.fetch_interval_s : 10;
+        for (int i = 0; i < interval * 10 && s.poll_run && !s.force_fetch; i++) {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
+    free(body);
     s.poll_task = NULL;
     vTaskDelete(NULL);
+}
+
+static void crypto_update_header(void)
+{
+    char base[12], disp[24];
+    symbol_base(s.cfg.symbols[s.cur_symbol], base, sizeof(base));
+    snprintf(disp, sizeof(disp), "%s/USDT " LV_SYMBOL_DOWN, base);
+    lv_label_set_text(s.btn_symbol_lbl, disp);
+
+    /* coin logo from SD: /pages/crypto/assets/<base lowercase>.png */
+    if (s.coin_logo) {
+        char lower[12];
+        for (int i = 0; base[i] && i < 11; i++) {
+            lower[i] = (char)tolower((unsigned char)base[i]);
+            lower[i + 1] = '\0';
+        }
+        char path[96];
+        snprintf(path, sizeof(path), STORAGE_SD_BASE "/pages/crypto/assets/%s.png", lower);
+        struct stat st;
+        if (storage_sd_mounted() && stat(path, &st) == 0) {
+            char lv_path[104];
+            snprintf(lv_path, sizeof(lv_path), "A:%s", path);
+            lv_image_set_src(s.coin_logo, lv_path);
+            lv_obj_remove_flag(s.coin_logo, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s.coin_logo, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+static void crypto_symbol_btn_cb(lv_event_t *e)
+{
+    if (s.cfg.symbol_count <= 1) {
+        return;
+    }
+    s.cur_symbol = (s.cur_symbol + 1) % s.cfg.symbol_count;
+    s.last_usd_price = 0;
+    crypto_update_header();
+    if (s.spark && s.spark_ser) {
+        lv_chart_set_all_value(s.spark, s.spark_ser, LV_CHART_POINT_NONE);
+    }
+    crypto_render();
+    s.force_fetch = true;
+}
+
+static void crypto_currency_btn_cb(lv_event_t *e)
+{
+    s.cfg.currency_thb = !s.cfg.currency_thb;
+    lv_label_set_text(s.btn_cur_lbl, s.cfg.currency_thb ? "THB" : "USD");
+    crypto_render();
+    if (s.cfg.currency_thb && s.usd_thb_rate <= 0) {
+        s.force_fetch = true; /* poll loop fetches the rate */
+    }
 }
 
 static void build_crypto_page(page_t *page)
 {
     lv_obj_t *scr = page->screen;
+    const bool big = (s.cfg.crypto_style == CRYPTO_STYLE_BIG);
 
-    /* header: pair + live dot */
-    lv_obj_t *pair = lv_label_create(scr);
-#if LV_FONT_MONTSERRAT_28
-    lv_obj_set_style_text_font(pair, &lv_font_montserrat_28, 0);
+    /* top-left: coin logo + symbol cycle button */
+    s.coin_logo = lv_image_create(scr);
+    lv_obj_set_size(s.coin_logo, 32, 32);
+    lv_obj_align(s.coin_logo, LV_ALIGN_TOP_LEFT, 12, 10);
+
+    lv_obj_t *sym_btn = lv_button_create(scr);
+    lv_obj_set_size(sym_btn, 150, 36);
+    lv_obj_align(sym_btn, LV_ALIGN_TOP_LEFT, 50, 8);
+    lv_obj_set_style_bg_color(sym_btn, lv_color_hex(COL_PANEL), 0);
+    lv_obj_set_style_border_width(sym_btn, 1, 0);
+    lv_obj_set_style_border_color(sym_btn, lv_color_hex(COL_BORDER), 0);
+    lv_obj_set_style_radius(sym_btn, 8, 0);
+    lv_obj_set_style_shadow_width(sym_btn, 0, 0);
+    s.btn_symbol_lbl = lv_label_create(sym_btn);
+#if LV_FONT_MONTSERRAT_20
+    lv_obj_set_style_text_font(s.btn_symbol_lbl, &lv_font_montserrat_20, 0);
 #endif
-    lv_obj_set_style_text_color(pair, lv_color_hex(COL_FG), 0);
-    lv_label_set_text(pair, s.cfg.crypto_display);
-    lv_obj_align(pair, LV_ALIGN_TOP_LEFT, 18, 14);
+    lv_obj_set_style_text_color(s.btn_symbol_lbl, lv_color_hex(COL_FG), 0);
+    lv_obj_center(s.btn_symbol_lbl);
+    lv_obj_add_event_cb(sym_btn, crypto_symbol_btn_cb, LV_EVENT_CLICKED, NULL);
+
+    /* top-right (left of the menu button): currency toggle USD/THB */
+    lv_obj_t *cur_btn = lv_button_create(scr);
+    lv_obj_set_size(cur_btn, 58, 32);
+    lv_obj_align(cur_btn, LV_ALIGN_TOP_RIGHT, -56, 8);
+    lv_obj_set_style_bg_color(cur_btn, lv_color_hex(COL_PANEL), 0);
+    lv_obj_set_style_border_width(cur_btn, 1, 0);
+    lv_obj_set_style_border_color(cur_btn, lv_color_hex(COL_ACCENT), 0);
+    lv_obj_set_style_radius(cur_btn, 8, 0);
+    lv_obj_set_style_shadow_width(cur_btn, 0, 0);
+    s.btn_cur_lbl = lv_label_create(cur_btn);
+    lv_obj_set_style_text_color(s.btn_cur_lbl, lv_color_hex(COL_ACCENT), 0);
+    lv_label_set_text(s.btn_cur_lbl, s.cfg.currency_thb ? "THB" : "USD");
+    lv_obj_center(s.btn_cur_lbl);
+    lv_obj_add_event_cb(cur_btn, crypto_currency_btn_cb, LV_EVENT_CLICKED, NULL);
 
     s.crypto_dot = lv_obj_create(scr);
     lv_obj_remove_style_all(s.crypto_dot);
@@ -487,48 +769,59 @@ static void build_crypto_page(page_t *page)
     lv_obj_set_style_radius(s.crypto_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_opa(s.crypto_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(s.crypto_dot, lv_color_hex(COL_MUTED), 0);
-    lv_obj_align_to(s.crypto_dot, pair, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+    lv_obj_align(s.crypto_dot, LV_ALIGN_TOP_LEFT, 208, 22);
 
-    /* price */
+    /* price + change */
     s.lbl_price = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_48
     lv_obj_set_style_text_font(s.lbl_price, &lv_font_montserrat_48, 0);
 #endif
     lv_obj_set_style_text_color(s.lbl_price, lv_color_hex(COL_FG), 0);
-    lv_label_set_text(s.lbl_price, "$ --");
-    lv_obj_align(s.lbl_price, LV_ALIGN_TOP_LEFT, 18, 58);
+    lv_label_set_text(s.lbl_price, "--");
 
     s.lbl_change = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_20
     lv_obj_set_style_text_font(s.lbl_change, &lv_font_montserrat_20, 0);
 #endif
     lv_obj_set_style_text_color(s.lbl_change, lv_color_hex(COL_MUTED), 0);
-    lv_label_set_text(s.lbl_change, "waiting for data...");
-    lv_obj_align(s.lbl_change, LV_ALIGN_TOP_LEFT, 20, 116);
+    lv_label_set_text(s.lbl_change, "loading...");
 
-    /* sparkline */
-    s.spark = lv_chart_create(scr);
-    lv_obj_set_size(s.spark, 444, 130);
-    lv_obj_align(s.spark, LV_ALIGN_BOTTOM_MID, 0, -38);
-    lv_obj_set_style_bg_color(s.spark, lv_color_hex(COL_PANEL), 0);
-    lv_obj_set_style_border_color(s.spark, lv_color_hex(COL_BORDER), 0);
-    lv_obj_set_style_border_width(s.spark, 1, 0);
-    lv_obj_set_style_radius(s.spark, 12, 0);
-    lv_obj_set_style_size(s.spark, 0, 0, LV_PART_INDICATOR); /* hide point dots */
-    lv_chart_set_type(s.spark, LV_CHART_TYPE_LINE);
-    lv_chart_set_point_count(s.spark, SPARK_POINTS);
-    lv_chart_set_update_mode(s.spark, LV_CHART_UPDATE_MODE_SHIFT);
-    lv_chart_set_div_line_count(s.spark, 3, 0);
-    s.spark_ser = lv_chart_add_series(s.spark, lv_color_hex(COL_ACCENT), LV_CHART_AXIS_PRIMARY_Y);
+    if (big) {
+        /* style "big": one huge centered price, change below */
+        lv_obj_align(s.lbl_price, LV_ALIGN_CENTER, 0, -10);
+        lv_obj_align(s.lbl_change, LV_ALIGN_CENTER, 0, 44);
+    } else {
+        /* style "chart": price top, sparkline bottom */
+        lv_obj_align(s.lbl_price, LV_ALIGN_TOP_LEFT, 18, 58);
+        lv_obj_align(s.lbl_change, LV_ALIGN_TOP_LEFT, 20, 116);
+
+        s.spark = lv_chart_create(scr);
+        lv_obj_set_size(s.spark, 444, 130);
+        lv_obj_align(s.spark, LV_ALIGN_BOTTOM_MID, 0, -38);
+        lv_obj_set_style_bg_color(s.spark, lv_color_hex(COL_PANEL), 0);
+        lv_obj_set_style_border_color(s.spark, lv_color_hex(COL_BORDER), 0);
+        lv_obj_set_style_border_width(s.spark, 1, 0);
+        lv_obj_set_style_radius(s.spark, 12, 0);
+        lv_obj_set_style_size(s.spark, 0, 0, LV_PART_INDICATOR);
+        lv_chart_set_type(s.spark, LV_CHART_TYPE_LINE);
+        lv_chart_set_point_count(s.spark, SPARK_POINTS);
+        lv_chart_set_update_mode(s.spark, LV_CHART_UPDATE_MODE_SHIFT);
+        lv_chart_set_div_line_count(s.spark, 3, 0);
+        s.spark_ser = lv_chart_add_series(s.spark, lv_color_hex(COL_ACCENT),
+                                          LV_CHART_AXIS_PRIMARY_Y);
+    }
 
     s.lbl_updated = lv_label_create(scr);
     lv_obj_set_style_text_color(s.lbl_updated, lv_color_hex(COL_MUTED), 0);
     lv_label_set_text(s.lbl_updated, s.net_connected ? "connecting..." : "offline");
     lv_obj_align(s.lbl_updated, LV_ALIGN_BOTTOM_RIGHT, -16, -18);
 
+    crypto_update_header();
+
     if (!s.poll_task) {
         s.poll_run = true;
-        xTaskCreatePinnedToCore(crypto_poll_task, "crypto_poll", 6144, NULL, 3, &s.poll_task, 0);
+        xTaskCreatePinnedToCore(crypto_poll_task, "crypto_poll", 10240, NULL, 3,
+                                &s.poll_task, 0);
     }
 }
 
@@ -538,6 +831,23 @@ static void slideshow_scan(void)
 {
     s.slide_count = 0;
     const char *dir_path = STORAGE_SD_BASE "/pages/slideshow/assets";
+
+    /* explicit order from config wins (app reorders by rewriting it) */
+    if (s.cfg.slide_order_count > 0) {
+        struct stat st;
+        for (int i = 0; i < s.cfg.slide_order_count && s.slide_count < MAX_SLIDES; i++) {
+            char full[120];
+            snprintf(full, sizeof(full), "%s/%s", dir_path, s.cfg.slide_order[i]);
+            if (stat(full, &st) == 0) {
+                snprintf(s.slides[s.slide_count++], sizeof(s.slides[0]), "A:%s", full);
+            }
+        }
+        if (s.slide_count > 0) {
+            ESP_LOGI(TAG, "slideshow: %d images (configured order)", s.slide_count);
+            return;
+        }
+    }
+
     DIR *dir = opendir(dir_path);
     if (!dir) {
         return;
@@ -563,19 +873,39 @@ static void slide_fade_in(void *var, int32_t v)
     lv_obj_set_style_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
 }
 
+static void slide_translate_x(void *var, int32_t v)
+{
+    lv_obj_set_style_translate_x((lv_obj_t *)var, v, 0);
+}
+
 static void slide_show_current(void)
 {
     if (s.slide_count == 0 || !s.slide_img) {
         return;
     }
     lv_image_set_src(s.slide_img, s.slides[s.slide_idx]);
+
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s.slide_img);
-    lv_anim_set_exec_cb(&a, slide_fade_in);
-    lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
-    lv_anim_set_duration(&a, 450);
-    lv_anim_start(&a);
+    switch (s.cfg.slide_fx) {
+    case SLIDE_FX_FADE:
+        lv_anim_set_exec_cb(&a, slide_fade_in);
+        lv_anim_set_values(&a, LV_OPA_TRANSP, LV_OPA_COVER);
+        lv_anim_set_duration(&a, 450);
+        lv_anim_start(&a);
+        break;
+    case SLIDE_FX_SLIDE:
+        lv_anim_set_exec_cb(&a, slide_translate_x);
+        lv_anim_set_values(&a, lv_obj_get_width(lv_screen_active()), 0);
+        lv_anim_set_duration(&a, 350);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+        lv_anim_start(&a);
+        break;
+    case SLIDE_FX_NONE:
+    default:
+        break;
+    }
 }
 
 static void slide_advance(lv_timer_t *t)
@@ -755,6 +1085,18 @@ static void build_page(int idx)
     lv_obj_add_event_cb(p->screen, gesture_cb, LV_EVENT_GESTURE, NULL);
 }
 
+/* dynamic mode: auto-advance pages; the slideshow page drives its own exit */
+static void advance_tick(lv_timer_t *t)
+{
+    if (s.menu || s.page_count < 2) {
+        return;
+    }
+    if (s.pages[s.current].kind == PAGE_SLIDESHOW) {
+        return;
+    }
+    goto_page((s.current + 1) % s.page_count, true);
+}
+
 static void goto_page(int idx, bool anim_left)
 {
     if (idx < 0 || idx >= s.page_count) {
@@ -766,6 +1108,14 @@ static void goto_page(int idx, bool anim_left)
     lv_screen_load_anim(s.pages[idx].screen,
                         anim_left ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_MOVE_RIGHT,
                         240, 0, false);
+
+    if (s.cfg.dynamic_mode && !s.advance_timer) {
+        s.advance_timer = lv_timer_create(advance_tick,
+                                          (uint32_t)s.cfg.page_delay_s * 1000, NULL);
+    }
+    if (s.advance_timer) {
+        lv_timer_reset(s.advance_timer);
+    }
 }
 
 /* ============================================================== screens */
@@ -887,7 +1237,12 @@ static void destroy_pages(void)
 {
     if (s.clock_timer) { lv_timer_delete(s.clock_timer); s.clock_timer = NULL; }
     if (s.slide_timer) { lv_timer_delete(s.slide_timer); s.slide_timer = NULL; }
+    if (s.advance_timer) { lv_timer_delete(s.advance_timer); s.advance_timer = NULL; }
     s.poll_run = false;
+    s.cur_symbol = 0;
+    s.last_usd_price = 0;
+    s.lbl_price = NULL;
+    s.coin_logo = NULL;
     if (s.menu) { lv_obj_delete(s.menu); s.menu = NULL; }
     for (int i = 0; i < s.page_count; i++) {
         if (s.pages[i].screen) {
@@ -925,8 +1280,9 @@ esp_err_t home_ui_init(void)
     cfg_load(&s.cfg);
     setup_pages_from_cfg();
     ccp_board_set_brightness(s.cfg.brightness);
-    ESP_LOGI(TAG, "home_ui: %d pages, symbol=%s, tz=%+d min",
-             s.page_count, s.cfg.crypto_symbol, s.cfg.tz_offset_min);
+    ESP_LOGI(TAG, "home_ui: %d pages, %d symbols (%s), tz=%+d min, mode=%s",
+             s.page_count, s.cfg.symbol_count, s.cfg.symbols[0], s.cfg.tz_offset_min,
+             s.cfg.dynamic_mode ? "dynamic" : "static");
     return ESP_OK;
 }
 

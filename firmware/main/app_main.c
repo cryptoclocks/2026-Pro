@@ -31,6 +31,9 @@
 #include "local_api.h"
 #include "user_config.h"
 
+#include "esp_http_client.h"
+#include "esp_crt_bundle.h"
+
 static const char *TAG = "main";
 
 #define DEFAULT_BROKER_URI CCP_CFG_MQTT_BROKER_URI
@@ -82,6 +85,97 @@ static void load_active_or_recovery(void)
     }
     /* no server package installed -> built-in home suite */
     home_ui_show_home();
+}
+
+/* ------------------------------------------------------- settings sync */
+
+static const char *device_json_path(void)
+{
+    return storage_sd_mounted() ? STORAGE_SD_BASE "/config/device.json"
+                                : STORAGE_LFS_BASE "/config/device.json";
+}
+
+/** Persist a server-provided config (JSON object) and hot-reload the UI. */
+static esp_err_t apply_server_settings(int version, const cJSON *config)
+{
+    char *text = cJSON_PrintUnformatted(config);
+    if (!text) {
+        return ESP_ERR_NO_MEM;
+    }
+    char dir[96];
+    snprintf(dir, sizeof(dir), "%s/config",
+             storage_sd_mounted() ? STORAGE_SD_BASE : STORAGE_LFS_BASE);
+    storage_mkdirs(dir);
+    esp_err_t err = storage_write_file_atomic(device_json_path(), text, strlen(text));
+    free(text);
+    if (err == ESP_OK) {
+        char ver[12];
+        snprintf(ver, sizeof(ver), "%d", version);
+        storage_kv_set_str("settings", "ver", ver);
+        home_ui_reload();
+        ESP_LOGI(TAG, "server settings v%d applied", version);
+    }
+    return err;
+}
+
+/*
+ * Boot-time check: ask the Hub whether this device/user has newer settings
+ * than what is stored locally (SD/LittleFS). Applied only when the version
+ * differs; offline or 404 keeps the local config untouched.
+ */
+static void settings_sync_from_server(void)
+{
+    char url[192];
+    snprintf(url, sizeof(url), "%s/api/v1/devices/%s/settings",
+             CCP_CFG_SERVER_BASE_URL, device_security_id());
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .timeout_ms = 6000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .buffer_size = 2048,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        return;
+    }
+    char *body = malloc(8192);
+    int total = -1;
+    if (body && esp_http_client_open(client, 0) == ESP_OK) {
+        esp_http_client_fetch_headers(client);
+        if (esp_http_client_get_status_code(client) == 200) {
+            total = 0;
+            int rd;
+            while ((rd = esp_http_client_read(client, body + total, 8191 - total)) > 0) {
+                total += rd;
+            }
+            body[total] = '\0';
+        }
+    }
+    esp_http_client_cleanup(client);
+    if (total <= 0) {
+        ESP_LOGI(TAG, "settings sync: server unreachable or no settings — keeping local");
+        free(body);
+        return;
+    }
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) {
+        return;
+    }
+    const cJSON *jver = cJSON_GetObjectItem(root, "version");
+    const cJSON *jcfg = cJSON_GetObjectItem(root, "config");
+    if (cJSON_IsNumber(jver) && cJSON_IsObject(jcfg)) {
+        char local_ver[12] = "0";
+        storage_kv_get_str("settings", "ver", local_ver, sizeof(local_ver));
+        if (atoi(local_ver) != jver->valueint) {
+            apply_server_settings(jver->valueint, jcfg);
+        } else {
+            ESP_LOGI(TAG, "settings in sync (v%s)", local_ver);
+        }
+    }
+    cJSON_Delete(root);
 }
 
 /* --------------------------------------------------------------- hooks */
@@ -199,6 +293,16 @@ static void on_cmd(const char *json, size_t len)
     } else if (!strcmp(type, "reload")) {
         load_active_or_recovery();
         cmd_respond(id, true, NULL);
+    } else if (!strcmp(type, "settings")) {
+        /* server pushes {version, config} — persist + hot reload */
+        const cJSON *jver = cJSON_GetObjectItem(params, "version");
+        const cJSON *jcfg = cJSON_GetObjectItem(params, "config");
+        if (cJSON_IsNumber(jver) && cJSON_IsObject(jcfg)) {
+            esp_err_t err = apply_server_settings(jver->valueint, jcfg);
+            cmd_respond(id, err == ESP_OK, err == ESP_OK ? NULL : "write failed");
+        } else {
+            cmd_respond(id, false, "missing version/config");
+        }
     } else if (!strcmp(type, "ota")) {
         const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(params, "fw_url"));
         const char *sha = cJSON_GetStringValue(cJSON_GetObjectItem(params, "fw_sha256"));
@@ -314,6 +418,7 @@ static void net_worker_task(void *arg)
             ESP_LOGI(TAG, "network up (%s)", ip);
             home_ui_network_changed(true, ip);
             local_api_start();
+            settings_sync_from_server(); /* initial check: local vs server config */
             start_online_services();
         }
     }

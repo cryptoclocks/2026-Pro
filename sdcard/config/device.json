@@ -1,0 +1,22 @@
+{
+  "settings_version": 1,
+  "pages": ["clock", "crypto", "slideshow"],
+  "display_mode": "static",
+  "page_delay_s": 10,
+  "tz_offset_min": 420,
+  "brightness": 80,
+  "profile": { "name": "CryptoClock", "title": "Pro Edition" },
+  "clock": { "theme": "gold" },
+  "crypto": {
+    "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "DOGEUSDT"],
+    "style": "chart",
+    "currency": "USD",
+    "fetch_interval_s": 10
+  },
+  "slideshow": {
+    "interval_s": 5,
+    "effect": "fade",
+    "order": ["1.jpg", "2.jpg", "3.jpg"],
+    "return_to_first": true
+  }
+}

@@ -91,4 +91,33 @@ export class DevicesService {
   sendCommand(hwDeviceId: string, type: Parameters<MqttBridgeService["sendCommand"]>[1], params?: Record<string, unknown>) {
     return this.mqtt.sendCommand(hwDeviceId, type, params);
   }
+
+  /**
+   * Home-UI settings (device.json shape). The device GETs this at boot and
+   * compares versions; saving also pushes the new config over MQTT so online
+   * devices apply it instantly.
+   */
+  async getSettings(hwDeviceId: string) {
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) {
+      throw new NotFoundException("device not found");
+    }
+    return { version: device.settingsVersion, config: device.settings };
+  }
+
+  async putSettings(hwDeviceId: string, config: Record<string, unknown>) {
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) {
+      throw new NotFoundException("device not found");
+    }
+    const updated = await this.prisma.device.update({
+      where: { id: device.id },
+      data: { settings: config as object, settingsVersion: device.settingsVersion + 1 },
+    });
+    this.mqtt.sendCommand(hwDeviceId, "settings", {
+      version: updated.settingsVersion,
+      config,
+    });
+    return { version: updated.settingsVersion, config: updated.settings };
+  }
 }

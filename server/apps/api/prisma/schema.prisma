@@ -100,6 +100,10 @@ model Device {
   sdFreeKb   BigInt?
   locked     Boolean   @default(false)
 
+  /// per-device home-UI settings (device.json shape); device syncs at boot
+  settings        Json @default("{}")
+  settingsVersion Int  @default(0)
+
   claims      Claim[]
   impressions AdImpression[]
   createdAt   DateTime @default(now())

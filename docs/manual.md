@@ -48,18 +48,39 @@ cd firmware && idf.py build flash
 /packages/...                  <- ระบบ sync จาก server ใช้เอง (อย่าแก้มือ)
 ```
 
-### ตัวอย่าง `/config/device.json`
+### ตัวอย่าง `/config/device.json` (เต็มทุกตัวเลือก)
 ```json
 {
   "pages": ["clock", "crypto", "slideshow"],
+  "display_mode": "static",
+  "page_delay_s": 10,
   "tz_offset_min": 420,
   "brightness": 80,
   "profile": { "name": "Natthapong", "title": "CryptoClock Pro" },
-  "crypto": { "symbol": "ETHUSDT", "display": "ETH/USDT" },
-  "slideshow": { "interval_s": 5, "return_to_first": true }
+  "clock": { "theme": "gold" },
+  "crypto": {
+    "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "DOGEUSDT"],
+    "style": "chart",
+    "currency": "USD",
+    "fetch_interval_s": 10
+  },
+  "slideshow": { "interval_s": 5, "effect": "fade", "order": ["1.jpg","2.jpg","3.jpg"], "return_to_first": true }
 }
 ```
-ลำดับการอ่าน config ตอนเปิดเครื่อง: ค่าใน `user_config.h` → `/lfs/config/device.json` (ในเครื่อง) → **SD `/config/device.json`** → `/pages/<หน้า>/config.json` (ทับเป็นรายหน้า) — และ sync จาก server ทับได้อีกชั้นเมื่อออนไลน์
+| key | ค่า | ความหมาย |
+|---|---|---|
+| `display_mode` | `static` / `dynamic` | ปัดเอง / เปลี่ยนหน้าอัตโนมัติทุก `page_delay_s` วิ |
+| `clock.theme` | `gold` / `mint` / `neon` | ธีมสีหน้านาฬิกา 3 แบบ |
+| `crypto.symbols` | สูงสุด 4 ตัว (รูปแบบ Binance) | ปุ่มซ้ายบนบนจอกดวนเปลี่ยนเหรียญ |
+| `crypto.style` | `chart` / `big` | ราคา+กราฟ หรือ ราคาใหญ่กลางจอ |
+| `crypto.currency` | `USD` / `THB` | ปุ่มขวาบนบนจอสลับได้ (เรท USD→THB ดึงอัตโนมัติ) |
+| `crypto.fetch_interval_s` | 5/10/30/60/300/900 | ความถี่ดึงราคา |
+| `slideshow.effect` | `fade` / `slide` / `none` | เอฟเฟกต์เปลี่ยนรูป |
+| `slideshow.order` | รายชื่อไฟล์ | ลำดับการแสดง (แอปมือถือจัดให้) |
+
+ลำดับการอ่าน config ตอนเปิดเครื่อง: ค่าใน `user_config.h` → `/lfs/config/device.json` (ในเครื่อง) → **SD `/config/device.json`** → `/pages/<หน้า>/config.json` (ทับเป็นรายหน้า) → **ตอนต่อเน็ตจะเช็คกับ server เสมอ** (`GET /devices/{id}/settings`) ถ้า server มีเวอร์ชันใหม่กว่าจะดึงมาทับและ reload ทันที
+
+> มีโฟลเดอร์ตัวอย่างพร้อมรูป/logo/config ครบที่ [sdcard/](../sdcard/) — copy ลงการ์ดได้เลย
 
 ## 4. รัน Server บนเครื่องตัวเอง (local)
 
