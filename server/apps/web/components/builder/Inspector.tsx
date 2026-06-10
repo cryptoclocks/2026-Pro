@@ -18,6 +18,7 @@ export function Inspector() {
   const widget = useBuilder((s) => s.widgets.find((w) => w.id === s.selectedId));
   const updateWidget = useBuilder((s) => s.updateWidget);
   const updateProps = useBuilder((s) => s.updateProps);
+  const setBindings = useBuilder((s) => s.setBindings);
   const removeWidget = useBuilder((s) => s.removeWidget);
 
   if (!widget) {
@@ -85,6 +86,59 @@ export function Inspector() {
           }
         />
       </Row>
+
+      {/* --- Data binding: make the widget show live data on the device --- */}
+      {(() => {
+        const isChart = widget.type === "chart";
+        const prop = isChart ? "series" : "text";
+        const b = widget.bindings?.find((x) => x.prop === prop);
+        const setB = (patch: Record<string, string>) => {
+          const next = { prop, source: "", ...b, ...patch };
+          if (!next.source) {
+            setBindings(widget.id, []);
+          } else {
+            setBindings(widget.id, [next]);
+          }
+        };
+        return (
+          <div className="mt-3 pt-2 border-t border-[var(--ccp-border)] space-y-2">
+            <div className="text-[10px] uppercase tracking-wide text-[var(--ccp-accent)]">
+              Data binding ({prop})
+            </div>
+            <Row label="source">
+              <select
+                className={inputCls}
+                value={b?.source ?? ""}
+                onChange={(e) => setB({ source: e.target.value })}
+              >
+                <option value="">(static)</option>
+                <option value="clock">clock</option>
+                <option value="crypto">crypto</option>
+                <option value="weather">weather</option>
+                <option value="device">device</option>
+              </select>
+            </Row>
+            <Row label="path">
+              <input
+                className={inputCls}
+                placeholder="BTCUSDT.price"
+                value={b?.path ?? ""}
+                onChange={(e) => setB({ path: e.target.value })}
+              />
+            </Row>
+            {!isChart && (
+              <Row label="format">
+                <input
+                  className={inputCls}
+                  placeholder="$%s"
+                  value={b?.format ?? ""}
+                  onChange={(e) => setB({ format: e.target.value })}
+                />
+              </Row>
+            )}
+          </div>
+        );
+      })()}
 
       <button
         onClick={() => removeWidget(widget.id)}

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'device_controller.dart';
+import 'hub_api.dart';
 import 'ui_helpers.dart';
 import 'main.dart' show ccpAccent, ccpMuted;
 import 'auth.dart';
@@ -340,7 +341,27 @@ class CryptoSettings extends StatelessWidget {
                     label: const Text('Add alert'),
                     onPressed: () => _addAlert(context),
                   ),
-                const Text('On the display: Snooze (5 min) or Stop (off).',
+                if (c.alerts.isNotEmpty)
+                  FilledButton.icon(
+                    icon: const Icon(Icons.verified),
+                    label: const Text('Submit for admin approval'),
+                    onPressed: () async {
+                      final err = await HubApi.requestFeature(
+                        deviceId: c.deviceId,
+                        page: 'crypto',
+                        feature: 'alerts',
+                        detail: {'alerts': c.alerts},
+                      );
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text(err == null
+                              ? 'Sent to admin — alerts activate once approved'
+                              : 'Failed: $err')));
+                    },
+                  ),
+                const Text(
+                    'Price alerts need admin approval. They activate on the display '
+                    'after approval. On the display: Snooze (5 min) or Stop (off).',
                     style: TextStyle(color: ccpMuted, fontSize: 12)),
               ],
             ]),

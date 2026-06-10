@@ -29,17 +29,46 @@ export default function BuilderPage() {
     }
   };
 
+  const buildLayout = () =>
+    exportLayout({
+      packageId: b.packageId,
+      name: b.name,
+      version: b.version,
+      orientation: b.orientation,
+      widgets: b.widgets,
+    });
+
   const onExport = () => {
     try {
-      const layout = exportLayout({
-        packageId: b.packageId,
-        name: b.name,
-        version: b.version,
-        orientation: b.orientation,
-        widgets: b.widgets,
-      });
-      downloadLayout(layout);
+      downloadLayout(buildLayout());
       setMessage("layout.json exported ✓");
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const onPublish = async () => {
+    try {
+      const layout = buildLayout();
+      const api = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+      // server-side validation against the device layout schema
+      const res = await fetch(`${api}/api/v1/payloads/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout }),
+      });
+      const ok = res.ok ? (await res.json()).ok : false;
+      if (!ok) throw new Error(`server rejected layout: ${await res.text()}`);
+      downloadLayout(layout);
+      setMessage(
+        `✓ Validated & saved layout.json for "${layout.meta.name}" (${layout.meta.id}).\n\n` +
+          "To put this page on displays:\n" +
+          "1. Package it:  python3 firmware/tools/make_package.py <dir> bundle.zip\n" +
+          "2. Publish:     POST /api/v1/payloads/publish (uploads bundle + manifest)\n" +
+          "3. Assign:      POST /api/v1/devices/{id}/assign  (or sell it in the Store)\n" +
+          "4. The device pulls the bundle over MQTT cmd:sync and swaps the page\n" +
+          "   live — no reflash. (Bundle hosting needs the M5 object store online.)",
+      );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     }
@@ -74,11 +103,46 @@ export default function BuilderPage() {
           <option value="landscape">landscape 480×320</option>
           <option value="portrait">portrait 320×480</option>
         </select>
+
+        <select
+          className="px-2 py-1 rounded bg-[var(--ccp-panel)] border border-[var(--ccp-border)]"
+          defaultValue=""
+          onChange={(e) => {
+            if (e.target.value) b.loadTemplate(e.target.value as never);
+            e.target.value = "";
+          }}
+          title="Load a starter page"
+        >
+          <option value="">Load template…</option>
+          <option value="clock">Clock</option>
+          <option value="crypto">Crypto</option>
+          <option value="welcome">Welcome</option>
+          <option value="blank">Blank</option>
+        </select>
+
+        <button
+          onClick={b.toggleSimulate}
+          className={`px-3 py-1.5 rounded border ${
+            b.simulate
+              ? "bg-[var(--ccp-accent)] text-black border-transparent font-semibold"
+              : "border-[var(--ccp-border)]"
+          }`}
+          title="Preview with mock live data"
+        >
+          {b.simulate ? "● Simulating" : "▶ Simulate"}
+        </button>
+
         <button
           onClick={onExport}
-          className="ml-auto px-4 py-1.5 rounded bg-[var(--ccp-accent)] text-black font-semibold"
+          className="ml-auto px-4 py-1.5 rounded border border-[var(--ccp-border)]"
         >
           Export layout.json
+        </button>
+        <button
+          onClick={onPublish}
+          className="px-4 py-1.5 rounded bg-[var(--ccp-accent)] text-black font-semibold"
+        >
+          Publish…
         </button>
       </div>
 

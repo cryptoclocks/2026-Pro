@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import type { WidgetNode, WidgetType } from "@ccp/shared";
 import { SCREEN } from "@ccp/shared";
+import { TEMPLATES, type TemplateKey } from "./templates";
 
 export type Orientation = "landscape" | "portrait";
 
@@ -14,6 +15,7 @@ interface BuilderState {
   widgets: WidgetNode[];
   selectedId: string | null;
   counter: number;
+  simulate: boolean;
 
   setOrientation: (o: Orientation) => void;
   setMeta: (m: Partial<Pick<BuilderState, "packageId" | "name" | "version">>) => void;
@@ -21,8 +23,11 @@ interface BuilderState {
   moveWidget: (id: string, dx: number, dy: number) => void;
   updateWidget: (id: string, patch: Partial<WidgetNode>) => void;
   updateProps: (id: string, props: Record<string, unknown>) => void;
+  setBindings: (id: string, bindings: WidgetNode["bindings"]) => void;
   removeWidget: (id: string) => void;
   select: (id: string | null) => void;
+  toggleSimulate: () => void;
+  loadTemplate: (key: TemplateKey) => void;
 }
 
 const DEFAULT_SIZE: Partial<Record<WidgetType, { w: number; h: number }>> = {
@@ -47,6 +52,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   widgets: [],
   selectedId: null,
   counter: 0,
+  simulate: false,
 
   setOrientation: (o) => set({ orientation: o }),
   setMeta: (m) => set(m),
@@ -92,6 +98,13 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       ),
     }),
 
+  setBindings: (id, bindings) =>
+    set({
+      widgets: get().widgets.map((w) =>
+        w.id === id ? { ...w, bindings: bindings && bindings.length ? bindings : undefined } : w,
+      ),
+    }),
+
   removeWidget: (id) =>
     set({
       widgets: get().widgets.filter((w) => w.id !== id),
@@ -99,4 +112,17 @@ export const useBuilder = create<BuilderState>((set, get) => ({
     }),
 
   select: (id) => set({ selectedId: id }),
+
+  toggleSimulate: () => set({ simulate: !get().simulate }),
+
+  loadTemplate: (key) => {
+    const t = TEMPLATES[key];
+    // deep clone so edits don't mutate the template constant
+    set({
+      widgets: JSON.parse(JSON.stringify(t.widgets)) as WidgetNode[],
+      name: t.name === "Blank" ? get().name : t.name,
+      selectedId: null,
+      counter: t.widgets.length,
+    });
+  },
 }));
