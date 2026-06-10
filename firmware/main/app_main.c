@@ -9,6 +9,7 @@
  */
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -399,6 +400,32 @@ static void on_net_event(net_state_t state)
     }
 }
 
+/* First boot with an empty slideshow: pull 3 sample photos so page 3 isn't
+ * blank. User photos from the app/SD replace them naturally. */
+static void seed_slideshow_if_empty(void)
+{
+    if (!home_ui_slideshow_needs_content()) {
+        return;
+    }
+    const char *dir = home_ui_slideshow_dir();
+    storage_mkdirs(dir);
+    int ok = 0;
+    for (int i = 1; i <= 3; i++) {
+        char url[96], dest[120];
+        snprintf(url, sizeof(url), "https://picsum.photos/320/240.jpg?random=%d", i);
+        snprintf(dest, sizeof(dest), "%s/sample%d.jpg", dir, i);
+        if (conn_http_download(url, dest, NULL, 20000) == ESP_OK) {
+            ok++;
+        } else {
+            unlink(dest); /* drop partial file so retry next boot is clean */
+        }
+    }
+    ESP_LOGI(TAG, "slideshow seed: %d/3 sample images -> %s", ok, dir);
+    if (ok > 0) {
+        home_ui_reload();
+    }
+}
+
 static void net_worker_task(void *arg)
 {
     while (true) {
@@ -419,6 +446,7 @@ static void net_worker_task(void *arg)
             home_ui_network_changed(true, ip);
             local_api_start();
             settings_sync_from_server(); /* initial check: local vs server config */
+            seed_slideshow_if_empty();
             start_online_services();
         }
     }

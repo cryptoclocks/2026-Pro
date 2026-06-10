@@ -203,6 +203,20 @@ esp_err_t conn_http_download(const char *url, const char *dest_path,
     esp_http_client_fetch_headers(client);
     int status = esp_http_client_get_status_code(client);
 
+    /* manual open() does not auto-follow redirects (picsum, S3 presign...) */
+    for (int hop = 0; hop < 3 && (status == 301 || status == 302 ||
+                                  status == 303 || status == 307 || status == 308); hop++) {
+        esp_http_client_set_redirection(client);
+        esp_http_client_close(client);
+        err = esp_http_client_open(client, 0);
+        if (err != ESP_OK) {
+            esp_http_client_cleanup(client);
+            return err;
+        }
+        esp_http_client_fetch_headers(client);
+        status = esp_http_client_get_status_code(client);
+    }
+
     const char *mode = "wb";
     if (status == 206) {
         mode = "ab";                       /* server honored resume */

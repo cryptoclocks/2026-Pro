@@ -34,6 +34,12 @@ void home_ui_network_changed(bool connected, const char *ip);
 /** Re-read config files and rebuild pages (called by LAN API / server). */
 esp_err_t home_ui_reload(void);
 
+/** True when the slideshow page is enabled but has zero images. */
+bool home_ui_slideshow_needs_content(void);
+
+/** Directory slideshow images are read from (SD when mounted, else LFS). */
+const char *home_ui_slideshow_dir(void);
+
 #ifdef __cplusplus
 }
 #endif

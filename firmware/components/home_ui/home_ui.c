@@ -102,6 +102,8 @@ static struct {
     lv_obj_t *lbl_pair, *btn_symbol_lbl, *btn_cur_lbl, *coin_logo;
     lv_obj_t *spark;
     lv_chart_series_t *spark_ser;
+    int32_t spark_min, spark_max; /* running range of pushed points */
+    int spark_points;
     TaskHandle_t poll_task;
     volatile bool poll_run;
     volatile int cur_symbol;
@@ -384,14 +386,17 @@ static void build_clock_page(page_t *page)
 
     const clock_theme_t th = s.cfg.clock_theme;
 
-    /* big time, center-left */
+    /* near-fullscreen time: 48pt scaled 2.2x (~105px tall) */
     s.lbl_time = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_48
     lv_obj_set_style_text_font(s.lbl_time, &lv_font_montserrat_48, 0);
 #endif
     lv_obj_set_style_text_color(s.lbl_time, lv_color_hex(THEMES[th].time), 0);
+    lv_obj_set_style_transform_scale(s.lbl_time, 563, 0); /* 256 = 1x */
+    lv_obj_set_style_transform_pivot_x(s.lbl_time, lv_pct(50), 0);
+    lv_obj_set_style_transform_pivot_y(s.lbl_time, lv_pct(50), 0);
     lv_label_set_text(s.lbl_time, "--:--");
-    lv_obj_align(s.lbl_time, LV_ALIGN_CENTER, -30, -50);
+    lv_obj_align(s.lbl_time, LV_ALIGN_CENTER, 0, -36);
 
     s.lbl_sec = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_28
@@ -399,7 +404,7 @@ static void build_clock_page(page_t *page)
 #endif
     lv_obj_set_style_text_color(s.lbl_sec, lv_color_hex(THEMES[th].accent), 0);
     lv_label_set_text(s.lbl_sec, "");
-    lv_obj_align_to(s.lbl_sec, s.lbl_time, LV_ALIGN_OUT_RIGHT_BOTTOM, 4, -6);
+    lv_obj_align(s.lbl_sec, LV_ALIGN_CENTER, 0, 54);
 
     s.lbl_date = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_20
@@ -407,64 +412,7 @@ static void build_clock_page(page_t *page)
 #endif
     lv_obj_set_style_text_color(s.lbl_date, lv_color_hex(THEMES[th].date), 0);
     lv_label_set_text(s.lbl_date, "");
-    lv_obj_align(s.lbl_date, LV_ALIGN_CENTER, 0, 4);
-
-    /* profile card */
-    lv_obj_t *card = lv_obj_create(scr);
-    lv_obj_set_size(card, 300, 64);
-    lv_obj_align(card, LV_ALIGN_BOTTOM_MID, 0, -22);
-    lv_obj_set_style_bg_color(card, lv_color_hex(COL_PANEL), 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(COL_BORDER), 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_radius(card, 14, 0);
-    lv_obj_set_style_pad_all(card, 8, 0);
-    lv_obj_remove_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* avatar: image from SD if present (png or jpg), else initial in a circle */
-    char avatar_path[80] = STORAGE_SD_BASE "/pages/clock/assets/avatar.png";
-    struct stat st;
-    if (storage_sd_mounted() && stat(avatar_path, &st) != 0) {
-        strcpy(avatar_path, STORAGE_SD_BASE "/pages/clock/assets/avatar.jpg");
-    }
-    if (storage_sd_mounted() && stat(avatar_path, &st) == 0) {
-        lv_obj_t *img = lv_image_create(card);
-        char lv_path[128];
-        snprintf(lv_path, sizeof(lv_path), "A:%s", avatar_path);
-        lv_image_set_src(img, lv_path);
-        lv_obj_set_size(img, 48, 48);
-        lv_obj_align(img, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_set_style_radius(img, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_clip_corner(img, true, 0);
-    } else {
-        lv_obj_t *circle = lv_obj_create(card);
-        lv_obj_remove_style_all(circle);
-        lv_obj_set_size(circle, 48, 48);
-        lv_obj_align(circle, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_set_style_radius(circle, LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_bg_opa(circle, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(circle, lv_color_hex(COL_ACCENT), 0);
-        lv_obj_t *initial = lv_label_create(circle);
-#if LV_FONT_MONTSERRAT_28
-        lv_obj_set_style_text_font(initial, &lv_font_montserrat_28, 0);
-#endif
-        lv_obj_set_style_text_color(initial, lv_color_hex(COL_BG), 0);
-        char ini[2] = { s.cfg.profile_name[0] ? s.cfg.profile_name[0] : 'C', 0 };
-        lv_label_set_text(initial, ini);
-        lv_obj_center(initial);
-    }
-
-    lv_obj_t *name = lv_label_create(card);
-#if LV_FONT_MONTSERRAT_20
-    lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
-#endif
-    lv_obj_set_style_text_color(name, lv_color_hex(COL_FG), 0);
-    lv_label_set_text(name, s.cfg.profile_name);
-    lv_obj_align(name, LV_ALIGN_LEFT_MID, 60, -10);
-
-    lv_obj_t *title = lv_label_create(card);
-    lv_obj_set_style_text_color(title, lv_color_hex(COL_MUTED), 0);
-    lv_label_set_text(title, s.cfg.profile_title);
-    lv_obj_align(title, LV_ALIGN_LEFT_MID, 60, 12);
+    lv_obj_align(s.lbl_date, LV_ALIGN_BOTTOM_MID, 0, -26);
 
     if (!s.clock_timer) {
         s.clock_timer = lv_timer_create(clock_tick, 1000, NULL);
@@ -548,7 +496,21 @@ static void crypto_apply_quote(double last, double chg_pct)
     s.last_chg_pct = chg_pct;
     crypto_render();
     if (s.spark && s.spark_ser) {
-        lv_chart_set_next_value(s.spark, s.spark_ser, (int32_t)last);
+        int32_t v = (int32_t)last;
+        if (s.spark_points == 0) {
+            s.spark_min = s.spark_max = v;
+        } else {
+            if (v < s.spark_min) s.spark_min = v;
+            if (v > s.spark_max) s.spark_max = v;
+        }
+        s.spark_points++;
+        /* default chart range is 0..100 which clips BTC-sized values —
+         * follow the data with ~1% padding (min 4 units so a flat line centers) */
+        int32_t pad = (s.spark_max - s.spark_min) / 2 + s.spark_max / 100;
+        if (pad < 4) pad = 4;
+        lv_chart_set_range(s.spark, LV_CHART_AXIS_PRIMARY_Y,
+                           s.spark_min - pad, s.spark_max + pad);
+        lv_chart_set_next_value(s.spark, s.spark_ser, v);
         lv_chart_refresh(s.spark);
     }
     s.last_quote_ms = (int64_t)(lv_tick_get());
@@ -708,6 +670,7 @@ static void crypto_symbol_btn_cb(lv_event_t *e)
     if (s.spark && s.spark_ser) {
         lv_chart_set_all_value(s.spark, s.spark_ser, LV_CHART_POINT_NONE);
     }
+    s.spark_points = 0; /* restart range tracking for the new symbol */
     crypto_render();
     s.force_fetch = true;
 }
@@ -827,10 +790,17 @@ static void build_crypto_page(page_t *page)
 
 /* ============================================================ slideshow */
 
+/** Where slideshow images live: SD when mounted, else LittleFS. */
+static const char *slideshow_assets_dir(void)
+{
+    return storage_sd_mounted() ? STORAGE_SD_BASE "/pages/slideshow/assets"
+                                : STORAGE_LFS_BASE "/pages/slideshow/assets";
+}
+
 static void slideshow_scan(void)
 {
     s.slide_count = 0;
-    const char *dir_path = STORAGE_SD_BASE "/pages/slideshow/assets";
+    const char *dir_path = slideshow_assets_dir();
 
     /* explicit order from config wins (app reorders by rewriting it) */
     if (s.cfg.slide_order_count > 0) {
@@ -936,8 +906,13 @@ static void build_slideshow_page(page_t *page)
         lv_obj_set_style_text_color(s.slide_hint, lv_color_hex(COL_MUTED), 0);
         lv_obj_set_style_text_align(s.slide_hint, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_text(s.slide_hint,
-            LV_SYMBOL_IMAGE "  No images found\n\n"
-            "Put PNG/JPG (320x240) files in\nSD card: /pages/slideshow/assets/");
+            s.net_connected
+                ? LV_SYMBOL_IMAGE "  No images yet\n\n"
+                  "Downloading sample photos..."
+                : LV_SYMBOL_IMAGE "  No images found\n\n"
+                  "Connect WiFi for sample photos, or put\n"
+                  "PNG/JPG (320x240) in /pages/slideshow/assets/\n"
+                  "(SD card) or upload from the mobile app");
         lv_obj_center(s.slide_hint);
         return;
     }
@@ -1252,6 +1227,7 @@ static void destroy_pages(void)
     }
     s.spark = NULL;
     s.spark_ser = NULL;
+    s.spark_points = 0;
     s.slide_img = NULL;
 }
 
@@ -1319,4 +1295,21 @@ esp_err_t home_ui_reload(void)
     }
     display_engine_unlock();
     return ESP_OK;
+}
+
+bool home_ui_slideshow_needs_content(void)
+{
+    bool enabled = false;
+    for (int i = 0; i < s.cfg.page_count; i++) {
+        if (!strcmp(s.cfg.pages[i], "slideshow")) {
+            enabled = true;
+            break;
+        }
+    }
+    return enabled && s.slide_count == 0;
+}
+
+const char *home_ui_slideshow_dir(void)
+{
+    return slideshow_assets_dir();
 }
