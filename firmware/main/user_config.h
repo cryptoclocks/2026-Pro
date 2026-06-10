@@ -14,9 +14,10 @@
  * รัน local แทน: ใส่ IP เครื่องตัวเอง เช่น "mqtt://192.168.1.100:1883" */
 #define CCP_CFG_MQTT_BROKER_URI   "mqtt://node-red.cashlessthailand.com:1883"
 
-/* Base URL ของ Hub API — Vercel deploy แล้วเปลี่ยนเป็น URL จริง
- * เช่น "https://cryptoclock-hub.vercel.app" / รัน local: "http://<IP>:4000" */
-#define CCP_CFG_SERVER_BASE_URL   "http://192.168.1.100:4000"
+/* Base URL ของ Hub API — ตอนนี้ชี้เครื่อง Mac ที่รัน `pnpm dev` (IP จาก
+ * `ipconfig getifaddr en0`) / deploy Vercel แล้วเปลี่ยนเป็น URL จริง
+ * เช่น "https://cryptoclock-hub.vercel.app" */
+#define CCP_CFG_SERVER_BASE_URL   "http://192.168.1.139:4000"
 
 /* ---------- เวลา ---------- */
 /* ไทย = UTC+7 = 420 นาที */

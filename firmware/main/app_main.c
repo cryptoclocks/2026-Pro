@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -411,13 +412,23 @@ static void seed_slideshow_if_empty(void)
     storage_mkdirs(dir);
     int ok = 0;
     for (int i = 1; i <= 3; i++) {
-        char url[96], dest[120];
+        char url[96], dest[128], tmp[136];
         snprintf(url, sizeof(url), "https://picsum.photos/320/240.jpg?random=%d", i);
         snprintf(dest, sizeof(dest), "%s/sample%d.jpg", dir, i);
-        if (conn_http_download(url, dest, NULL, 20000) == ESP_OK) {
+        struct stat st;
+        if (stat(dest, &st) == 0 && st.st_size > 0) {
+            ok++; /* already there from an earlier boot */
+            continue;
+        }
+        /* each ?random=N serves a different image, so a Range-resume would
+         * splice two images together — always download fresh to .part */
+        snprintf(tmp, sizeof(tmp), "%s.part", dest);
+        unlink(tmp);
+        if (conn_http_download(url, tmp, NULL, 20000) == ESP_OK &&
+            rename(tmp, dest) == 0) {
             ok++;
         } else {
-            unlink(dest); /* drop partial file so retry next boot is clean */
+            unlink(tmp);
         }
     }
     ESP_LOGI(TAG, "slideshow seed: %d/3 sample images -> %s", ok, dir);

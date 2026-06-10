@@ -2,6 +2,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <sys/unistd.h>
 
@@ -197,6 +198,7 @@ esp_err_t conn_http_download(const char *url, const char *dest_path,
 
     esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "download %s -> open: %s", url, esp_err_to_name(err));
         esp_http_client_cleanup(client);
         return err;
     }
@@ -217,19 +219,39 @@ esp_err_t conn_http_download(const char *url, const char *dest_path,
         status = esp_http_client_get_status_code(client);
     }
 
+    bool already_complete = false;
     const char *mode = "wb";
     if (status == 206) {
         mode = "ab";                       /* server honored resume */
     } else if (status == 200) {
         existing = 0;                      /* full restart */
+    } else if (status == 416 && existing > 0) {
+        /* our Range started at EOF: the file is already fully downloaded */
+        already_complete = true;
     } else {
         ESP_LOGE(TAG, "download %s -> HTTP %d", url, status);
         esp_http_client_cleanup(client);
         return ESP_FAIL;
     }
 
+    if (already_complete) {
+        esp_http_client_cleanup(client);
+        ESP_LOGI(TAG, "download %s: already complete (%ld bytes)", dest_path, existing);
+        if (sha256_hex && sha256_hex[0]) {
+            char actual[65];
+            ESP_RETURN_ON_ERROR(conn_sha256_file(dest_path, actual), TAG, "hash");
+            if (strcasecmp(actual, sha256_hex) != 0) {
+                ESP_LOGE(TAG, "sha256 mismatch for %s", dest_path);
+                unlink(dest_path);
+                return ESP_ERR_INVALID_CRC;
+            }
+        }
+        return ESP_OK;
+    }
+
     FILE *f = fopen(dest_path, mode);
     if (!f) {
+        ESP_LOGE(TAG, "download: fopen(%s) failed errno=%d", dest_path, errno);
         esp_http_client_cleanup(client);
         return ESP_FAIL;
     }

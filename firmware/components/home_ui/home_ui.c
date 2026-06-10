@@ -1286,12 +1286,31 @@ esp_err_t home_ui_reload(void)
     if (!display_engine_lock(0)) {
         return ESP_ERR_TIMEOUT;
     }
+    /* destroy_pages() deletes the active screen, which LVGL must never have
+     * pulled out from under it (render task spins on the dangling screen) —
+     * park the display on a blank screen during the rebuild */
+    lv_obj_t *parking = NULL;
+    if (s.owns_screen) {
+        parking = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(parking, lv_color_hex(COL_BG), 0);
+        lv_screen_load(parking);
+    }
     destroy_pages();
     cfg_load(&s.cfg);
     setup_pages_from_cfg();
     ccp_board_set_brightness(s.cfg.brightness);
     if (s.owns_screen) {
-        goto_page(0, true);
+        build_page(0);
+        s.current = 0;
+        /* immediate load (no anim) so parking can be deleted right away */
+        lv_screen_load(s.pages[0].screen);
+        if (s.cfg.dynamic_mode && !s.advance_timer) {
+            s.advance_timer = lv_timer_create(advance_tick,
+                                              (uint32_t)s.cfg.page_delay_s * 1000, NULL);
+        }
+    }
+    if (parking) {
+        lv_obj_delete(parking);
     }
     display_engine_unlock();
     return ESP_OK;
@@ -1306,7 +1325,26 @@ bool home_ui_slideshow_needs_content(void)
             break;
         }
     }
-    return enabled && s.slide_count == 0;
+    if (!enabled) {
+        return false;
+    }
+    /* scan the dir directly: s.slide_count is only set once the page built */
+    DIR *dir = opendir(slideshow_assets_dir());
+    if (!dir) {
+        return true;
+    }
+    bool found = false;
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        const char *ext = strrchr(de->d_name, '.');
+        if (ext && (!strcasecmp(ext, ".png") || !strcasecmp(ext, ".jpg") ||
+                    !strcasecmp(ext, ".jpeg"))) {
+            found = true;
+            break;
+        }
+    }
+    closedir(dir);
+    return !found;
 }
 
 const char *home_ui_slideshow_dir(void)

@@ -18,7 +18,8 @@ export const mqttTopics = {
 
 export type DeviceCommandType =
   | "sync" | "reload" | "ota" | "reboot" | "brightness"
-  | "identify" | "lock" | "unlock" | "wipe" | "show_page" | "notify" | "ping";
+  | "identify" | "lock" | "unlock" | "wipe" | "show_page" | "notify" | "ping"
+  | "settings";
 
 export interface DeviceCommand {
   id: string;

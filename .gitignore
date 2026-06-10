@@ -22,6 +22,8 @@ server/**/.turbo/
 server/**/*.tsbuildinfo
 server/.env
 server/**/.env
+server/**/.env.local
+server/**/.env*.local
 !server/.env.example
 
 # --- vendor reference materials (1GB of datasheets/tools — keep local only) ---

@@ -53,6 +53,10 @@ CONFIG_LV_USE_FS_POSIX=y
 CONFIG_LV_FS_POSIX_LETTER=65
 CONFIG_LV_FS_POSIX_PATH=""
 
+# ---------- FATFS ----------
+# long filenames on SD (paths like /pages/slideshow/assets exceed 8.3)
+CONFIG_FATFS_LFN_HEAP=y
+
 # ---------- WAMR (interp-only for v1; AOT arrives M7) ----------
 CONFIG_WAMR_ENABLE_INTERP=y
 CONFIG_WAMR_INTERP_FAST=y
