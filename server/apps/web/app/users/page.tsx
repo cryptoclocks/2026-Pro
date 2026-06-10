@@ -15,7 +15,7 @@ interface UserRow {
 interface Detail {
   id: string;
   email: string;
-  entitlements: { item: { slug: string; title: string }; source: string }[];
+  entitlements: { deviceId: string; item: { slug: string; title: string }; source: string }[];
   devices: { deviceId: string; name: string | null; online: boolean }[];
   featureRequests: { page: string; feature: string; status: string }[];
 }
@@ -46,20 +46,20 @@ function Users() {
   const openDetail = async (id: string) =>
     setOpen(await api(`/api/v1/admin/users/${id}`, token));
 
-  const grant = async (slug: string) => {
+  const grant = async (deviceId: string, slug: string) => {
     if (!open) return;
     await api(`/api/v1/admin/users/${open.id}/grant`, token, {
       method: "POST",
-      body: JSON.stringify({ slug }),
+      body: JSON.stringify({ slug, deviceId }),
     });
     await openDetail(open.id);
     load();
   };
-  const revoke = async (slug: string) => {
+  const revoke = async (deviceId: string, slug: string) => {
     if (!open) return;
     await api(`/api/v1/admin/users/${open.id}/revoke`, token, {
       method: "POST",
-      body: JSON.stringify({ slug }),
+      body: JSON.stringify({ slug, deviceId }),
     });
     await openDetail(open.id);
     load();
@@ -120,47 +120,39 @@ function Users() {
           <div className="card w-full max-w-lg p-5" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-semibold mb-3">{open.email}</h2>
 
-            <Section title="Pages owned">
-              {open.entitlements.length === 0 ? (
-                <Empty>none</Empty>
-              ) : (
-                open.entitlements.map((e) => (
-                  <div key={e.item.slug} className="flex items-center gap-2 py-1">
-                    <span className="flex-1">{e.item.title}</span>
-                    <span className="pill">{e.source}</span>
-                    <button className="btn btn-danger" onClick={() => revoke(e.item.slug)}>
-                      Revoke
-                    </button>
-                  </div>
-                ))
-              )}
-              <div className="flex gap-2 mt-2 flex-wrap">
-                {catalog
-                  .filter((s) => !open.entitlements.some((e) => e.item.slug === s))
-                  .map((s) => (
-                    <button key={s} className="btn" onClick={() => grant(s)}>
-                      + grant {s}
-                    </button>
-                  ))}
-              </div>
-            </Section>
-
-            <Section title="Devices">
+            <Section title="Rights per device">
               {open.devices.length === 0 ? (
-                <Empty>none</Empty>
+                <Empty>no devices claimed</Empty>
               ) : (
-                open.devices.map((d) => (
-                  <div key={d.deviceId} className="flex items-center gap-2 py-1">
-                    <span
-                      className="dot"
-                      style={{ background: d.online ? "var(--ccp-green)" : "var(--ccp-muted)" }}
-                    />
-                    <span>{d.name ?? d.deviceId}</span>
-                    <span className="text-[var(--ccp-muted)] font-mono text-xs">
-                      {d.deviceId}
-                    </span>
-                  </div>
-                ))
+                open.devices.map((d) => {
+                  const owned = open.entitlements.filter((e) => e.deviceId === d.deviceId);
+                  return (
+                    <div key={d.deviceId} className="mb-3 border border-[var(--ccp-border)] rounded-lg p-2">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="dot" style={{ background: d.online ? "var(--ccp-green)" : "var(--ccp-muted)" }} />
+                        <span className="font-medium">{d.name ?? d.deviceId}</span>
+                        <span className="text-[var(--ccp-muted)] font-mono text-[11px]">{d.deviceId}</span>
+                      </div>
+                      {owned.length > 0 &&
+                        owned.map((e) => (
+                          <div key={e.item.slug} className="flex items-center gap-2 py-0.5 pl-4 text-sm">
+                            <span className="flex-1">{e.item.title}</span>
+                            <span className="pill">{e.source}</span>
+                            <button className="btn btn-danger" onClick={() => revoke(d.deviceId, e.item.slug)}>Revoke</button>
+                          </div>
+                        ))}
+                      <div className="flex gap-1 mt-1 flex-wrap pl-4">
+                        {catalog
+                          .filter((s) => !owned.some((e) => e.item.slug === s))
+                          .map((s) => (
+                            <button key={s} className="btn text-xs" onClick={() => grant(d.deviceId, s)}>
+                              + {s}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  );
+                })
               )}
             </Section>
 

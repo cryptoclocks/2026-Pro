@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'device_controller.dart';
 import 'hub_api.dart';
 import 'ui_helpers.dart';
@@ -7,6 +8,65 @@ import 'auth.dart';
 import 'login_screen.dart';
 import 'symbol_picker.dart';
 import 'slideshow_manager.dart';
+
+/// Locked-feature card: description + price + Request-approval / Buy (per-device).
+Widget lockedFeature(BuildContext context, DeviceController c, String slug) {
+  final item = c.catalogItem(slug);
+  final cents = (item?['priceCents'] as num?)?.toInt() ?? 0;
+  final price = cents == 0 ? 'Free' : '\$${(cents / 100).toStringAsFixed(2)}';
+  return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+    Row(children: [
+      const Icon(Icons.lock, size: 16, color: ccpMuted),
+      const SizedBox(width: 6),
+      Expanded(child: Text((item?['title'] as String?) ?? 'Locked feature',
+          style: const TextStyle(fontWeight: FontWeight.bold))),
+      Text(price, style: const TextStyle(color: ccpAccent, fontWeight: FontWeight.bold)),
+    ]),
+    const SizedBox(height: 4),
+    Text((item?['description'] as String?) ??
+        'This feature is locked on this CryptoClock.',
+        style: const TextStyle(color: ccpMuted, fontSize: 12)),
+    const SizedBox(height: 8),
+    Row(children: [
+      Expanded(
+        child: OutlinedButton.icon(
+          icon: const Icon(Icons.verified, size: 16),
+          label: const Text('Request approval'),
+          onPressed: () async {
+            final err = await HubApi.requestFeature(
+              deviceId: c.deviceId, page: 'crypto', feature: 'alerts', detail: {});
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                content: Text(err == null
+                    ? 'Sent to admin for approval'
+                    : 'Failed: $err')));
+          },
+        ),
+      ),
+      const SizedBox(width: 8),
+      Expanded(
+        child: FilledButton.icon(
+          icon: const Icon(Icons.lock_open, size: 16),
+          label: Text('Unlock $price'),
+          onPressed: () async {
+            final res = await HubApi.checkout(slug, c.deviceId);
+            if (!context.mounted) return;
+            final url = res['url'] as String?;
+            if (res['configured'] == false) {
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Payments not enabled yet — ask admin to approve')));
+            } else if (url != null) {
+              await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+            } else {
+              ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Checkout failed: ${res['error'] ?? ''}')));
+            }
+          },
+        ),
+      ),
+    ]),
+  ]);
+}
 
 /* ===================== System ===================== */
 class SystemSettings extends StatefulWidget {
@@ -311,10 +371,11 @@ class CryptoSettings extends StatelessWidget {
                   fmt: (v) => v < 60 ? '${v}s' : '${v ~/ 60}m'),
             ]),
             settingCard('Price alerts (${c.alerts.length}/${DeviceController.maxAlerts})', [
-              if (!c.alertsUnlocked) ...[
-                const Text(
-                    'Login (Profile tab) to unlock alerts.\nThe display shows a full-screen alert + sound\nwhen a coin crosses your price.',
+              if (c.userEmail == null) ...[
+                const Text('Login (Profile tab) to manage alerts.',
                     style: TextStyle(color: ccpMuted)),
+              ] else if (!c.alertsUnlocked) ...[
+                lockedFeature(context, c, 'crypto-alerts'),
               ] else ...[
                 ...c.alerts.asMap().entries.map((e) {
                   final a = e.value;
@@ -335,33 +396,21 @@ class CryptoSettings extends StatelessWidget {
                     ),
                   );
                 }),
+                Row(children: [
+                  const Icon(Icons.verified_user, size: 14, color: ccpAccent),
+                  const SizedBox(width: 4),
+                  const Expanded(child: Text('Unlocked on this CryptoClock',
+                      style: TextStyle(color: ccpAccent, fontSize: 12))),
+                ]),
                 if (c.alerts.length < DeviceController.maxAlerts)
                   OutlinedButton.icon(
                     icon: const Icon(Icons.add_alert),
                     label: const Text('Add alert'),
                     onPressed: () => _addAlert(context),
                   ),
-                if (c.alerts.isNotEmpty)
-                  FilledButton.icon(
-                    icon: const Icon(Icons.verified),
-                    label: const Text('Submit for admin approval'),
-                    onPressed: () async {
-                      final err = await HubApi.requestFeature(
-                        deviceId: c.deviceId,
-                        page: 'crypto',
-                        feature: 'alerts',
-                        detail: {'alerts': c.alerts},
-                      );
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                          content: Text(err == null
-                              ? 'Sent to admin — alerts activate once approved'
-                              : 'Failed: $err')));
-                    },
-                  ),
                 const Text(
-                    'Price alerts need admin approval. They activate on the display '
-                    'after approval. On the display: Snooze (5 min) or Stop (off).',
+                    'Tap "Save to display" to apply. On the display: Snooze (5 min) '
+                    'or Stop (off).',
                     style: TextStyle(color: ccpMuted, fontSize: 12)),
               ],
             ]),

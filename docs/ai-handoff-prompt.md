@@ -66,8 +66,10 @@ over MQTT; extra pages sold via Stripe. Three codebases: `firmware/`, `server/`
   app `POST /me/feature-requests` → web `/approvals` → approve merges into device settings.
 
 ### Suggested next work (see project-progress.md 🟡/⬜)
-- M5: stand up object store (MinIO/S3) so the Builder's Publish actually delivers OTA
-  page bundles to devices (package → upload → assign → cmd:sync → device renders layout.json).
+- M5: move Builder bundle storage from local filesystem to object store (MinIO/S3).
+  Local API already supports edit Rust in `/builder` → compile wasm → publish `bundle.zip`
+  + manifest + `PayloadVersion` → assign → `cmd:sync`; production still needs object storage,
+  authz around downloads, and real ESP32 validation of server-rendered layout/WASM pages.
 - Implement real widget rendering in `ui_renderer` for server layouts + WASM host bindings.
 - Deploy Hub to Vercel + Supabase (env wiring is documented); production MQTT TLS (8883).
 - Build iOS app; finish the admin fleet app.

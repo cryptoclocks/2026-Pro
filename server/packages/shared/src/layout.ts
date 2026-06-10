@@ -51,7 +51,7 @@ export const ActionSchema = z.object({
   ]),
   do: z.enum([
     "page.show", "wasm.event", "audio.play", "audio.stop", "mqtt.publish",
-    "brightness.set", "device.reboot", "device.sync", "var.set",
+    "brightness.set", "device.reboot", "device.sync", "var.set", "widget.set",
   ]),
   target: z.string().optional(),
   asset: z.string().optional(),

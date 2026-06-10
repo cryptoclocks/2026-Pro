@@ -229,35 +229,48 @@ model PayloadVersion {
   @@unique([payloadId, version])
 }
 
+enum CatalogKind {
+  PAGE
+  FEATURE
+}
+
 model MarketplaceItem {
   id              String  @id @default(cuid())
   slug            String  @unique
   title           String
   description     String?
-  authorId        String
-  author          User    @relation(fields: [authorId], references: [id])
-  payloadId       String
-  payloadRef      Payload @relation(fields: [payloadId], references: [id])
+  kind            CatalogKind @default(PAGE) // PAGE = swipeable page, FEATURE = page add-on
+  icon            String?
+  authorId        String?
+  author          User?   @relation(fields: [authorId], references: [id])
+  payloadId       String? // null for feature add-ons / not-yet-bundled pages
+  payloadRef      Payload? @relation(fields: [payloadId], references: [id])
   priceCents      Int     @default(0)
   currency        String  @default("usd")
   stripeProductId String?
   stripePriceId   String?
-  published       Boolean @default(false)
+  published       Boolean @default(true)
   createdAt       DateTime @default(now())
 
   entitlements Entitlement[]
 }
 
+/// A page/feature unlocked on ONE specific device. Rights are per-CryptoClock,
+/// not per-user: a user with two displays buys/unlocks separately for each.
+/// userId = who paid/owns it; deviceId = the hardware id (ccp-xxxx) it applies to.
 model Entitlement {
   id        String            @id @default(cuid())
   userId    String
   user      User              @relation(fields: [userId], references: [id])
   itemId    String
   item      MarketplaceItem   @relation(fields: [itemId], references: [id])
+  deviceId  String            // hardware id the entitlement is bound to
   source    EntitlementSource @default(PURCHASE)
   createdAt DateTime          @default(now())
 
-  @@unique([userId, itemId])
+  @@unique([deviceId, itemId])
+  @@index([userId])
+  @@index([deviceId])
 }
 
 model AdCampaign {

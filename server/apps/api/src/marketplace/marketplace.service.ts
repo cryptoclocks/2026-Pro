@@ -1,90 +1,117 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException, OnModuleInit } from "@nestjs/common";
 import Stripe from "stripe";
 import { PrismaService } from "../prisma/prisma.service";
 
-export interface StoreItem {
+type Kind = "PAGE" | "FEATURE";
+interface CatalogSeed {
   slug: string;
   title: string;
   description: string;
+  kind: Kind;
+  icon: string;
   priceCents: number;
-  currency: string;
-  icon: string; // material icon name for the app
 }
 
 /**
- * The page catalog. Real published bundles live in the MarketplaceItem table;
- * until authors publish, we expose a built-in catalog of upcoming pages so the
- * app's Store has something to show. The 3 default pages ship free.
+ * The catalog of things a device can have: PAGE = a swipeable page, FEATURE =
+ * an add-on to a built-in page (e.g. crypto price alerts). Seeded into the DB so
+ * entitlements (per-device) can reference real rows. Built-in pages (clock /
+ * crypto / slideshow) ship free and are always available — not listed here.
  */
-const BUILTIN_CATALOG: StoreItem[] = [
-  { slug: "weather", title: "Weather", description: "Local forecast, hi/lo, radar icon", priceCents: 199, currency: "usd", icon: "cloud" },
-  { slug: "news-ticker", title: "News Ticker", description: "Scrolling headlines from your feeds", priceCents: 199, currency: "usd", icon: "newspaper" },
-  { slug: "calendar", title: "Calendar", description: "Today's agenda from Google Calendar", priceCents: 299, currency: "usd", icon: "event" },
-  { slug: "stocks", title: "Stocks", description: "Track equities & indices alongside crypto", priceCents: 299, currency: "usd", icon: "trending_up" },
-  { slug: "fear-greed", title: "Fear & Greed", description: "Crypto market sentiment gauge", priceCents: 99, currency: "usd", icon: "speed" },
+const CATALOG: CatalogSeed[] = [
+  { slug: "crypto-alerts", title: "Crypto Price Alerts", kind: "FEATURE", icon: "speed",
+    description: "Full-screen + sound alerts when a coin crosses your high/low price (needs admin approval).", priceCents: 99 },
+  { slug: "weather", title: "Weather", kind: "PAGE", icon: "cloud",
+    description: "Local forecast, hi/lo, conditions.", priceCents: 199 },
+  { slug: "news-ticker", title: "News Ticker", kind: "PAGE", icon: "newspaper",
+    description: "Scrolling headlines from your feeds.", priceCents: 199 },
+  { slug: "calendar", title: "Calendar", kind: "PAGE", icon: "event",
+    description: "Today's agenda from Google Calendar.", priceCents: 299 },
+  { slug: "stocks", title: "Stocks", kind: "PAGE", icon: "trending_up",
+    description: "Track equities & indices alongside crypto.", priceCents: 299 },
+  { slug: "fear-greed", title: "Fear & Greed", kind: "PAGE", icon: "speed",
+    description: "Crypto market sentiment gauge.", priceCents: 99 },
 ];
 
 @Injectable()
-export class MarketplaceService {
+export class MarketplaceService implements OnModuleInit {
   private readonly log = new Logger(MarketplaceService.name);
   private readonly stripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? "sk_test_placeholder");
 
   constructor(private readonly prisma: PrismaService) {}
+
+  /** Seed the catalog so every gateable thing is a real DB row. */
+  async onModuleInit() {
+    for (const c of CATALOG) {
+      await this.prisma.marketplaceItem
+        .upsert({
+          where: { slug: c.slug },
+          update: { title: c.title, description: c.description, kind: c.kind, icon: c.icon },
+          create: {
+            slug: c.slug, title: c.title, description: c.description,
+            kind: c.kind, icon: c.icon, priceCents: c.priceCents, published: true,
+          },
+        })
+        .catch((e) => this.log.warn(`seed ${c.slug}: ${e}`));
+    }
+  }
 
   private get stripeReady(): boolean {
     const k = process.env.STRIPE_SECRET_KEY ?? "";
     return k.startsWith("sk_") && !k.includes("xxx") && !k.includes("placeholder");
   }
 
-  /** Admin view: DB-backed items incl. unpublished, plus the builtin catalog. */
-  async adminListItems() {
-    const db = await this.prisma.marketplaceItem.findMany({
-      orderBy: { createdAt: "desc" },
-    });
-    return {
-      managed: db,
-      builtin: BUILTIN_CATALOG,
-    };
-  }
-
-  async updateItem(id: string, patch: { priceCents?: number; published?: boolean; title?: string; description?: string }) {
-    return this.prisma.marketplaceItem.update({
-      where: { id },
-      data: {
-        ...(patch.priceCents !== undefined ? { priceCents: patch.priceCents } : {}),
-        ...(patch.published !== undefined ? { published: patch.published } : {}),
-        ...(patch.title !== undefined ? { title: patch.title } : {}),
-        ...(patch.description !== undefined ? { description: patch.description } : {}),
-      },
+  listItems() {
+    return this.prisma.marketplaceItem.findMany({
+      where: { published: true },
+      orderBy: [{ kind: "asc" }, { priceCents: "asc" }],
     });
   }
 
-  async listItems(): Promise<StoreItem[]> {
-    const published = await this.prisma.marketplaceItem
-      .findMany({ where: { published: true } })
-      .catch(() => []);
-    const fromDb: StoreItem[] = published.map((m) => ({
-      slug: m.slug,
-      title: m.title,
-      description: m.description ?? "",
-      priceCents: m.priceCents,
-      currency: m.currency,
-      icon: "extension",
-    }));
-    // DB items take precedence over builtins with the same slug
-    const slugs = new Set(fromDb.map((i) => i.slug));
-    return [...fromDb, ...BUILTIN_CATALOG.filter((i) => !slugs.has(i.slug))];
+  adminListItems() {
+    return this.prisma.marketplaceItem.findMany({ orderBy: { createdAt: "asc" } });
   }
 
-  /**
-   * Returns { url } to a Stripe Checkout page, or { configured:false } when
-   * Stripe keys aren't set yet (the app shows a "coming soon" notice).
-   */
-  async checkout(slug: string, deviceId: string, successUrl: string, cancelUrl: string) {
-    const item = (await this.listItems()).find((i) => i.slug === slug);
+  updateItem(id: string, patch: { priceCents?: number; published?: boolean; title?: string; description?: string }) {
+    return this.prisma.marketplaceItem.update({ where: { id }, data: patch });
+  }
+
+  /** Slugs (and item meta) a specific device is entitled to. */
+  async entitlementsForDevice(deviceId: string) {
+    const ents = await this.prisma.entitlement.findMany({
+      where: { deviceId },
+      include: { item: true },
+    });
+    return ents.map((e) => ({ slug: e.item.slug, title: e.item.title, kind: e.item.kind, source: e.source }));
+  }
+
+  /** Grant a catalog item to ONE device (admin gift / approval / purchase). */
+  async grantToDevice(deviceId: string, slug: string, userId: string, source: "PURCHASE" | "GIFT" = "GIFT") {
+    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
+    if (!item) throw new NotFoundException(`item ${slug} not found`);
+    return this.prisma.entitlement.upsert({
+      where: { deviceId_itemId: { deviceId, itemId: item.id } },
+      update: { userId, source },
+      create: { deviceId, itemId: item.id, userId, source },
+    });
+  }
+
+  async revokeFromDevice(deviceId: string, slug: string) {
+    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
+    if (!item) throw new NotFoundException(`item ${slug} not found`);
+    await this.prisma.entitlement
+      .delete({ where: { deviceId_itemId: { deviceId, itemId: item.id } } })
+      .catch(() => undefined);
+    return { ok: true };
+  }
+
+  /** Stripe Checkout for a device-scoped purchase, or {configured:false}. */
+  async checkout(slug: string, deviceId: string, userId: string, successUrl: string, cancelUrl: string) {
+    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
     if (!item) return { error: "unknown item" };
+    if (!deviceId) return { error: "deviceId required (which CryptoClock?)" };
     if (!this.stripeReady) {
-      this.log.warn(`checkout for ${slug} but Stripe not configured`);
+      this.log.warn(`checkout ${slug} for ${deviceId} but Stripe not configured`);
       return { configured: false };
     }
     const session = await this.stripe.checkout.sessions.create({
@@ -93,13 +120,13 @@ export class MarketplaceService {
         {
           price_data: {
             currency: item.currency,
-            product_data: { name: `CryptoClock page: ${item.title}` },
+            product_data: { name: `CryptoClock: ${item.title}` },
             unit_amount: item.priceCents,
           },
           quantity: 1,
         },
       ],
-      metadata: { slug, deviceId },
+      metadata: { slug, deviceId, userId },
       success_url: successUrl,
       cancel_url: cancelUrl,
     });

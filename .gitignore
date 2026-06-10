@@ -20,6 +20,8 @@ server/**/.next/
 server/**/dist/
 server/**/.turbo/
 server/**/*.tsbuildinfo
+server/apps/api/storage/
+server/storage/
 server/.env
 server/**/.env
 server/**/.env.local
@@ -31,3 +33,7 @@ mobile/**/lib/secrets.dart
 
 # --- vendor reference materials (1GB of datasheets/tools — keep local only) ---
 JC3248W535EN/
+
+# Rust build outputs
+wasm-apps/**/target/
+target/

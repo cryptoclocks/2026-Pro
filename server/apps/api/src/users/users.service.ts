@@ -1,16 +1,18 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { DevicesService } from "../devices/devices.service";
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly devices: DevicesService,
+  ) {}
 
   async list() {
     const users = await this.prisma.user.findMany({
       orderBy: { createdAt: "desc" },
-      include: {
-        _count: { select: { entitlements: true, devices: true } },
-      },
+      include: { _count: { select: { entitlements: true, devices: true } } },
     });
     return users.map((u) => ({
       id: u.id,
@@ -36,23 +38,26 @@ export class UsersService {
     return user;
   }
 
-  /** Admin grants a page to a user (no payment) — source GIFT. */
-  async grant(userId: string, slug: string) {
+  /** Admin grants a catalog item to ONE of the user's devices (per-device). */
+  async grant(userId: string, deviceId: string, slug: string) {
     const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
     if (!item) throw new NotFoundException("item not found");
-    return this.prisma.entitlement.upsert({
-      where: { userId_itemId: { userId, itemId: item.id } },
-      update: {},
-      create: { userId, itemId: item.id, source: "GIFT" },
+    await this.prisma.entitlement.upsert({
+      where: { deviceId_itemId: { deviceId, itemId: item.id } },
+      update: { userId, source: "GIFT" },
+      create: { deviceId, itemId: item.id, userId, source: "GIFT" },
     });
+    await this.devices.syncEntitlements(deviceId);
+    return { ok: true };
   }
 
-  async revoke(userId: string, slug: string) {
+  async revoke(deviceId: string, slug: string) {
     const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
     if (!item) throw new NotFoundException("item not found");
     await this.prisma.entitlement
-      .delete({ where: { userId_itemId: { userId, itemId: item.id } } })
+      .delete({ where: { deviceId_itemId: { deviceId, itemId: item.id } } })
       .catch(() => undefined);
+    await this.devices.syncEntitlements(deviceId);
     return { ok: true };
   }
 }

@@ -31,11 +31,11 @@ function PaletteItem({ type }: { type: WidgetType }) {
 
 export function WidgetPalette() {
   return (
-    <aside className="w-44 shrink-0 space-y-1 overflow-y-auto pr-1">
+    <section className="w-full space-y-1">
       <h2 className="text-xs uppercase tracking-wide text-[var(--ccp-muted)] mb-2">Widgets</h2>
       {WIDGET_TYPES.map((t) => (
         <PaletteItem key={t} type={t} />
       ))}
-    </aside>
+    </section>
   );
 }

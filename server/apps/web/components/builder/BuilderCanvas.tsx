@@ -39,6 +39,9 @@ function MockCandles() {
 function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: boolean }) {
   const select = useBuilder((s) => s.select);
   const selected = useBuilder((s) => s.selectedId === widget.id);
+  const widgets = useBuilder((s) => s.widgets);
+  const updateProps = useBuilder((s) => s.updateProps);
+  const updateWidget = useBuilder((s) => s.updateWidget);
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
     id: widget.id,
     data: { from: "canvas" },
@@ -51,13 +54,47 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
     widget.style?.bg_color ??
     (widget.type === "chart" ? "#161B22" : SELF_DRAWN.includes(widget.type) ? "transparent" : "#181C22");
 
+  const simulateClick = () => {
+    if (!simulate || widget.type !== "button") return false;
+    select(widget.id);
+    for (const action of widget.actions ?? []) {
+      if (action.on !== "clicked") continue;
+      if (action.do === "widget.set" && action.target && action.key) {
+        const value = action.value;
+        const target = widgets.find((w) => w.id === action.target);
+        if (!target) continue;
+        if (action.key === "text" || action.key === "src") {
+          updateProps(target.id, { [action.key]: value ?? "" });
+        } else if (action.key === "value") {
+          updateProps(target.id, { value: Number(value) || 0 });
+        } else if (action.key === "visible") {
+          updateWidget(target.id, { hidden: !truthy(value) || undefined });
+        } else if (action.key === "style.bg_color" || action.key === "style.text_color") {
+          const styleKey = action.key.split(".")[1];
+          updateWidget(target.id, { style: { ...target.style, [styleKey]: String(value ?? "") } });
+        }
+      } else if (action.do === "wasm.event") {
+        const ledId = action.event_id === 101 ? "led_1" : action.event_id === 102 ? "led_2" : null;
+        const led = ledId ? widgets.find((w) => w.id === ledId) : null;
+        if (led) {
+          updateProps(led.id, { on: !Boolean(led.props?.on) });
+        }
+      }
+    }
+    if (widget.props?.checkable) {
+      updateProps(widget.id, { checked: !Boolean(widget.props.checked) });
+    }
+    return true;
+  };
+
   return (
     <div
       ref={setNodeRef}
-      {...listeners}
-      {...attributes}
+      {...(simulate ? {} : listeners)}
+      {...(simulate ? {} : attributes)}
       onClick={(e) => {
         e.stopPropagation();
+        if (simulateClick()) return;
         select(widget.id);
       }}
       className={`absolute flex items-center justify-center text-xs overflow-hidden cursor-move select-none ${
@@ -77,7 +114,8 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
             ? `${widget.style?.border_width}px solid ${widget.style?.border_color ?? "#2b3139"}`
             : undefined,
         opacity: widget.style?.opa !== undefined ? Number(widget.style.opa) / 255 : 1,
-        transform: transform ? `translate(${transform.x}px, ${transform.y}px)` : undefined,
+        cursor: simulate && widget.type === "button" ? "pointer" : "move",
+        transform: !simulate && transform ? `translate(${transform.x}px, ${transform.y}px)` : undefined,
       }}
     >
       <WidgetInner widget={widget} simulate={simulate} />
@@ -91,6 +129,7 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
 }
 
 const N = (v: unknown, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+const truthy = (v: unknown) => v === true || v === 1 || v === "1" || v === "true" || v === "on";
 
 /** Render the visual interior of a widget from its props (SquareLine-style). */
 function WidgetInner({ widget: w, simulate }: { widget: WidgetNode; simulate: boolean }) {
@@ -104,7 +143,14 @@ function WidgetInner({ widget: w, simulate }: { widget: WidgetNode; simulate: bo
     }
     case "button":
       return (
-        <span className="px-2 rounded" style={{ background: "#2b3139", lineHeight: `${Math.max(0, w.h - 8)}px` }}>
+        <span
+          className="px-2 rounded"
+          style={{
+            background: p.checked ? accent : "#2b3139",
+            color: p.checked ? "#0B0E11" : undefined,
+            lineHeight: `${Math.max(0, w.h - 8)}px`,
+          }}
+        >
           {(p.text as string) ?? "Button"}
         </span>
       );
@@ -158,7 +204,23 @@ function WidgetInner({ widget: w, simulate }: { widget: WidgetNode; simulate: bo
         </span>
       );
     case "led":
-      return <div className="rounded-full" style={{ width: Math.min(w.w, w.h) - 4, height: Math.min(w.w, w.h) - 4, background: (p.color as string) ?? "#0ECB81", boxShadow: `0 0 10px ${(p.color as string) ?? "#0ECB81"}` }} />;
+      {
+        const on = Boolean(p.on);
+        const color = (p.color as string) ?? "#0ECB81";
+        const brightness = Math.max(0, Math.min(255, N(p.brightness, 255))) / 255;
+        return (
+          <div
+            className="rounded-full"
+            style={{
+              width: Math.min(w.w, w.h) - 4,
+              height: Math.min(w.w, w.h) - 4,
+              background: on ? color : "#20262D",
+              opacity: on ? Math.max(0.25, brightness) : 0.45,
+              boxShadow: on ? `0 0 ${Math.round(16 * brightness)}px ${color}` : "inset 0 0 8px #000",
+            }}
+          />
+        );
+      }
     case "qrcode":
       return (
         <div className="grid" style={{ gridTemplateColumns: "repeat(7,1fr)", width: Math.min(w.w, w.h) - 6, height: Math.min(w.w, w.h) - 6, background: "#fff", padding: 2 }}>

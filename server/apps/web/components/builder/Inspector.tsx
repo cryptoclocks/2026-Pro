@@ -14,7 +14,49 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 const inputCls =
-  "w-32 px-2 py-1 rounded bg-[var(--ccp-bg)] border border-[var(--ccp-border)] text-xs";
+  "w-36 px-2 py-1 rounded bg-[var(--ccp-bg)] border border-[var(--ccp-border)] text-xs";
+
+const ACTION_TRIGGERS = [
+  "clicked",
+  "pressed",
+  "released",
+  "long_pressed",
+  "value_changed",
+  "gesture_left",
+  "gesture_right",
+] as const;
+
+const ACTION_DOS = [
+  "widget.set",
+  "wasm.event",
+  "page.show",
+  "audio.play",
+  "audio.stop",
+  "mqtt.publish",
+  "brightness.set",
+  "device.reboot",
+  "device.sync",
+  "var.set",
+] as const;
+
+const WIDGET_SET_KEYS = [
+  "text",
+  "value",
+  "visible",
+  "style.bg_color",
+  "style.text_color",
+  "src",
+] as const;
+
+const BINDING_PROPS = [
+  "text",
+  "value",
+  "visible",
+  "style.bg_color",
+  "style.text_color",
+  "src",
+  "series.0",
+] as const;
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
@@ -190,6 +232,8 @@ export function Inspector() {
         </Row>
       ))}
 
+      <ActionEditor widget={widget} updateWidget={updateWidget} />
+
       <BindingEditor widget={widget} setBindings={setBindings} />
 
       <button
@@ -202,6 +246,240 @@ export function Inspector() {
   );
 }
 
+function ActionEditor({
+  widget,
+  updateWidget,
+}: {
+  widget: WidgetNode;
+  updateWidget: (id: string, patch: Partial<WidgetNode>) => void;
+}) {
+  const widgets = useBuilder((s) => s.widgets);
+  const wasmModules = useBuilder((s) => s.wasmModules);
+  const actions = widget.actions ?? [];
+  const setAction = (index: number, patch: Record<string, unknown>) => {
+    const base = actions[index] ?? { on: "clicked", do: "widget.set", target: "", key: "text", value: "" };
+    const next = [...actions];
+    next[index] = { ...base, ...patch } as NonNullable<WidgetNode["actions"]>[number];
+    updateWidget(widget.id, { actions: next });
+  };
+  const add = () => {
+    updateWidget(widget.id, {
+      actions: [
+        ...actions,
+        { on: "clicked", do: "widget.set", target: widgets.find((w) => w.id !== widget.id)?.id ?? "", key: "text", value: "" },
+      ] as WidgetNode["actions"],
+    });
+  };
+  const remove = (index: number) => {
+    const next = actions.filter((_a, i) => i !== index);
+    updateWidget(widget.id, { actions: next.length ? next : undefined });
+  };
+
+  return (
+    <>
+      <SectionTitle>Actions / Logic</SectionTitle>
+      <div className="space-y-3">
+        {actions.map((action, index) => (
+          <div key={index} className="space-y-1 rounded border border-[var(--ccp-border)] p-2">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-[var(--ccp-muted)]">
+              <span>Action {index + 1}</span>
+              <button className="text-[var(--ccp-red)]" onClick={() => remove(index)}>
+                Remove
+              </button>
+            </div>
+            <Row label="on">
+              <select
+                className={inputCls}
+                value={action.on}
+                onChange={(e) => setAction(index, { on: e.target.value })}
+              >
+                {ACTION_TRIGGERS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </Row>
+            <Row label="do">
+              <select
+                className={inputCls}
+                value={action.do}
+                onChange={(e) => setAction(index, { do: e.target.value })}
+              >
+                {ACTION_DOS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </Row>
+
+            {action.do === "widget.set" && (
+              <>
+                <Row label="widget">
+                  <select
+                    className={inputCls}
+                    value={action.target ?? ""}
+                    onChange={(e) => setAction(index, { target: e.target.value })}
+                  >
+                    <option value="">(select)</option>
+                    {widgets.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.id}
+                      </option>
+                    ))}
+                  </select>
+                </Row>
+                <Row label="property">
+                  <select
+                    className={inputCls}
+                    value={action.key ?? "text"}
+                    onChange={(e) => setAction(index, { key: e.target.value })}
+                  >
+                    {WIDGET_SET_KEYS.map((k) => (
+                      <option key={k} value={k}>
+                        {k}
+                      </option>
+                    ))}
+                  </select>
+                </Row>
+                <Row label="value">
+                  <input
+                    className={inputCls}
+                    value={String(action.value ?? "")}
+                    placeholder="#15c3a6 / Hello / 1"
+                    onChange={(e) => setAction(index, { value: e.target.value })}
+                  />
+                </Row>
+              </>
+            )}
+
+            {action.do === "wasm.event" && (
+              <>
+                <Row label="module">
+                  <select
+                    className={inputCls}
+                    value={action.target ?? ""}
+                    onChange={(e) => setAction(index, { target: e.target.value })}
+                  >
+                    <option value="">(select)</option>
+                    {wasmModules.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.id}
+                      </option>
+                    ))}
+                  </select>
+                </Row>
+                <Row label="event id">
+                  <input
+                    className={inputCls}
+                    type="number"
+                    value={action.event_id ?? ""}
+                    placeholder="101"
+                    onChange={(e) =>
+                      setAction(index, { event_id: e.target.value === "" ? undefined : Number(e.target.value) })
+                    }
+                  />
+                </Row>
+              </>
+            )}
+
+            {action.do === "page.show" && (
+              <Row label="page">
+                <input
+                  className={inputCls}
+                  value={action.target ?? ""}
+                  placeholder="main"
+                  onChange={(e) => setAction(index, { target: e.target.value || undefined })}
+                />
+              </Row>
+            )}
+
+            {action.do === "mqtt.publish" && (
+              <>
+                <Row label="topic">
+                  <input
+                    className={inputCls}
+                    value={action.topic_suffix ?? action.target ?? ""}
+                    placeholder="button"
+                    onChange={(e) => setAction(index, { topic_suffix: e.target.value || undefined, target: undefined })}
+                  />
+                </Row>
+                <Row label="payload">
+                  <textarea
+                    className="w-36 px-2 py-1 rounded bg-[var(--ccp-bg)] border border-[var(--ccp-border)] text-xs h-16"
+                    value={typeof action.payload === "string" ? action.payload : JSON.stringify(action.payload ?? {}, null, 0)}
+                    placeholder='{"state":true}'
+                    onChange={(e) => setAction(index, { payload: parseJsonish(e.target.value) })}
+                  />
+                </Row>
+              </>
+            )}
+
+            {action.do === "brightness.set" && (
+              <Row label="value">
+                <input
+                  className={inputCls}
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={String(action.value ?? "")}
+                  placeholder="80"
+                  onChange={(e) => setAction(index, { value: e.target.value === "" ? undefined : Number(e.target.value) })}
+                />
+              </Row>
+            )}
+
+            {action.do === "var.set" && (
+              <>
+                <Row label="key">
+                  <input
+                    className={inputCls}
+                    value={action.key ?? ""}
+                    placeholder="mode"
+                    onChange={(e) => setAction(index, { key: e.target.value || undefined })}
+                  />
+                </Row>
+                <Row label="value">
+                  <input
+                    className={inputCls}
+                    value={String(action.value ?? "")}
+                    placeholder="on"
+                    onChange={(e) => setAction(index, { value: e.target.value })}
+                  />
+                </Row>
+              </>
+            )}
+
+            {action.do === "audio.play" && (
+              <Row label="asset">
+                <input
+                  className={inputCls}
+                  value={action.asset ?? ""}
+                  placeholder="click"
+                  onChange={(e) => setAction(index, { asset: e.target.value || undefined })}
+                />
+              </Row>
+            )}
+          </div>
+        ))}
+        <button className="btn py-1.5 px-3 text-xs w-full justify-center" onClick={add}>
+          Add action
+        </button>
+      </div>
+    </>
+  );
+}
+
+function parseJsonish(value: string): unknown {
+  if (!value.trim()) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 function BindingEditor({
   widget,
   setBindings,
@@ -209,45 +487,106 @@ function BindingEditor({
   widget: WidgetNode;
   setBindings: (id: string, b: WidgetNode["bindings"]) => void;
 }) {
-  const isChart = widget.type === "chart";
-  const prop = isChart ? "series" : widget.type === "arc" || widget.type === "bar" || widget.type === "slider" ? "value" : "text";
-  const b = widget.bindings?.find((x) => x.prop === prop);
-  const setB = (patch: Record<string, string>) => {
-    const next = { prop, source: "", ...b, ...patch };
-    setBindings(widget.id, next.source ? [next] : []);
+  const dataSources = useBuilder((s) => s.dataSources);
+  const bindings = widget.bindings ?? [];
+  const sourceIds = Array.from(new Set([...dataSources.map((d) => d.id), ...bindings.map((b) => b.source)].filter(Boolean)));
+
+  const setBinding = (index: number, patch: Partial<NonNullable<WidgetNode["bindings"]>[number]>) => {
+    const base = bindings[index] ?? { prop: "text", source: sourceIds[0] ?? "", path: "$" };
+    const next = [...bindings];
+    next[index] = { ...base, ...patch };
+    setBindings(widget.id, next.filter((b) => b.source));
   };
+  const add = () => {
+    setBindings(widget.id, [
+      ...bindings,
+      { prop: widget.type === "chart" ? "series.0" : "text", source: sourceIds[0] ?? "", path: "$" },
+    ]);
+  };
+  const remove = (index: number) => {
+    const next = bindings.filter((_b, i) => i !== index);
+    setBindings(widget.id, next.length ? next : undefined);
+  };
+
   return (
     <>
-      <SectionTitle>Data binding ({prop})</SectionTitle>
-      <Row label="source">
-        <select
-          className={inputCls}
-          value={b?.source ?? ""}
-          onChange={(e) => setB({ source: e.target.value })}
-        >
-          <option value="">(static)</option>
-          <option value="clock">clock</option>
-          <option value="crypto">crypto</option>
-          <option value="weather">weather</option>
-          <option value="device">device</option>
-        </select>
-      </Row>
-      <Row label="path">
-        <input
-          className={inputCls}
-          placeholder="BTCUSDT.price"
-          value={b?.path ?? ""}
-          onChange={(e) => setB({ path: e.target.value })}
-        />
-      </Row>
-      <Row label="format">
-        <input
-          className={inputCls}
-          placeholder="$%s"
-          value={b?.format ?? ""}
-          onChange={(e) => setB({ format: e.target.value })}
-        />
-      </Row>
+      <SectionTitle>Data Binding</SectionTitle>
+      <div className="space-y-3">
+        {bindings.map((b, index) => (
+          <div key={index} className="space-y-1 rounded border border-[var(--ccp-border)] p-2">
+            <div className="flex items-center justify-between text-[10px] uppercase tracking-wide text-[var(--ccp-muted)]">
+              <span>Binding {index + 1}</span>
+              <button className="text-[var(--ccp-red)]" onClick={() => remove(index)}>
+                Remove
+              </button>
+            </div>
+            <Row label="target">
+              <select
+                className={inputCls}
+                value={b.prop}
+                onChange={(e) => setBinding(index, { prop: e.target.value })}
+              >
+                {BINDING_PROPS.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </Row>
+            <Row label="source">
+              {sourceIds.length ? (
+                <select
+                  className={inputCls}
+                  value={b.source}
+                  onChange={(e) => setBinding(index, { source: e.target.value })}
+                >
+                  <option value="">(select)</option>
+                  {sourceIds.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  className={inputCls}
+                  value={b.source}
+                  placeholder="source id"
+                  onChange={(e) => setBinding(index, { source: e.target.value })}
+                />
+              )}
+            </Row>
+            <Row label="path">
+              <input
+                className={inputCls}
+                placeholder="$.price"
+                value={b.path ?? ""}
+                onChange={(e) => setBinding(index, { path: e.target.value || undefined })}
+              />
+            </Row>
+            <Row label="format">
+              <input
+                className={inputCls}
+                placeholder="$%,.2f"
+                value={b.format ?? ""}
+                onChange={(e) => setBinding(index, { format: e.target.value || undefined })}
+              />
+            </Row>
+            <Row label="scale">
+              <input
+                className={inputCls}
+                type="number"
+                value={b.scale ?? ""}
+                placeholder="1"
+                onChange={(e) => setBinding(index, { scale: e.target.value === "" ? undefined : Number(e.target.value) })}
+              />
+            </Row>
+          </div>
+        ))}
+        <button className="btn py-1.5 px-3 text-xs w-full justify-center" onClick={add}>
+          Add binding
+        </button>
+      </div>
     </>
   );
 }

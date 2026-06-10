@@ -272,11 +272,19 @@ static void cfg_apply_json(home_cfg_t *c, const cJSON *root)
             }
         }
     }
-    /* app login writes owner block -> unlocks the alert feature */
-    const cJSON *owner = cJSON_GetObjectItem(root, "owner");
-    if (owner) {
-        const cJSON *em = cJSON_GetObjectItem(owner, "email");
-        c->alerts_unlocked = cJSON_IsString(em) && em->valuestring[0] != '\0';
+    /* The device self-gates features by its server-granted entitlements:
+     * settings.entitlements = ["crypto-alerts", "weather", ...]. Price alerts
+     * only run when this specific CryptoClock holds "crypto-alerts". */
+    const cJSON *ents = cJSON_GetObjectItem(root, "entitlements");
+    if (cJSON_IsArray(ents)) {
+        c->alerts_unlocked = false;
+        const cJSON *e;
+        cJSON_ArrayForEach(e, ents) {
+            if (cJSON_IsString(e) && !strcmp(e->valuestring, "crypto-alerts")) {
+                c->alerts_unlocked = true;
+                break;
+            }
+        }
     }
     const cJSON *slide = cJSON_GetObjectItem(root, "slideshow");
     if (slide) {

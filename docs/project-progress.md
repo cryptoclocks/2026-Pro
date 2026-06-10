@@ -1,6 +1,6 @@
 # CryptoClock Pro — Project Progress
 
-_Last updated: 2026-06-10_
+_Last updated: 2026-06-11_
 
 Legend: ✅ done & verified · 🟡 partial / needs more · ⬜ not started
 
@@ -16,7 +16,7 @@ Legend: ✅ done & verified · 🟡 partial / needs more · ⬜ not started
 - ✅ LAN API (port 80) + mDNS, file upload/delete, brightness, identify, wifi reset
 - ✅ MQTT connectivity, status/telemetry, cmd handling (settings/reload/identify/…)
 - ✅ Boot settings-sync with server (version-compared)
-- 🟡 OTA package rendering (ui_renderer) — engine exists; end-to-end OTA needs bundle host (M5)
+- 🟡 OTA package rendering (ui_renderer) — engine exists; local Hub bundle host works, device render path still needs full hardware validation
 - 🟡 WASM logic (WAMR up; host bindings stubbed) — for marketplace pages (M7)
 
 ## Hub API (`server/apps/api`)
@@ -28,7 +28,7 @@ Legend: ✅ done & verified · 🟡 partial / needs more · ⬜ not started
 - ✅ **Marketplace**: store catalog, Stripe checkout, admin price/publish CRUD
 - ✅ **Feature requests**: create (user) + approve/reject (admin) → merge to device + MQTT push
 - ✅ **Billing**: Stripe webhook → Entitlement → MQTT sync (code present)
-- 🟡 Payload publish pipeline (validate works; bundle upload→MinIO is M5)
+- ✅ Payload publish pipeline (validate + Rust compile + local bundle.zip host + manifest/hash + PayloadVersion)
 - ⬜ Ads / campaigns (M7), notifications, audit-log surfacing
 
 ## Admin Web (`server/apps/web`)
@@ -38,8 +38,12 @@ Legend: ✅ done & verified · 🟡 partial / needs more · ⬜ not started
 - ✅ `/users` manager (purchases, devices, feature requests, grant/revoke)
 - ✅ `/approvals` queue (approve/reject feature requests)
 - ✅ `/store` (catalog + admin price/publish)
-- ✅ `/builder`: templates, drag-drop, Inspector + **data-binding**, **Simulate**, **Publish**
-- 🟡 Builder publish → live device (records + steps; OTA needs M5 bundle host)
+- ✅ `/builder`: templates, drag-drop overlay, Inspector + **data-binding**, **Data Sources**, **WASM module config**, **Edit Logic**, **Simulate**, **Publish**
+- ✅ Builder logic demo: **LED Toggle** template + simulate button→LED events + property reselect after simulate
+- ✅ Builder publish → server bundle: edit Rust in browser → compile wasm → publish `bundle.zip` + manifest → bundle URL
+- 🟡 Builder publish → live device: API/device sync path exists; needs real ESP32 hardware validation for layout/WASM rendering
+- ✅ Rust WASM example (`wasm-apps/examples/rust-ticker`) builds against ABI v1
+- ✅ Rust WASM LED toggle example (`wasm-apps/examples/led-toggle`) builds against ABI v1
 
 ## Mobile app (`mobile/user-app`)
 - ✅ Flutter project (Android built+installed; iOS folders generated, unbuilt)
@@ -53,7 +57,7 @@ Legend: ✅ done & verified · 🟡 partial / needs more · ⬜ not started
 - ✅ Local Hub runs without Docker (`cd server && pnpm dev`; Postgres via brew)
 - ✅ MQTT = Node-RED broker (port 1883 open, 8883 closed)
 - 🟡 Vercel + Supabase deploy track (planned; env wiring documented, not deployed)
-- ⬜ MinIO/S3 object store (M5) — needed for OTA bundle hosting
+- 🟡 MinIO/S3 object store (M5) — local filesystem bundle hosting works; production should move bundles to object storage
 - ⬜ Production MQTT TLS (8883) + per-device credentials
 
 ## Known constraints / gotchas (don't regress)
@@ -68,3 +72,14 @@ Legend: ✅ done & verified · 🟡 partial / needs more · ⬜ not started
 ## Verified end-to-end (2026-06-10, board ccp-983daee91478)
 Clock/crypto candlestick/slideshow render; settings push via web → device reloads;
 device telemetry in Postgres; APK installs & runs; web admin pages all 200.
+
+## Verified server/builder (2026-06-11, local)
+- `pnpm --filter @ccp/shared typecheck`
+- `pnpm --filter @ccp/web typecheck`
+- `pnpm --filter @ccp/api typecheck`
+- `pnpm --filter @ccp/api build`
+- `POST /api/v1/payloads/compile-wasm` compiled Rust LED logic to `wasm/logic.wasm`
+- `POST /api/v1/payloads/publish-compiled` created/updated `PayloadVersion` for `com.ccp.test-led@1.0.0`
+- `GET /api/v1/packages/com.ccp.test-led/1.0.0/manifest` returned layout + wasm hashes
+- `GET /api/v1/packages/com.ccp.test-led/1.0.0/bundle.zip` returned a valid zip containing `layout.json` and `wasm/logic.wasm`; downloaded bundle sha256 matched server response
+- Browser `/builder`: LED Toggle template loaded, Inspector actions re-opened after selection changes, Edit Logic compiled Rust from UI, Simulate toggled LED on/off

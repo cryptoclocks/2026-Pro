@@ -18,12 +18,12 @@ export class UsersController {
   }
 
   @Post(":id/grant")
-  grant(@Param("id") id: string, @Body() body: { slug: string }) {
-    return this.users.grant(id, body.slug);
+  grant(@Param("id") id: string, @Body() body: { slug: string; deviceId: string }) {
+    return this.users.grant(id, body.deviceId, body.slug);
   }
 
   @Post(":id/revoke")
-  revoke(@Param("id") id: string, @Body() body: { slug: string }) {
-    return this.users.revoke(id, body.slug);
+  revoke(@Body() body: { slug: string; deviceId: string }) {
+    return this.users.revoke(body.deviceId, body.slug);
   }
 }

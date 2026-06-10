@@ -1,6 +1,6 @@
 import type { WidgetNode } from "@ccp/shared";
 
-export type TemplateKey = "blank" | "clock" | "crypto" | "welcome";
+export type TemplateKey = "blank" | "clock" | "crypto" | "welcome" | "led_toggle";
 
 /** Starter layouts — the "old pages" a designer can load and tweak. */
 export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[] }> = {
@@ -57,6 +57,39 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         type: "label", id: "hello", x: 40, y: 170, w: 400, h: 40,
         props: { text: "Welcome to CryptoClock" },
         style: { text_color: "#15C3A6", align: "center" },
+      },
+    ],
+  },
+
+  led_toggle: {
+    name: "LED Toggle",
+    widgets: [
+      {
+        type: "label", id: "title", x: 40, y: 22, w: 400, h: 34,
+        props: { text: "LED Toggle Demo" },
+        style: { text_color: "#EAECEF", align: "center", font: "montserrat_28" },
+      },
+      {
+        type: "led", id: "led_1", x: 110, y: 92, w: 64, h: 64,
+        props: { on: false, color: "#0ECB81", brightness: 255 },
+        style: {},
+      },
+      {
+        type: "led", id: "led_2", x: 306, y: 92, w: 64, h: 64,
+        props: { on: false, color: "#F0B90B", brightness: 255 },
+        style: {},
+      },
+      {
+        type: "button", id: "btn_1", x: 72, y: 190, w: 140, h: 54,
+        props: { text: "Toggle LED 1", checkable: true, checked: false },
+        style: { bg_color: "#18232A", text_color: "#EAECEF", radius: 8 },
+        actions: [{ on: "clicked", do: "wasm.event", target: "logic", event_id: 101 }],
+      },
+      {
+        type: "button", id: "btn_2", x: 268, y: 190, w: 140, h: 54,
+        props: { text: "Toggle LED 2", checkable: true, checked: false },
+        style: { bg_color: "#221E12", text_color: "#EAECEF", radius: 8 },
+        actions: [{ on: "clicked", do: "wasm.event", target: "logic", event_id: 102 }],
       },
     ],
   },

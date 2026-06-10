@@ -7,10 +7,14 @@ import { UserGuard, CurrentUser } from "./auth.guards";
 export class AuthController {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** Who am I + my entitlements (pages I own) + role. */
+  /** Who am I + my devices + per-device entitlements + role. */
   @Get("me")
   @UseGuards(UserGuard)
   async me(@CurrentUser() user: User) {
+    const devices = await this.prisma.device.findMany({
+      where: { ownerId: user.id },
+      select: { deviceId: true, name: true },
+    });
     const entitlements = await this.prisma.entitlement.findMany({
       where: { userId: user.id },
       include: { item: true },
@@ -21,7 +25,10 @@ export class AuthController {
       name: user.name,
       role: user.role,
       isAdmin: user.role === "ADMIN" || user.role === "SUPER_ADMIN",
+      devices: devices.map((d) => ({ deviceId: d.deviceId, name: d.name })),
+      // entitlements are per-device: { deviceId, slug, title }
       entitlements: entitlements.map((e) => ({
+        deviceId: e.deviceId,
         slug: e.item.slug,
         title: e.item.title,
         source: e.source,

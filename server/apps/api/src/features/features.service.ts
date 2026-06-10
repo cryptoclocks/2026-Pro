@@ -63,12 +63,25 @@ export class FeaturesService {
     });
 
     if (approve) {
-      // merge the requested fragment into settings[page] and push to the device
+      // 1) grant the per-device entitlement (slug = "<page>-<feature>", e.g.
+      //    crypto-alerts) so the device/app self-gate the feature.
+      const slug = `${req.page}-${req.feature}`;
+      const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
+      if (item) {
+        await this.prisma.entitlement.upsert({
+          where: { deviceId_itemId: { deviceId: req.deviceId, itemId: item.id } },
+          update: { userId: req.userId, source: "GIFT" },
+          create: { deviceId: req.deviceId, itemId: item.id, userId: req.userId, source: "GIFT" },
+        });
+      }
+      // 2) merge the requested config fragment into settings[page]
       const { config } = await this.devices.getSettings(req.deviceId);
       const cfg = (config as Record<string, unknown>) ?? {};
       const page = (cfg[req.page] as Record<string, unknown>) ?? {};
       cfg[req.page] = { ...page, ...(req.detail as Record<string, unknown>) };
       await this.devices.putSettings(req.deviceId, cfg);
+      // 3) reflect entitlement slugs into settings.entitlements + push
+      await this.devices.syncEntitlements(req.deviceId);
     }
     return fr;
   }

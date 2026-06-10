@@ -1,4 +1,5 @@
 import { LayoutSchema, type Layout, type WidgetNode } from "@ccp/shared";
+import type { DataSourceConfig, WasmModuleConfig } from "./store";
 
 /**
  * Convert builder state into a device-ready layout.json (validated against
@@ -10,6 +11,8 @@ export function exportLayout(opts: {
   name: string;
   version: string;
   orientation: "landscape" | "portrait";
+  dataSources: DataSourceConfig[];
+  wasmModules: WasmModuleConfig[];
   widgets: WidgetNode[];
 }): Layout {
   const candidate = {
@@ -20,6 +23,13 @@ export function exportLayout(opts: {
       version: opts.version,
     },
     display: { orientation: opts.orientation },
+    data_sources: opts.dataSources.filter((d) => d.id && d.stream),
+    wasm: opts.wasmModules
+      .filter((m) => m.id && m.path)
+      .map((m) => ({
+        ...m,
+        tick_ms: m.tick_ms && m.tick_ms >= 16 ? m.tick_ms : undefined,
+      })),
     pages: [
       {
         id: "main",

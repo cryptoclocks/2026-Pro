@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { PrismaService } from "../prisma/prisma.service";
 import { MqttBridgeService } from "../mqtt/mqtt-bridge.service";
 import type { SyncCommandParams } from "@ccp/shared";
+import type { User } from "@prisma/client";
 
 @Injectable()
 export class DevicesService {
@@ -55,12 +56,31 @@ export class DevicesService {
     return compare(token, device.tokenHash);
   }
 
-  async listForUser(userId: string) {
-    return this.prisma.device.findMany({
-      where: { ownerId: userId },
-      include: { activePayloadVersion: { include: { payload: true } } },
+  async listForUser(user: Pick<User, "id" | "role">) {
+    const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+    const devices = await this.prisma.device.findMany({
+      where: isAdmin ? undefined : { ownerId: user.id },
+      include: {
+        activePayloadVersion: { include: { payload: true } },
+        owner: { select: { email: true, name: true } },
+      },
       orderBy: { createdAt: "desc" },
     });
+    // attach each device's per-device entitlement slugs
+    const out = [];
+    for (const d of devices) {
+      const ents = await this.prisma.entitlement.findMany({
+        where: { deviceId: d.deviceId },
+        include: { item: true },
+      });
+      out.push({ ...d, entitlements: ents.map((e) => ({ slug: e.item.slug, title: e.item.title, kind: e.item.kind, source: e.source })) });
+    }
+    return out;
+  }
+
+  /** Admin: every device, enriched (used by the CryptoClock mgmt page). */
+  async adminListAll() {
+    return this.listForUser({ id: "", role: "ADMIN" });
   }
 
   /** Assign a payload version and push the sync command immediately. */
@@ -119,5 +139,53 @@ export class DevicesService {
       config,
     });
     return { version: updated.settingsVersion, config: updated.settings };
+  }
+
+  /** Admin grants/revokes a catalog item on ONE device (per-CryptoClock). */
+  async grantItem(hwDeviceId: string, slug: string, actorUserId: string) {
+    const [device, item] = await Promise.all([
+      this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } }),
+      this.prisma.marketplaceItem.findUnique({ where: { slug } }),
+    ]);
+    if (!device) throw new NotFoundException("device not found");
+    if (!item) throw new NotFoundException("item not found");
+    const userId = device.ownerId ?? actorUserId;
+    await this.prisma.entitlement.upsert({
+      where: { deviceId_itemId: { deviceId: hwDeviceId, itemId: item.id } },
+      update: { userId, source: "GIFT" },
+      create: { deviceId: hwDeviceId, itemId: item.id, userId, source: "GIFT" },
+    });
+    return this.syncEntitlements(hwDeviceId);
+  }
+
+  async revokeItem(hwDeviceId: string, slug: string) {
+    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
+    if (!item) throw new NotFoundException("item not found");
+    await this.prisma.entitlement
+      .delete({ where: { deviceId_itemId: { deviceId: hwDeviceId, itemId: item.id } } })
+      .catch(() => undefined);
+    return this.syncEntitlements(hwDeviceId);
+  }
+
+  /** Entitled item slugs for a device (what it's allowed to use). */
+  async entitlementSlugs(hwDeviceId: string): Promise<string[]> {
+    const ents = await this.prisma.entitlement.findMany({
+      where: { deviceId: hwDeviceId },
+      include: { item: true },
+    });
+    return ents.map((e) => e.item.slug);
+  }
+
+  /**
+   * Mirror the device's per-device entitlements into settings.entitlements and
+   * push over MQTT, so the firmware can self-gate the features/pages it owns.
+   */
+  async syncEntitlements(hwDeviceId: string) {
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) return;
+    const slugs = await this.entitlementSlugs(hwDeviceId);
+    const cfg = ((device.settings as Record<string, unknown>) ?? {});
+    cfg.entitlements = slugs;
+    return this.putSettings(hwDeviceId, cfg);
   }
 }

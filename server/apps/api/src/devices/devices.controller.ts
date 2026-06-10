@@ -1,26 +1,54 @@
-import { Body, Controller, Get, Param, Post, Put, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Put, UseGuards } from "@nestjs/common";
 import { DevicesService } from "./devices.service";
 import type { DeviceCommandType } from "@ccp/shared";
+import { CurrentUser, UserGuard, AdminGuard } from "../auth/auth.guards";
+import type { User } from "@prisma/client";
 
-/**
- * NOTE: auth guards land in M5 (JWT for users, device-token guard for
- * device-originated calls). Boilerplate keeps the surface explicit.
- */
+/** Device fleet, settings, assignment, and command endpoints. */
 @Controller("devices")
 export class DevicesController {
   constructor(private readonly devices: DevicesService) {}
 
   /** User claims a device by hardware id + claim code shown on screen. */
   @Post("claim")
+  @UseGuards(UserGuard)
   claim(
-    @Body() body: { userId: string; deviceId: string; code: string; name?: string },
+    @CurrentUser() user: User,
+    @Body() body: { deviceId: string; code: string; name?: string },
   ) {
-    return this.devices.claimByUser(body.userId, body.deviceId, body.code, body.name);
+    return this.devices.claimByUser(user.id, body.deviceId, body.code, body.name);
   }
 
   @Get()
-  list(@Query("userId") userId: string) {
-    return this.devices.listForUser(userId);
+  @UseGuards(UserGuard)
+  list(@CurrentUser() user: User) {
+    return this.devices.listForUser(user);
+  }
+
+  /** Entitled item slugs for a device (device/app self-gating). */
+  @Get(":hwId/entitlements")
+  entitlements(@Param("hwId") hwId: string) {
+    return this.devices.entitlementSlugs(hwId);
+  }
+
+  /** Admin: re-push a device's entitlements into its settings. */
+  @Post(":hwId/entitlements/sync")
+  @UseGuards(AdminGuard)
+  syncEntitlements(@Param("hwId") hwId: string) {
+    return this.devices.syncEntitlements(hwId);
+  }
+
+  /** Admin: grant/revoke a catalog item on this specific device. */
+  @Post(":hwId/grant")
+  @UseGuards(AdminGuard)
+  grant(@Param("hwId") hwId: string, @CurrentUser() admin: User, @Body() body: { slug: string }) {
+    return this.devices.grantItem(hwId, body.slug, admin.id);
+  }
+
+  @Post(":hwId/revoke")
+  @UseGuards(AdminGuard)
+  revoke(@Param("hwId") hwId: string, @Body() body: { slug: string }) {
+    return this.devices.revokeItem(hwId, body.slug);
   }
 
   /** Assign payload version + immediate MQTT sync push. */

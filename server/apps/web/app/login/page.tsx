@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 
 export default function LoginPage() {
-  const { requestOtp, verifyOtp } = useAuth();
+  const { requestLoginLink, verifyOtp, hashError, me } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -13,10 +13,15 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // already signed in (e.g. link captured by AuthProvider) -> go home
+  useEffect(() => {
+    if (me) router.push("/");
+  }, [me, router]);
+
   const send = async () => {
     setBusy(true);
     setErr(null);
-    const e = await requestOtp(email.trim());
+    const e = await requestLoginLink(email.trim());
     setBusy(false);
     if (e) setErr(e);
     else setSent(true);
@@ -36,8 +41,14 @@ export default function LoginPage() {
       <div className="card p-7 w-full max-w-sm">
         <h1 className="text-xl font-semibold mb-1">Sign in</h1>
         <p className="text-sm text-[var(--ccp-muted)] mb-5">
-          Admin & user console. We&apos;ll email you a 6-digit code.
+          Admin & user console. We&apos;ll email you a sign-in link.
         </p>
+        {hashError && (
+          <div className="text-[var(--ccp-red)] text-sm mb-3 border border-[var(--ccp-red)]/40 rounded p-2">
+            {hashError}. Sign-in links are single-use and expire — request a fresh
+            one below and click it once.
+          </div>
+        )}
         <label className="block text-xs text-[var(--ccp-muted)] mb-1">Email</label>
         <input
           className="input w-full mb-3"
@@ -48,6 +59,10 @@ export default function LoginPage() {
         />
         {sent && (
           <>
+            <p className="text-xs text-[var(--ccp-muted)] mb-3">
+              Open the sign-in link from your email. If your Supabase email
+              template includes a numeric token, you can enter it below.
+            </p>
             <label className="block text-xs text-[var(--ccp-muted)] mb-1">Code</label>
             <input
               className="input w-full mb-3"
@@ -63,7 +78,7 @@ export default function LoginPage() {
           disabled={busy}
           onClick={sent ? verify : send}
         >
-          {busy ? "Please wait…" : sent ? "Verify & sign in" : "Send code"}
+          {busy ? "Please wait…" : sent ? "Verify code" : "Send sign-in link"}
         </button>
         {sent && (
           <button

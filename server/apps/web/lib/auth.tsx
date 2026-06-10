@@ -25,6 +25,8 @@ interface AuthCtx {
   token: string | null;
   me: Me | null;
   loading: boolean;
+  hashError: string | null;
+  requestLoginLink: (email: string) => Promise<string | null>;
   requestOtp: (email: string) => Promise<string | null>;
   verifyOtp: (email: string, code: string) => Promise<boolean>;
   signOut: () => void;
@@ -51,8 +53,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
+  const [hashError, setHashError] = useState<string | null>(null);
 
   useEffect(() => {
+    const urlErr = readSupabaseErrorFromUrl();
+    if (urlErr) {
+      setHashError(urlErr);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setLoading(false);
+      return;
+    }
+
+    const fromUrl = readSupabaseTokenFromUrl();
+    if (fromUrl) {
+      localStorage.setItem("ccp_token", fromUrl);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      setToken(fromUrl);
+      api("/api/v1/auth/me", fromUrl)
+        .then((m) => setMe(m))
+        .catch(() => localStorage.removeItem("ccp_token"))
+        .finally(() => setLoading(false));
+      return;
+    }
+
     const t = localStorage.getItem("ccp_token");
     if (!t) {
       setLoading(false);
@@ -65,15 +88,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const requestOtp = async (email: string): Promise<string | null> => {
-    const res = await fetch(`${SB_URL}/auth/v1/otp`, {
+  const requestLoginLink = async (email: string): Promise<string | null> => {
+    const redirectTo =
+      typeof window === "undefined" ? undefined : `${window.location.origin}/login`;
+    const url = new URL(`${SB_URL}/auth/v1/otp`);
+    if (redirectTo) url.searchParams.set("redirect_to", redirectTo);
+    const res = await fetch(url.toString(), {
       method: "POST",
       headers: { apikey: SB_ANON, "Content-Type": "application/json" },
       body: JSON.stringify({ email, create_user: true }),
     });
-    if (!res.ok) return (await res.json()).msg ?? "failed to send code";
+    if (!res.ok) return (await res.json()).msg ?? "failed to send sign-in link";
     return null;
   };
+
+  const requestOtp = requestLoginLink;
 
   const verifyOtp = async (email: string, code: string): Promise<boolean> => {
     const res = await fetch(`${SB_URL}/auth/v1/verify`, {
@@ -98,8 +127,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ token, me, loading, requestOtp, verifyOtp, signOut }}>
+    <Ctx.Provider value={{ token, me, loading, hashError, requestLoginLink, requestOtp, verifyOtp, signOut }}>
       {children}
     </Ctx.Provider>
   );
+}
+
+function readSupabaseTokenFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const query = new URLSearchParams(window.location.search);
+  return hash.get("access_token") ?? query.get("access_token");
+}
+
+function readSupabaseErrorFromUrl(): string | null {
+  if (typeof window === "undefined") return null;
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  const query = new URLSearchParams(window.location.search);
+  const err = hash.get("error") ?? query.get("error");
+  if (!err) return null;
+  const desc = hash.get("error_description") ?? query.get("error_description");
+  return (desc ?? err).replace(/\+/g, " ");
 }

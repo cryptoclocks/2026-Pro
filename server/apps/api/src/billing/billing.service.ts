@@ -45,16 +45,17 @@ export class BillingService {
   }
 
   private async onCheckoutCompleted(session: Stripe.Checkout.Session): Promise<void> {
-    // We put userId + itemId into checkout session metadata at creation time.
+    // metadata set by marketplace.checkout: { slug, deviceId, userId }
     const userId = session.metadata?.userId;
-    const itemId = session.metadata?.marketplaceItemId;
-    if (!userId || !itemId) {
+    const deviceId = session.metadata?.deviceId; // hardware id (ccp-xxxx)
+    const slug = session.metadata?.slug;
+    if (!userId || !deviceId || !slug) {
       this.log.warn(`checkout ${session.id} missing metadata — skipped`);
       return;
     }
 
     const item = await this.prisma.marketplaceItem.findUnique({
-      where: { id: itemId },
+      where: { slug },
       include: {
         payloadRef: {
           include: { versions: { where: { status: "PUBLISHED" }, orderBy: { createdAt: "desc" }, take: 1 } },
@@ -62,36 +63,34 @@ export class BillingService {
       },
     });
     if (!item) {
-      this.log.warn(`marketplace item ${itemId} not found`);
+      this.log.warn(`marketplace item ${slug} not found`);
       return;
     }
 
-    // 1) grant the entitlement (idempotent on retries)
+    // 1) grant the entitlement to THIS device (per-CryptoClock), idempotent
     await this.prisma.entitlement.upsert({
-      where: { userId_itemId: { userId, itemId } },
-      update: {},
-      create: { userId, itemId, source: "PURCHASE" },
+      where: { deviceId_itemId: { deviceId, itemId: item.id } },
+      update: { userId, source: "PURCHASE" },
+      create: { deviceId, itemId: item.id, userId, source: "PURCHASE" },
     });
-    this.log.log(`entitlement granted: user=${userId} item=${item.slug}`);
+    this.log.log(`entitlement granted: device=${deviceId} item=${item.slug}`);
 
-    // 2) push the new content to every device the user owns
-    const latest = item.payloadRef.versions[0];
-    if (!latest) {
-      this.log.warn(`item ${item.slug} has no published version — nothing to push`);
-      return;
-    }
-    const devices = await this.prisma.device.findMany({ where: { ownerId: userId } });
-    for (const device of devices) {
-      await this.devices.assignPayload(device.id, latest.id);
-      this.log.log(`sync pushed to ${device.deviceId} (${item.payloadRef.packageId}@${latest.version})`);
+    // 2) reflect entitlements into the device's settings so it self-gates,
+    //    and push the purchased page bundle if one exists.
+    await this.devices.syncEntitlements(deviceId);
+    const latest = item.payloadRef?.versions[0];
+    if (latest) {
+      const device = await this.prisma.device.findUnique({ where: { deviceId } });
+      if (device) await this.devices.assignPayload(device.id, latest.id);
     }
 
     await this.prisma.auditLog.create({
       data: {
         actorUserId: userId,
+        deviceId,
         action: "purchase.fulfilled",
         target: item.slug,
-        meta: { sessionId: session.id, devices: devices.map((d) => d.deviceId) },
+        meta: { sessionId: session.id },
       },
     });
   }

@@ -288,6 +288,48 @@ static void run_action(const ui_action_t *a, widget_ent_t *w)
 {
     if (!strcmp(a->act, "page.show")) {
         ui_renderer_show_page(a->target);
+    } else if (!strcmp(a->act, "widget.set")) {
+        int idx = ui_renderer_widget_index(a->target);
+        if (idx >= 0) {
+            widget_ent_t *target = &s_ui.widgets[idx];
+            lv_obj_t *obj = target->obj;
+            if (!strcmp(a->key, "text")) {
+                if (!strcmp(target->type, "button")) {
+                    lv_obj_t *lbl = lv_obj_get_child(obj, 0);
+                    if (lbl) lv_label_set_text(lbl, a->value);
+                } else if (!strcmp(target->type, "textarea")) {
+                    lv_textarea_set_text(obj, a->value);
+                } else {
+                    lv_label_set_text(obj, a->value);
+                }
+            } else if (!strcmp(a->key, "value")) {
+                int v = atoi(a->value);
+                if (!strcmp(target->type, "arc")) lv_arc_set_value(obj, v);
+                else if (!strcmp(target->type, "bar")) lv_bar_set_value(obj, v, LV_ANIM_ON);
+                else if (!strcmp(target->type, "slider")) lv_slider_set_value(obj, v, LV_ANIM_OFF);
+                else if (!strcmp(target->type, "switch")) {
+                    if (v) lv_obj_add_state(obj, LV_STATE_CHECKED);
+                    else lv_obj_remove_state(obj, LV_STATE_CHECKED);
+                } else if (!strcmp(target->type, "led")) {
+                    if (v) lv_led_on(obj);
+                    else lv_led_off(obj);
+                }
+            } else if (!strcmp(a->key, "visible")) {
+                if (atoi(a->value)) lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
+                else lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+            } else if (!strcmp(a->key, "style.text_color")) {
+                lv_obj_set_style_text_color(obj, parse_color(a->value, lv_color_white()), 0);
+            } else if (!strcmp(a->key, "style.bg_color")) {
+                lv_obj_set_style_bg_color(obj, parse_color(a->value, lv_color_black()), 0);
+            } else if (!strcmp(a->key, "src")) {
+                const asset_ent_t *asset = find_asset(a->value);
+                if (asset) {
+                    char path[220];
+                    asset_lv_path(asset, path, sizeof(path));
+                    lv_image_set_src(obj, path);
+                }
+            }
+        }
     } else if (!strcmp(a->act, "wasm.event")) {
         if (s_ui.hooks.wasm_event) {
             s_ui.hooks.wasm_event(a->target, (int)(w - s_ui.widgets),
@@ -712,10 +754,17 @@ static void parse_actions(const cJSON *node, widget_ent_t *ent)
         strlcpy(act->on, jstr(a, "on", "clicked"), sizeof(act->on));
         strlcpy(act->act, jstr(a, "do", ""), sizeof(act->act));
         strlcpy(act->target, jstr(a, "target", ""), sizeof(act->target));
+        const char *topic_suffix = jstr(a, "topic_suffix", "");
+        if (topic_suffix[0]) {
+            strlcpy(act->target, topic_suffix, sizeof(act->target));
+        }
         strlcpy(act->asset, jstr(a, "asset", ""), sizeof(act->asset));
         act->event_id = (int)jnum(a, "event_id", 0);
         strlcpy(act->key, jstr(a, "key", ""), sizeof(act->key));
-        const cJSON *v = cJSON_GetObjectItem(a, "value");
+        const cJSON *v = cJSON_GetObjectItem(a, "payload");
+        if (!v) {
+            v = cJSON_GetObjectItem(a, "value");
+        }
         if (cJSON_IsNumber(v)) {
             snprintf(act->value, sizeof(act->value), "%d", v->valueint);
         } else if (cJSON_IsString(v)) {

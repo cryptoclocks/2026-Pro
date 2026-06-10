@@ -139,6 +139,7 @@ export const WIDGET_PROPS: Partial<Record<WidgetType, PropDef[]>> = {
     { key: "arc_length", label: "Arc length (°)", kind: "number", min: 10, max: 350, default: 60 },
   ],
   led: [
+    { key: "on", label: "On", kind: "bool", default: false },
     { key: "color", label: "Color", kind: "color", default: "#0ECB81" },
     { key: "brightness", label: "Brightness", kind: "number", min: 0, max: 255, default: 255 },
   ],

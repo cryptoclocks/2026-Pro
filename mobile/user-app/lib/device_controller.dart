@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'auth.dart';
 import 'device_api.dart';
+import 'hub_api.dart';
 
 /// Holds the editable config for one display and persists it.
 /// Shared across all the per-page settings screens.
@@ -11,6 +12,8 @@ class DeviceController extends ChangeNotifier {
   double brightness = 80;
   String? userEmail;
   bool loaded = false;
+  List<String> entitlements = []; // slugs this CryptoClock holds
+  List<Map<String, dynamic>> catalog = []; // store items (price/desc per slug)
 
   DeviceController(this.api, this.info) {
     brightness = (info['brightness'] as num? ?? 80).toDouble();
@@ -24,8 +27,22 @@ class DeviceController extends ChangeNotifier {
   Future<void> load() async {
     config = await api.getConfig();
     userEmail = await AuthService.savedEmail();
+    // per-device rights + catalog from the Hub (best-effort)
+    entitlements = await HubApi.deviceEntitlements(deviceId);
+    catalog = await HubApi.catalog();
     loaded = true;
     notifyListeners();
+  }
+
+  /// Does THIS CryptoClock hold the given right?
+  bool has(String slug) => entitlements.contains(slug);
+
+  /// Catalog metadata (title/description/priceCents) for a slug.
+  Map<String, dynamic>? catalogItem(String slug) {
+    for (final c in catalog) {
+      if (c['slug'] == slug) return c;
+    }
+    return null;
   }
 
   // ---- typed slices ----
@@ -44,7 +61,8 @@ class DeviceController extends ChangeNotifier {
           .map((a) => Map<String, dynamic>.from(a as Map))
           .toList();
 
-  bool get alertsUnlocked => userEmail != null;
+  /// Alerts are active only when THIS device holds the crypto-alerts right.
+  bool get alertsUnlocked => has('crypto-alerts');
 
   // ---- mutations ----
   void setTop(String key, dynamic value) {
