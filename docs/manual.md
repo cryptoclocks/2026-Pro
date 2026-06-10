@@ -84,31 +84,23 @@ cd firmware && idf.py build flash
 
 ## 4. รัน Server บนเครื่องตัวเอง (local)
 
-**ได้ครับ** — มี 2 ทาง:
+**ได้ และติดตั้งไว้แล้วบนเครื่องนี้** (Postgres 16 ผ่าน Homebrew, ไม่ต้องใช้ Docker):
 
-### ทาง A: Docker (แนะนำ — ครบทุกตัวในคำสั่งเดียว)
 ```bash
-# ติดตั้ง Docker Desktop ก่อน: https://docker.com/products/docker-desktop
-cd server && cp .env.example .env
-docker compose up -d        # Postgres + Redis + EMQX + MinIO
-pnpm install
-pnpm --filter @ccp/api exec prisma migrate dev
-pnpm dev                    # API :4000 / เว็บ Builder :3000
+# ครั้งแรกเท่านั้น (ทำไปแล้ว):
+#   brew install postgresql@16 && brew services start postgresql@16
+#   psql -d postgres -c "CREATE ROLE ccp LOGIN PASSWORD 'ccp_dev_password' CREATEDB;"
+#   psql -d postgres -c "CREATE DATABASE cryptoclock OWNER ccp;"
+#   cd server && pnpm install && pnpm --filter @ccp/api exec prisma migrate dev
+
+# เปิดใช้งานทุกครั้ง:
+cd server && pnpm dev       # API :4000 / เว็บ Builder :3000
 ```
 
-### ทาง B: ไม่ใช้ Docker (Homebrew)
-```bash
-brew install postgresql@16 redis mosquitto
-brew services start postgresql@16 redis mosquitto
-createdb cryptoclock && createuser ccp
-# แก้ DATABASE_URL ใน server/.env ให้ตรง แล้ว:
-cd server && pnpm install
-pnpm --filter @ccp/api exec prisma migrate dev
-pnpm dev
-```
-> ทาง B ใช้ mosquitto แทน EMQX (พอร์ต 1883 เท่ากัน — จอใช้ได้เลย) และยังไม่มี MinIO (ระบบ marketplace bundle ใช้ตอน M5)
-
-จากนั้นตั้ง `CCP_CFG_MQTT_BROKER_URI` ในข้อ 1 ให้ชี้ IP เครื่องคุณ (ดู IP ด้วย `ipconfig getifaddr en0`)
+- **MQTT broker ไม่ต้องรันเอง** — ใช้ Node-RED ที่มีอยู่ (`mqtt://node-red.cashlessthailand.com:1883` ตั้งใน `server/.env` และ `user_config.h` แล้ว)
+- Redis/MinIO ยังไม่จำเป็น (ใช้ตอน M5 marketplace)
+- จอชี้มาที่เครื่องนี้แล้ว: `CCP_CFG_SERVER_BASE_URL = http://192.168.1.139:4000` (ถ้า IP เครื่อง Mac เปลี่ยน ดูใหม่ด้วย `ipconfig getifaddr en0` แล้วแก้ + flash)
+- ทดสอบ: `curl http://localhost:4000/api/v1/devices` ต้องเห็นจอพร้อม `"online":true`
 
 ## 5. LAN API (สำหรับแอปมือถือ / curl)
 
