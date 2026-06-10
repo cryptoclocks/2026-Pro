@@ -1,0 +1,15 @@
+@import "tailwindcss";
+
+:root {
+  --ccp-bg: #0b0e11;
+  --ccp-panel: #12161c;
+  --ccp-border: #2b3139;
+  --ccp-fg: #eaecef;
+  --ccp-muted: #6b7280;
+  --ccp-accent: #f0b90b;
+}
+
+body {
+  background: var(--ccp-bg);
+  color: var(--ccp-fg);
+}

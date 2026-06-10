@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cryptoclock.pro/schema/mqtt-messages.schema.json",
+  "title": "CryptoClock Pro MQTT message envelopes",
+  "description": "Topic map: ccp/v1/{device_id}/cmd (S→D), .../cmd/res (D→S), .../status (D→S retained+LWT), .../telemetry (D→S), .../data/{stream} (S→D), .../evt/{name} (D→S), .../ads/impression (D→S)",
+  "definitions": {
+    "cmd": {
+      "type": "object",
+      "required": ["id", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "Correlation id echoed in cmd/res" },
+        "type": {
+          "type": "string",
+          "enum": ["sync", "reload", "ota", "reboot", "brightness", "identify", "lock", "unlock", "wipe", "show_page", "notify", "ping"]
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "sync: {package_id, version, manifest_url, bundle_url, bundle_sha256, bundle_size} | ota: {fw_url, fw_sha256, fw_version} | brightness: {value} | show_page: {page_id} | notify: {title, body, audio_asset?, duration_s?}"
+        }
+      }
+    },
+    "cmd_res": {
+      "type": "object",
+      "required": ["id", "ok"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "ok": { "type": "boolean" },
+        "error": { "type": "string" },
+        "detail": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "status": {
+      "type": "object",
+      "required": ["online", "fw"],
+      "additionalProperties": false,
+      "properties": {
+        "online": { "type": "boolean" },
+        "fw": { "type": "string" },
+        "pkg": { "type": "string", "description": "Active package id" },
+        "pkg_ver": { "type": "string" },
+        "ip": { "type": "string" },
+        "rssi": { "type": "integer" },
+        "streams": { "type": "array", "items": { "type": "string" }, "description": "Currently subscribed data streams" },
+        "locked": { "type": "boolean" }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "heap": { "type": "integer", "description": "Free internal heap bytes" },
+        "heap_min": { "type": "integer" },
+        "psram": { "type": "integer", "description": "Free PSRAM bytes" },
+        "batt_mv": { "type": "integer" },
+        "fps": { "type": "number" },
+        "uptime_s": { "type": "integer" },
+        "sd_free_kb": { "type": "integer" },
+        "wasm_crashes": { "type": "integer" }
+      }
+    },
+    "ad_impression": {
+      "type": "object",
+      "required": ["campaign_id", "ts"],
+      "additionalProperties": false,
+      "properties": {
+        "campaign_id": { "type": "string" },
+        "asset_id": { "type": "string" },
+        "ts": { "type": "integer", "description": "Unix epoch seconds" },
+        "dur_ms": { "type": "integer" }
+      }
+    }
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "id": "com.ccp.btc-ticker",
+    "name": "BTC Ticker",
+    "version": "1.0.0",
+    "min_fw": "0.1.0",
+    "author": "CryptoClock Pro"
+  },
+  "display": {
+    "orientation": "landscape",
+    "theme": { "bg": "#0B0E11", "fg": "#EAECEF", "accent": "#F0B90B" }
+  },
+  "data_sources": [
+    { "id": "btc", "stream": "market.BTCUSDT.ticker", "format": "json", "sample_hint_ms": 500 }
+  ],
+  "pages": [
+    {
+      "id": "home",
+      "bg": "#0B0E11",
+      "widgets": [
+        {
+          "type": "label", "id": "sym", "x": 20, "y": 16, "w": 200, "h": 40,
+          "style": { "text_color": "#EAECEF", "font": "montserrat_28" },
+          "props": { "text": "BTC/USDT" }
+        },
+        {
+          "type": "label", "id": "price", "x": 20, "y": 64, "w": 300, "h": 56,
+          "style": { "font": "montserrat_48", "text_color": "#EAECEF" },
+          "props": { "text": "--" },
+          "bindings": [
+            { "prop": "text", "source": "btc", "path": "$.last", "format": "$%,.2f" },
+            { "prop": "style.text_color", "source": "btc", "path": "$.chg24h", "map": { "lt0": "#F6465D", "gte0": "#0ECB81" } }
+          ]
+        },
+        {
+          "type": "label", "id": "chg", "x": 330, "y": 80, "w": 130, "h": 32,
+          "style": { "font": "montserrat_20" },
+          "props": { "text": "" },
+          "bindings": [
+            { "prop": "text", "source": "btc", "path": "$.chg24h", "format": "%+.2f%%" },
+            { "prop": "style.text_color", "source": "btc", "path": "$.chg24h", "map": { "lt0": "#F6465D", "gte0": "#0ECB81" } }
+          ]
+        },
+        {
+          "type": "chart", "id": "spark", "x": 20, "y": 140, "w": 440, "h": 150,
+          "style": { "bg_color": "#12161C", "radius": 8 },
+          "props": { "kind": "line", "points": 96, "auto_range": true, "series": [{ "color": "#F0B90B" }] },
+          "bindings": [{ "prop": "series.0", "source": "btc", "path": "$.spark" }]
+        },
+        {
+          "type": "button", "id": "more", "x": 360, "y": 20, "w": 100, "h": 40,
+          "style": { "bg_color": "#2B3139", "radius": 8 },
+          "props": { "text": "Chart" },
+          "actions": [{ "on": "clicked", "do": "page.show", "target": "about" }]
+        }
+      ]
+    },
+    {
+      "id": "about",
+      "bg": "#0B0E11",
+      "widgets": [
+        { "type": "label", "id": "t", "x": 20, "y": 20, "w": 440, "h": 40, "props": { "text": "CryptoClock Pro" }, "style": { "font": "montserrat_28", "text_color": "#F0B90B" } },
+        { "type": "qrcode", "id": "qr", "x": 160, "y": 80, "w": 160, "h": 160, "props": { "text": "https://cryptoclock.pro" } },
+        { "type": "button", "id": "back", "x": 180, "y": 260, "w": 120, "h": 40, "props": { "text": "Back" }, "actions": [{ "on": "clicked", "do": "page.show", "target": "home" }] }
+      ]
+    }
+  ]
+}

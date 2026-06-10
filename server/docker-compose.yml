@@ -1,0 +1,55 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ccp
+      POSTGRES_PASSWORD: ccp_dev_password
+      POSTGRES_DB: cryptoclock
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ccp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+  emqx:
+    image: emqx/emqx:5.8
+    ports:
+      - "1883:1883"     # MQTT
+      - "8883:8883"     # MQTT/TLS
+      - "8083:8083"     # WS
+      - "18083:18083"   # dashboard (admin/public by default — change it)
+    environment:
+      EMQX_ALLOW_ANONYMOUS: "false"
+      # Auth/ACL via HTTP hooks pointed at the API (configure in EMQX dashboard
+      # or emqx.conf): POST http://host.docker.internal:4000/api/v1/emqx/auth
+    volumes:
+      - emqxdata:/opt/emqx/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ccp_minio
+      MINIO_ROOT_PASSWORD: ccp_minio_password
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  redisdata:
+  emqxdata:
+  miniodata:

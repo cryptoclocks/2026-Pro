@@ -1,0 +1,28 @@
+# --- general ---
+.DS_Store
+*.log
+
+# --- firmware (ESP-IDF) ---
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/managed_components/
+firmware/dependencies.lock
+firmware/components/wasm_engine/wasm-micro-runtime/
+
+# --- wasm apps ---
+wasm-apps/**/*.wasm
+wasm-apps/**/build/
+
+# --- server (node) ---
+node_modules/
+server/**/.next/
+server/**/dist/
+server/**/.turbo/
+server/**/*.tsbuildinfo
+server/.env
+server/**/.env
+!server/.env.example
+
+# --- vendor reference materials (1GB of datasheets/tools — keep local only) ---
+JC3248W535EN/

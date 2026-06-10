@@ -1,0 +1,290 @@
+// CryptoClock Pro Hub — database schema
+// Postgres + Prisma. See plan §8 for the model map.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  ADVERTISER
+  USER
+}
+
+enum ClaimStatus {
+  PENDING
+  CLAIMED
+  EXPIRED
+}
+
+enum PayloadType {
+  LAYOUT
+  LAYOUT_WASM
+}
+
+enum PayloadStatus {
+  DRAFT
+  PUBLISHED
+  YANKED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIALING
+}
+
+enum EntitlementSource {
+  PURCHASE
+  PLAN
+  GIFT
+}
+
+enum CampaignStatus {
+  DRAFT
+  RUNNING
+  PAUSED
+  FINISHED
+}
+
+model User {
+  id               String         @id @default(cuid())
+  email            String         @unique
+  passwordHash     String
+  name             String?
+  role             Role           @default(USER)
+  stripeCustomerId String?        @unique
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  devices       Device[]
+  deviceGroups  DeviceGroup[]
+  subscriptions Subscription[]
+  entitlements  Entitlement[]
+  payloads      Payload[]
+  marketItems   MarketplaceItem[]
+  campaigns     AdCampaign[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+}
+
+model Device {
+  id        String   @id @default(cuid())
+  deviceId  String   @unique // hardware id, e.g. ccp-a1b2c3d4e5f6
+  name      String?
+  model     String   @default("JC3248W535C")
+  fwVersion String?
+  /// bcrypt hash of the device MQTT/API token minted at claim
+  tokenHash String?
+  ownerId   String?
+  owner     User?    @relation(fields: [ownerId], references: [id])
+  groupId   String?
+  group     DeviceGroup? @relation(fields: [groupId], references: [id])
+
+  activePayloadVersionId String?
+  activePayloadVersion   PayloadVersion? @relation(fields: [activePayloadVersionId], references: [id])
+
+  online     Boolean   @default(false)
+  lastSeenAt DateTime?
+  ip         String?
+  rssi       Int?
+  battMv     Int?
+  fps        Float?
+  sdFreeKb   BigInt?
+  locked     Boolean   @default(false)
+
+  claims      Claim[]
+  impressions AdImpression[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([ownerId])
+  @@index([groupId])
+}
+
+model Claim {
+  id              String      @id @default(cuid())
+  code            String      @unique // short code shown on the device as QR
+  deviceId        String
+  device          Device      @relation(fields: [deviceId], references: [id])
+  status          ClaimStatus @default(PENDING)
+  claimedByUserId String?
+  expiresAt       DateTime
+  createdAt       DateTime    @default(now())
+
+  @@index([deviceId])
+}
+
+model DeviceGroup {
+  id      String   @id @default(cuid())
+  name    String
+  ownerId String
+  owner   User     @relation(fields: [ownerId], references: [id])
+  devices Device[]
+
+  /// group-wide assignment; per-device assignment overrides it
+  assignedPayloadVersionId String?
+  assignedPayloadVersion   PayloadVersion? @relation(fields: [assignedPayloadVersionId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([ownerId, name])
+}
+
+model Plan {
+  id            String  @id @default(cuid())
+  name          String  @unique
+  stripePriceId String? @unique
+  features      Json    @default("{}")
+  maxDevices    Int     @default(1)
+  adFree        Boolean @default(false)
+  priceCents    Int     @default(0)
+  currency      String  @default("usd")
+
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  userId               String
+  user                 User               @relation(fields: [userId], references: [id])
+  planId               String
+  plan                 Plan               @relation(fields: [planId], references: [id])
+  stripeSubscriptionId String?            @unique
+  status               SubscriptionStatus @default(ACTIVE)
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([userId])
+}
+
+model Payload {
+  id        String      @id @default(cuid())
+  packageId String      @unique // reverse-DNS, e.g. com.ccp.candles
+  title     String
+  type      PayloadType @default(LAYOUT)
+  ownerId   String
+  owner     User        @relation(fields: [ownerId], references: [id])
+  versions  PayloadVersion[]
+  marketItems MarketplaceItem[]
+  createdAt DateTime    @default(now())
+}
+
+model PayloadVersion {
+  id           String        @id @default(cuid())
+  payloadId    String
+  payload      Payload       @relation(fields: [payloadId], references: [id])
+  version      String // semver
+  minFwVersion String?
+  bundleKey    String // object key in MinIO/S3
+  bundleSha256 String
+  sizeBytes    Int
+  manifest     Json
+  layout       Json?
+  status       PayloadStatus @default(DRAFT)
+  createdAt    DateTime      @default(now())
+
+  devicesActive Device[]
+  groupsAssigned DeviceGroup[]
+  adCampaigns   AdCampaign[]
+
+  @@unique([payloadId, version])
+}
+
+model MarketplaceItem {
+  id              String  @id @default(cuid())
+  slug            String  @unique
+  title           String
+  description     String?
+  authorId        String
+  author          User    @relation(fields: [authorId], references: [id])
+  payloadId       String
+  payloadRef      Payload @relation(fields: [payloadId], references: [id])
+  priceCents      Int     @default(0)
+  currency        String  @default("usd")
+  stripeProductId String?
+  stripePriceId   String?
+  published       Boolean @default(false)
+  createdAt       DateTime @default(now())
+
+  entitlements Entitlement[]
+}
+
+model Entitlement {
+  id        String            @id @default(cuid())
+  userId    String
+  user      User              @relation(fields: [userId], references: [id])
+  itemId    String
+  item      MarketplaceItem   @relation(fields: [itemId], references: [id])
+  source    EntitlementSource @default(PURCHASE)
+  createdAt DateTime          @default(now())
+
+  @@unique([userId, itemId])
+}
+
+model AdCampaign {
+  id           String         @id @default(cuid())
+  advertiserId String
+  advertiser   User           @relation(fields: [advertiserId], references: [id])
+  name         String
+  assetPayloadVersionId String?
+  assetPayloadVersion   PayloadVersion? @relation(fields: [assetPayloadVersionId], references: [id])
+  targeting    Json           @default("{}")
+  cpmCents     Int            @default(0)
+  budgetCents  Int            @default(0)
+  spentCents   Int            @default(0)
+  startsAt     DateTime?
+  endsAt       DateTime?
+  status       CampaignStatus @default(DRAFT)
+  createdAt    DateTime       @default(now())
+
+  impressions AdImpression[]
+}
+
+model AdImpression {
+  id          String     @id @default(cuid())
+  campaignId  String
+  campaign    AdCampaign @relation(fields: [campaignId], references: [id])
+  deviceId    String
+  device      Device     @relation(fields: [deviceId], references: [id])
+  shownAt     DateTime
+  durationMs  Int        @default(0)
+  billedCents Int        @default(0)
+
+  @@index([campaignId, shownAt])
+  @@index([deviceId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  kind      String
+  payload   Json      @default("{}")
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  actorUserId String?
+  actor       User?    @relation(fields: [actorUserId], references: [id])
+  deviceId    String?
+  action      String
+  target      String?
+  meta        Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@index([actorUserId])
+  @@index([createdAt])
+}

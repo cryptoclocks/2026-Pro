@@ -1,0 +1,161 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cryptoclock.pro/schema/widgets/props.schema.json",
+  "title": "Per-widget-type props schemas",
+  "description": "Validate widget.props against definitions[widget.type]. Used by the builder inspector and server-side payload validation.",
+  "definitions": {
+    "label": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "text": { "type": "string", "maxLength": 512 },
+        "long_mode": { "type": "string", "enum": ["wrap", "dot", "scroll", "scroll_circular", "clip"], "default": "wrap" }
+      }
+    },
+    "button": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "text": { "type": "string", "maxLength": 64 },
+        "toggle": { "type": "boolean", "default": false },
+        "icon": { "type": "string", "description": "asset id shown left of text" }
+      }
+    },
+    "image": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "src": { "type": "string", "description": "asset id" },
+        "fit": { "type": "string", "enum": ["none", "contain", "cover", "tile"], "default": "none" },
+        "angle": { "type": "number", "minimum": 0, "maximum": 360 }
+      }
+    },
+    "gif": {
+      "type": "object", "additionalProperties": false, "required": ["src"],
+      "properties": { "src": { "type": "string" }, "loop": { "type": "boolean", "default": true } }
+    },
+    "arc": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "min": { "type": "number", "default": 0 }, "max": { "type": "number", "default": 100 },
+        "value": { "type": "number" },
+        "start_angle": { "type": "integer", "default": 135 }, "end_angle": { "type": "integer", "default": 45 },
+        "readonly": { "type": "boolean", "default": true }, "arc_width": { "type": "integer", "minimum": 1, "maximum": 64 }
+      }
+    },
+    "bar": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "min": { "type": "number", "default": 0 }, "max": { "type": "number", "default": 100 },
+        "value": { "type": "number" }, "horizontal": { "type": "boolean", "default": true },
+        "animate_ms": { "type": "integer", "minimum": 0, "default": 200 }
+      }
+    },
+    "slider": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "min": { "type": "number", "default": 0 }, "max": { "type": "number", "default": 100 }, "value": { "type": "number" } }
+    },
+    "switch": { "type": "object", "additionalProperties": false, "properties": { "checked": { "type": "boolean", "default": false } } },
+    "checkbox": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "text": { "type": "string" }, "checked": { "type": "boolean", "default": false } }
+    },
+    "dropdown": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "options": { "type": "array", "items": { "type": "string" } }, "selected": { "type": "integer", "minimum": 0 } }
+    },
+    "roller": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "options": { "type": "array", "items": { "type": "string" } },
+        "selected": { "type": "integer", "minimum": 0 }, "visible_rows": { "type": "integer", "minimum": 1, "maximum": 9, "default": 3 }
+      }
+    },
+    "chart": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["line", "bar", "scatter"], "default": "line" },
+        "points": { "type": "integer", "minimum": 2, "maximum": 512, "default": 64 },
+        "y_min": { "type": "number" }, "y_max": { "type": "number" },
+        "auto_range": { "type": "boolean", "default": true },
+        "series": {
+          "type": "array", "maxItems": 4,
+          "items": { "type": "object", "additionalProperties": false, "properties": { "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" } } }
+        },
+        "div_lines": { "type": "boolean", "default": true }
+      }
+    },
+    "canvas": {
+      "type": "object", "additionalProperties": false,
+      "description": "WASM-rendered surface. The named wasm module draws via ccp_canvas_* and receives touch via ccp_on_event.",
+      "properties": {
+        "wasm": { "type": "string", "description": "wasm module id from layout.wasm[]" },
+        "touch": { "type": "string", "enum": ["none", "click", "drag"], "default": "click" },
+        "bg": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+      }
+    },
+    "table": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "cols": { "type": "array", "items": { "type": "object", "properties": { "title": { "type": "string" }, "width": { "type": "integer" } } } },
+        "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
+      }
+    },
+    "list": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": false, "properties": { "text": { "type": "string" }, "icon": { "type": "string" }, "event_id": { "type": "integer" } } }
+        }
+      }
+    },
+    "tabs": {
+      "type": "object", "additionalProperties": false,
+      "description": "children[] order maps to tab order; props.titles gives tab labels",
+      "properties": { "titles": { "type": "array", "items": { "type": "string" } }, "position": { "type": "string", "enum": ["top", "bottom"], "default": "top" } }
+    },
+    "panel": { "type": "object", "additionalProperties": false, "properties": { "scrollable": { "type": "boolean", "default": false } } },
+    "qrcode": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "text": { "type": "string", "maxLength": 512 }, "dark": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }, "light": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" } }
+    },
+    "textarea": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "placeholder": { "type": "string" }, "one_line": { "type": "boolean", "default": true },
+        "password": { "type": "boolean", "default": false }, "max_len": { "type": "integer", "minimum": 1, "maximum": 256 },
+        "keyboard": { "type": "string", "description": "id of a keyboard widget to attach on focus" }
+      }
+    },
+    "keyboard": { "type": "object", "additionalProperties": false, "properties": { "mode": { "type": "string", "enum": ["text", "number"], "default": "text" } } },
+    "spinner": { "type": "object", "additionalProperties": false, "properties": { "speed_ms": { "type": "integer", "minimum": 100, "default": 1000 } } },
+    "led": { "type": "object", "additionalProperties": false, "properties": { "on": { "type": "boolean", "default": true }, "brightness": { "type": "integer", "minimum": 0, "maximum": 255 } } },
+    "scale": {
+      "type": "object", "additionalProperties": false,
+      "description": "Gauge/dial (thermostat, speedometer). mode round/horizontal/vertical.",
+      "properties": {
+        "mode": { "type": "string", "enum": ["round", "horizontal", "vertical"], "default": "round" },
+        "min": { "type": "number", "default": 0 }, "max": { "type": "number", "default": 100 },
+        "value": { "type": "number" },
+        "major_ticks": { "type": "integer", "minimum": 2, "default": 11 },
+        "label_every": { "type": "integer", "minimum": 1, "default": 2 },
+        "needle": { "type": "boolean", "default": true },
+        "needle_color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" }
+      }
+    },
+    "analog_clock": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "face_image": { "type": "string", "description": "asset id; falls back to drawn scale" },
+        "show_seconds": { "type": "boolean", "default": true },
+        "smooth": { "type": "boolean", "default": false },
+        "tz_offset_min": { "type": "integer", "minimum": -840, "maximum": 840 }
+      }
+    },
+    "spinbox": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "min": { "type": "number", "default": 0 }, "max": { "type": "number", "default": 100 },
+        "step": { "type": "number", "default": 1 }, "value": { "type": "number" }, "decimals": { "type": "integer", "minimum": 0, "maximum": 4, "default": 0 }
+      }
+    }
+  }
+}

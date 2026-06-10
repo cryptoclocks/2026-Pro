@@ -1,0 +1,216 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://cryptoclock.pro/schema/layout.schema.json",
+  "title": "CryptoClock Pro layout.json v1",
+  "description": "Server-delivered dynamic UI definition rendered by the ESP32 LVGL ui_renderer. One layout = one installable package page set.",
+  "type": "object",
+  "required": ["schema_version", "meta", "pages"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "type": "string", "enum": ["1.0"] },
+    "meta": {
+      "type": "object",
+      "required": ["id", "name", "version"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(\\.[a-z0-9-]+)+$", "description": "Reverse-DNS package id, e.g. com.ccp.btc-ticker" },
+        "name": { "type": "string", "maxLength": 64 },
+        "version": { "$ref": "#/definitions/semver" },
+        "min_fw": { "$ref": "#/definitions/semver" },
+        "author": { "type": "string" },
+        "description": { "type": "string" }
+      }
+    },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "orientation": { "type": "string", "enum": ["portrait", "landscape"], "default": "landscape" },
+        "theme": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "bg": { "$ref": "#/definitions/color" },
+            "fg": { "$ref": "#/definitions/color" },
+            "accent": { "$ref": "#/definitions/color" },
+            "font_scale": { "type": "number", "minimum": 0.5, "maximum": 2.0 }
+          }
+        },
+        "brightness": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "timeout_page": { "type": "string", "description": "Page id to show after inactivity" },
+        "timeout_s": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/definitions/ident" },
+          "type": { "type": "string", "enum": ["image", "gif", "font", "audio", "lottie", "bin"] },
+          "path": { "type": "string", "description": "Path relative to package root, e.g. assets/bg.png" }
+        }
+      }
+    },
+    "data_sources": {
+      "type": "array",
+      "description": "Named real-time streams. Device subscribes to MQTT ccp/v1/{dev}/data/{stream}.",
+      "items": {
+        "type": "object",
+        "required": ["id", "stream"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/definitions/ident" },
+          "stream": { "type": "string", "maxLength": 96, "description": "Server-side stream name, e.g. market.BTCUSDT.ticker" },
+          "format": { "type": "string", "enum": ["json", "raw"], "default": "json" },
+          "sample_hint_ms": { "type": "integer", "minimum": 100 }
+        }
+      }
+    },
+    "wasm": {
+      "type": "array",
+      "description": "WASM logic modules bundled with the package",
+      "items": {
+        "type": "object",
+        "required": ["id", "path"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/definitions/ident" },
+          "path": { "type": "string" },
+          "tick_ms": { "type": "integer", "minimum": 16, "description": "Initial on_tick interval; module may change via ccp_request_tick" },
+          "canvas_ids": { "type": "array", "items": { "$ref": "#/definitions/ident" } },
+          "memory_kb": { "type": "integer", "minimum": 64, "maximum": 1024, "default": 256, "description": "Linear memory budget from the WAMR pool" }
+        }
+      }
+    },
+    "pages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "widgets"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/definitions/ident" },
+          "bg": { "$ref": "#/definitions/color" },
+          "bg_image": { "$ref": "#/definitions/ident" },
+          "scrollable": { "type": "boolean", "default": false },
+          "on_load": { "type": "array", "items": { "$ref": "#/definitions/action_do" } },
+          "widgets": { "type": "array", "items": { "$ref": "#/definitions/widget" } }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "semver": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "ident": { "type": "string", "pattern": "^[a-zA-Z_][a-zA-Z0-9_-]{0,31}$" },
+    "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$" },
+    "widget_type": {
+      "type": "string",
+      "enum": [
+        "label", "button", "image", "gif", "arc", "bar", "slider", "switch",
+        "checkbox", "dropdown", "roller", "chart", "canvas", "table", "list",
+        "tabs", "panel", "qrcode", "textarea", "keyboard", "spinner", "led",
+        "scale", "analog_clock", "spinbox"
+      ]
+    },
+    "style": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bg_color": { "$ref": "#/definitions/color" },
+        "bg_opa": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "text_color": { "$ref": "#/definitions/color" },
+        "border_color": { "$ref": "#/definitions/color" },
+        "border_width": { "type": "integer", "minimum": 0, "maximum": 16 },
+        "radius": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "pad": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "font": { "type": "string", "description": "Built-in (montserrat_14..48) or asset id of a bundled font" },
+        "align": { "type": "string", "enum": ["left", "center", "right"] },
+        "opa": { "type": "integer", "minimum": 0, "maximum": 255 },
+        "shadow_width": { "type": "integer", "minimum": 0, "maximum": 64 },
+        "shadow_color": { "$ref": "#/definitions/color" }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "required": ["prop", "source"],
+      "additionalProperties": false,
+      "description": "Live data binding: when data arrives on `source`, extract `path`, apply `format`/`map`, write to `prop`.",
+      "properties": {
+        "prop": { "type": "string", "description": "Target property: text | value | series.N | style.text_color | style.bg_color | visible | src" },
+        "source": { "$ref": "#/definitions/ident" },
+        "path": { "type": "string", "description": "JSONPath subset: $.a.b[0].c" },
+        "format": { "type": "string", "description": "printf-like with thousands extension, e.g. \"$%,.2f\" or \"%d%%\"" },
+        "map": {
+          "type": "object",
+          "description": "Value mapping. Keys: exact values or lt0/gte0/gt0 for numeric sign mapping.",
+          "additionalProperties": { "type": ["string", "number", "boolean"] }
+        },
+        "scale": { "type": "number", "description": "Multiply numeric value before use" }
+      }
+    },
+    "action_do": {
+      "type": "object",
+      "required": ["do"],
+      "properties": {
+        "do": {
+          "type": "string",
+          "enum": ["page.show", "wasm.event", "audio.play", "audio.stop", "mqtt.publish", "brightness.set", "device.reboot", "device.sync", "var.set"]
+        },
+        "target": { "type": "string", "description": "page id / wasm module id" },
+        "asset": { "type": "string", "description": "audio asset id for audio.play" },
+        "event_id": { "type": "integer", "description": "App-defined event code forwarded to wasm ccp_on_event" },
+        "topic_suffix": { "type": "string", "description": "mqtt.publish: appended to ccp/v1/{dev}/evt/" },
+        "payload": { "description": "mqtt.publish payload (object or string)" },
+        "value": { "description": "brightness.set (0-100) / var.set value" },
+        "key": { "type": "string", "description": "var.set key" }
+      },
+      "additionalProperties": false
+    },
+    "action": {
+      "type": "object",
+      "required": ["on", "do"],
+      "additionalProperties": false,
+      "properties": {
+        "on": { "type": "string", "enum": ["clicked", "pressed", "released", "long_pressed", "value_changed", "gesture_left", "gesture_right"] },
+        "do": {
+          "type": "string",
+          "enum": ["page.show", "wasm.event", "audio.play", "audio.stop", "mqtt.publish", "brightness.set", "device.reboot", "device.sync", "var.set"]
+        },
+        "target": { "type": "string" },
+        "asset": { "type": "string" },
+        "event_id": { "type": "integer" },
+        "topic_suffix": { "type": "string" },
+        "payload": {},
+        "value": {},
+        "key": { "type": "string" }
+      }
+    },
+    "widget": {
+      "type": "object",
+      "required": ["type", "id", "x", "y", "w", "h"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "$ref": "#/definitions/widget_type" },
+        "id": { "$ref": "#/definitions/ident" },
+        "x": { "type": "integer", "minimum": -32768, "maximum": 32767 },
+        "y": { "type": "integer", "minimum": -32768, "maximum": 32767 },
+        "w": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "h": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "hidden": { "type": "boolean", "default": false },
+        "style": { "$ref": "#/definitions/style" },
+        "props": {
+          "type": "object",
+          "description": "Widget-type-specific properties; validated against schema/widgets/<type>.json",
+          "additionalProperties": true
+        },
+        "bindings": { "type": "array", "items": { "$ref": "#/definitions/binding" } },
+        "actions": { "type": "array", "items": { "$ref": "#/definitions/action" } },
+        "children": { "type": "array", "items": { "$ref": "#/definitions/widget" } }
+      }
+    }
+  }
+}

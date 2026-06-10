@@ -1,0 +1,45 @@
+{
+  "schema_version": "1.0",
+  "meta": {
+    "id": "com.ccp.candles",
+    "name": "Candles Pro",
+    "version": "1.0.0",
+    "min_fw": "0.1.0"
+  },
+  "display": { "orientation": "landscape" },
+  "assets": [
+    { "id": "click", "type": "audio", "path": "audio/click.wav" }
+  ],
+  "wasm": [
+    { "id": "chart_app", "path": "app.wasm", "tick_ms": 250, "canvas_ids": ["cv"], "memory_kb": 512 }
+  ],
+  "data_sources": [
+    { "id": "ohlc", "stream": "market.BTCUSDT.ohlc.1m", "format": "json" }
+  ],
+  "pages": [
+    {
+      "id": "main",
+      "bg": "#0B0E11",
+      "widgets": [
+        {
+          "type": "canvas", "id": "cv", "x": 0, "y": 0, "w": 480, "h": 280,
+          "props": { "wasm": "chart_app", "touch": "drag", "bg": "#0B0E11" }
+        },
+        {
+          "type": "button", "id": "tf_1m", "x": 380, "y": 288, "w": 90, "h": 28,
+          "style": { "bg_color": "#2B3139", "radius": 6 },
+          "props": { "text": "1m" },
+          "actions": [
+            { "on": "clicked", "do": "audio.play", "asset": "click" },
+            { "on": "clicked", "do": "wasm.event", "target": "chart_app", "event_id": 100 }
+          ]
+        },
+        {
+          "type": "label", "id": "hint", "x": 12, "y": 292, "w": 300, "h": 24,
+          "style": { "text_color": "#6B7280", "font": "montserrat_14" },
+          "props": { "text": "drag to pan" }
+        }
+      ]
+    }
+  ]
+}
