@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+import { useCallback, useEffect, useState } from "react";
+import { api, useAuth } from "@/lib/auth";
 
 interface StoreItem {
   slug: string;
@@ -11,41 +10,106 @@ interface StoreItem {
   priceCents: number;
   currency: string;
 }
+interface ManagedItem {
+  id: string;
+  slug: string;
+  title: string;
+  description: string | null;
+  priceCents: number;
+  published: boolean;
+}
 
 export default function StorePage() {
+  const { token, me } = useAuth();
   const [items, setItems] = useState<StoreItem[]>([]);
+  const [managed, setManaged] = useState<ManagedItem[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch(`${API}/api/v1/store/items`, { cache: "no-store" })
-      .then((r) => r.json())
-      .then(setItems)
-      .catch(() => setErr("Cannot reach the Hub API."));
-  }, []);
+  const load = useCallback(() => {
+    api("/api/v1/store/items", token).then(setItems).catch(() => setErr("Cannot reach the Hub API."));
+    if (me?.isAdmin) {
+      api("/api/v1/store/admin/items", token)
+        .then((r: { managed: ManagedItem[] }) => setManaged(r.managed))
+        .catch(() => {});
+    }
+  }, [token, me]);
+
+  useEffect(load, [load]);
+
+  const patch = async (id: string, body: Partial<ManagedItem>) => {
+    await api(`/api/v1/store/admin/items/${id}`, token, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+    load();
+  };
 
   return (
     <main className="p-6">
       <h1 className="text-2xl font-semibold mb-1">Page Store</h1>
       <p className="text-sm text-[var(--ccp-muted)] mb-5">
-        Extra pages your customers can buy. Purchases grant over-the-air to their
-        displays (Stripe checkout from the mobile app).
+        Extra pages customers can buy. Purchases grant over-the-air to their displays.
       </p>
-      {err && <div className="card p-4 text-sm text-[var(--ccp-red)]">{err}</div>}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {err && <div className="card p-4 text-sm text-[var(--ccp-red)] mb-4">{err}</div>}
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 mb-8">
         {items.map((it) => (
           <div key={it.slug} className="card p-4 flex flex-col gap-2">
             <div className="font-semibold">{it.title}</div>
-            <div className="text-sm text-[var(--ccp-muted)] flex-1">
-              {it.description}
-            </div>
+            <div className="text-sm text-[var(--ccp-muted)] flex-1">{it.description}</div>
             <div className="text-[var(--ccp-accent)] font-bold">
-              {it.priceCents === 0
-                ? "Free"
-                : `$${(it.priceCents / 100).toFixed(2)}`}
+              {it.priceCents === 0 ? "Free" : `$${(it.priceCents / 100).toFixed(2)}`}
             </div>
           </div>
         ))}
       </div>
+
+      {me?.isAdmin && (
+        <section>
+          <h2 className="text-lg font-semibold mb-2">Manage published pages</h2>
+          {managed.length === 0 ? (
+            <div className="card p-5 text-sm text-[var(--ccp-muted)]">
+              No published pages yet. Publish a layout from the Builder to create a
+              sellable page, then set its price and publish flag here.
+            </div>
+          ) : (
+            <div className="card overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="text-[var(--ccp-muted)] text-left">
+                  <tr className="border-b border-[var(--ccp-border)]">
+                    <th className="p-3">Page</th>
+                    <th className="p-3">Price (¢)</th>
+                    <th className="p-3">Published</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {managed.map((m) => (
+                    <tr key={m.id} className="border-b border-[var(--ccp-border)]">
+                      <td className="p-3">{m.title}</td>
+                      <td className="p-3">
+                        <input
+                          className="input w-24"
+                          type="number"
+                          defaultValue={m.priceCents}
+                          onBlur={(e) => patch(m.id, { priceCents: Number(e.target.value) })}
+                        />
+                      </td>
+                      <td className="p-3">
+                        <button
+                          className="btn"
+                          onClick={() => patch(m.id, { published: !m.published })}
+                        >
+                          {m.published ? "Published" : "Draft"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
     </main>
   );
 }

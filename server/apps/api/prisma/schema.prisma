@@ -73,6 +73,32 @@ model User {
   campaigns     AdCampaign[]
   notifications Notification[]
   auditLogs     AuditLog[]
+  featureRequests FeatureRequest[]
+}
+
+enum FeatureRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// An optional per-page feature a user enabled that needs manual admin approval
+/// before it activates on the device (e.g. crypto price alerts).
+model FeatureRequest {
+  id        String               @id @default(cuid())
+  userId    String
+  user      User                 @relation(fields: [userId], references: [id])
+  deviceId  String               // hardware id (ccp-xxxx)
+  page      String               // e.g. "crypto"
+  feature   String               // e.g. "alerts"
+  detail    Json                 @default("{}") // requested config (alert rules…)
+  status    FeatureRequestStatus @default(PENDING)
+  decidedBy String?              // admin email
+  decidedAt DateTime?
+  createdAt DateTime             @default(now())
+
+  @@index([status])
+  @@index([deviceId])
 }
 
 model Device {

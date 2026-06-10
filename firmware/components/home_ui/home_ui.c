@@ -107,10 +107,11 @@ static struct {
     /* crypto */
     lv_obj_t *lbl_price, *lbl_change, *lbl_updated, *crypto_dot;
     lv_obj_t *lbl_pair, *btn_symbol_lbl, *btn_cur_lbl, *coin_logo;
-    lv_obj_t *spark;
-    lv_chart_series_t *spark_ser;
-    int32_t spark_min, spark_max; /* running range of pushed points */
-    int spark_points;
+    /* candlestick chart (TradingView-style, drawn on a canvas) */
+    lv_obj_t *candle_canvas;
+    void *candle_buf;                       /* RGB565 canvas backing buffer (PSRAM) */
+    struct { float o, h, l, c; } candles[SPARK_POINTS];
+    int candle_count;
     lv_obj_t *btn_tf_lbl;
     volatile int tf_idx;
     volatile bool need_history;  /* poll task should (re)fetch klines */
@@ -562,6 +563,8 @@ static void crypto_render(void)
                           ? "Binance · fetching THB rate..." : "Binance · live");
 }
 
+static void candle_render(void);
+
 static void crypto_apply_quote(double last, double chg_pct)
 {
     if (!display_engine_lock(200)) {
@@ -570,26 +573,19 @@ static void crypto_apply_quote(double last, double chg_pct)
     s.last_usd_price = last;
     s.last_chg_pct = chg_pct;
     crypto_render();
-    if (s.spark && s.spark_ser) {
-        int32_t v = (int32_t)last;
-        if (s.spark_points == 0) {
-            s.spark_min = s.spark_max = v;
-        } else {
-            if (v < s.spark_min) s.spark_min = v;
-            if (v > s.spark_max) s.spark_max = v;
-        }
-        s.spark_points++;
-        /* default chart range is 0..100 which clips BTC-sized values —
-         * follow the data with ~1% padding (min 4 units so a flat line centers) */
-        int32_t pad = (s.spark_max - s.spark_min) / 2 + s.spark_max / 100;
-        if (pad < 4) pad = 4;
-        lv_chart_set_range(s.spark, LV_CHART_AXIS_PRIMARY_Y,
-                           s.spark_min - pad, s.spark_max + pad);
-        lv_chart_set_next_value(s.spark, s.spark_ser, v);
-        lv_chart_refresh(s.spark);
+    /* live tick updates the most recent (forming) candle's close/high/low */
+    if (s.candle_canvas && s.candle_count > 0) {
+        float p = (float)last;
+        int i = s.candle_count - 1;
+        s.candles[i].c = p;
+        if (p > s.candles[i].h) s.candles[i].h = p;
+        if (p < s.candles[i].l) s.candles[i].l = p;
     }
     s.last_quote_ms = (int64_t)(lv_tick_get());
     display_engine_unlock();
+    if (s.candle_canvas && s.candle_count > 0) {
+        candle_render(); /* re-locks internally */
+    }
 }
 
 /** GET url into buf; returns body length or <0. Logs failures. */
@@ -652,35 +648,71 @@ static void fetch_thb_rate(char *body, size_t body_len)
     cJSON_Delete(root);
 }
 
-/* fill the chart with history in one shot (range computed up front) */
-static void chart_set_history(const double *vals, int n)
+/* candlestick chart geometry (matches the old chart panel footprint) */
+#define CANDLE_W 444
+#define CANDLE_H 130
+
+/* draw all candles green/red onto the canvas (TradingView-style) */
+static void candle_render(void)
 {
+    if (!s.candle_canvas || s.candle_count <= 0) {
+        return;
+    }
     if (!display_engine_lock(500)) {
         return;
     }
-    if (s.spark && s.spark_ser && n > 0) {
-        int32_t lo = (int32_t)vals[0], hi = (int32_t)vals[0];
-        for (int i = 1; i < n; i++) {
-            int32_t v = (int32_t)vals[i];
-            if (v < lo) lo = v;
-            if (v > hi) hi = v;
-        }
-        int32_t pad = (hi - lo) / 10 + hi / 200;
-        if (pad < 4) pad = 4;
-        lv_chart_set_all_value(s.spark, s.spark_ser, LV_CHART_POINT_NONE);
-        lv_chart_set_range(s.spark, LV_CHART_AXIS_PRIMARY_Y, lo - pad, hi + pad);
-        for (int i = 0; i < n; i++) {
-            lv_chart_set_next_value(s.spark, s.spark_ser, (int32_t)vals[i]);
-        }
-        s.spark_min = lo;
-        s.spark_max = hi;
-        s.spark_points = n;
-        lv_chart_refresh(s.spark);
+    int n = s.candle_count;
+    float lo = s.candles[0].l, hi = s.candles[0].h;
+    for (int i = 1; i < n; i++) {
+        if (s.candles[i].l < lo) lo = s.candles[i].l;
+        if (s.candles[i].h > hi) hi = s.candles[i].h;
     }
+    if (hi <= lo) hi = lo + 1.0f;
+    float pad = (hi - lo) * 0.06f;
+    lo -= pad; hi += pad;
+    float range = hi - lo;
+
+    lv_canvas_fill_bg(s.candle_canvas, lv_color_hex(COL_PANEL), LV_OPA_COVER);
+
+    lv_layer_t layer;
+    lv_canvas_init_layer(s.candle_canvas, &layer);
+    lv_draw_rect_dsc_t rd;
+    lv_draw_rect_dsc_init(&rd);
+    rd.bg_opa = LV_OPA_COVER;
+
+    int slot = CANDLE_W / n;
+    if (slot < 1) slot = 1;
+    int body_w = slot * 7 / 10;
+    if (body_w < 1) body_w = 1;
+
+    for (int i = 0; i < n; i++) {
+        float o = s.candles[i].o, h = s.candles[i].h,
+              l = s.candles[i].l, c = s.candles[i].c;
+        bool up = c >= o;
+        lv_color_t col = lv_color_hex(up ? COL_GREEN : COL_RED);
+
+        int cx = i * slot + slot / 2;
+        int y_h = (int)((hi - h) / range * (CANDLE_H - 1));
+        int y_l = (int)((hi - l) / range * (CANDLE_H - 1));
+        int y_o = (int)((hi - o) / range * (CANDLE_H - 1));
+        int y_c = (int)((hi - c) / range * (CANDLE_H - 1));
+        int body_top = y_o < y_c ? y_o : y_c;
+        int body_bot = y_o < y_c ? y_c : y_o;
+        if (body_bot - body_top < 1) body_bot = body_top + 1; /* doji */
+
+        rd.bg_color = col;
+        /* wick: 1px line at center, high->low */
+        lv_area_t wick = { cx, y_h, cx, y_l };
+        lv_draw_rect(&layer, &rd, &wick);
+        /* body: filled rect open<->close */
+        lv_area_t body = { cx - body_w / 2, body_top, cx - body_w / 2 + body_w, body_bot };
+        lv_draw_rect(&layer, &rd, &body);
+    }
+    lv_canvas_finish_layer(s.candle_canvas, &layer);
     display_engine_unlock();
 }
 
-/* Binance klines = instant chart history (close prices, field index 4) */
+/* Binance klines = OHLC history; fields [openTime,open,high,low,close,...] */
 static void fetch_klines(char *body, size_t body_len)
 {
     char url[160];
@@ -695,7 +727,6 @@ static void fetch_klines(char *body, size_t body_len)
     if (!root) {
         return;
     }
-    double vals[SPARK_POINTS];
     int cnt = 0;
     if (cJSON_IsArray(root)) {
         const cJSON *k;
@@ -703,17 +734,26 @@ static void fetch_klines(char *body, size_t body_len)
             if (cnt >= SPARK_POINTS) {
                 break;
             }
-            const cJSON *close = cJSON_GetArrayItem(k, 4);
-            if (cJSON_IsString(close)) {
-                vals[cnt++] = atof(close->valuestring);
+            const cJSON *o = cJSON_GetArrayItem(k, 1);
+            const cJSON *h = cJSON_GetArrayItem(k, 2);
+            const cJSON *l = cJSON_GetArrayItem(k, 3);
+            const cJSON *c = cJSON_GetArrayItem(k, 4);
+            if (cJSON_IsString(o) && cJSON_IsString(h) &&
+                cJSON_IsString(l) && cJSON_IsString(c)) {
+                s.candles[cnt].o = (float)atof(o->valuestring);
+                s.candles[cnt].h = (float)atof(h->valuestring);
+                s.candles[cnt].l = (float)atof(l->valuestring);
+                s.candles[cnt].c = (float)atof(c->valuestring);
+                cnt++;
             }
         }
     }
     cJSON_Delete(root);
+    s.candle_count = cnt;
     if (cnt > 0) {
-        chart_set_history(vals, cnt);
+        candle_render();
     }
-    ESP_LOGI(TAG, "klines %s %s: %d points",
+    ESP_LOGI(TAG, "klines %s %s: %d candles",
              s.cfg.symbols[s.cur_symbol], s.cfg.timeframe, cnt);
 }
 
@@ -864,10 +904,7 @@ static void crypto_symbol_btn_cb(lv_event_t *e)
     s.cur_symbol = (s.cur_symbol + 1) % s.cfg.symbol_count;
     s.last_usd_price = 0;
     crypto_update_header();
-    if (s.spark && s.spark_ser) {
-        lv_chart_set_all_value(s.spark, s.spark_ser, LV_CHART_POINT_NONE);
-    }
-    s.spark_points = 0; /* restart range tracking for the new symbol */
+    s.candle_count = 0; /* drop old symbol's candles until history reloads */
     crypto_render();
     s.need_history = true;
     s.force_fetch = true;
@@ -964,24 +1001,28 @@ static void build_crypto_page(page_t *page)
         lv_obj_align(s.lbl_price, LV_ALIGN_CENTER, 0, -10);
         lv_obj_align(s.lbl_change, LV_ALIGN_CENTER, 0, 44);
     } else {
-        /* style "chart": price top, sparkline bottom */
+        /* style "chart": price top, candlestick chart bottom */
         lv_obj_align(s.lbl_price, LV_ALIGN_TOP_LEFT, 18, 58);
         lv_obj_align(s.lbl_change, LV_ALIGN_TOP_LEFT, 20, 116);
 
-        s.spark = lv_chart_create(scr);
-        lv_obj_set_size(s.spark, 444, 130);
-        lv_obj_align(s.spark, LV_ALIGN_BOTTOM_MID, 0, -38);
-        lv_obj_set_style_bg_color(s.spark, lv_color_hex(COL_PANEL), 0);
-        lv_obj_set_style_border_color(s.spark, lv_color_hex(COL_BORDER), 0);
-        lv_obj_set_style_border_width(s.spark, 1, 0);
-        lv_obj_set_style_radius(s.spark, 12, 0);
-        lv_obj_set_style_size(s.spark, 0, 0, LV_PART_INDICATOR);
-        lv_chart_set_type(s.spark, LV_CHART_TYPE_LINE);
-        lv_chart_set_point_count(s.spark, SPARK_POINTS);
-        lv_chart_set_update_mode(s.spark, LV_CHART_UPDATE_MODE_SHIFT);
-        lv_chart_set_div_line_count(s.spark, 3, 0);
-        s.spark_ser = lv_chart_add_series(s.spark, lv_color_hex(COL_ACCENT),
-                                          LV_CHART_AXIS_PRIMARY_Y);
+        /* candlestick canvas (RGB565 in PSRAM) */
+        if (!s.candle_buf) {
+            s.candle_buf = heap_caps_malloc(
+                LV_CANVAS_BUF_SIZE(CANDLE_W, CANDLE_H, 16, LV_DRAW_BUF_STRIDE_ALIGN),
+                MALLOC_CAP_SPIRAM);
+        }
+        s.candle_canvas = lv_canvas_create(scr);
+        if (s.candle_buf) {
+            lv_canvas_set_buffer(s.candle_canvas, s.candle_buf, CANDLE_W, CANDLE_H,
+                                 LV_COLOR_FORMAT_RGB565);
+            lv_canvas_fill_bg(s.candle_canvas, lv_color_hex(COL_PANEL), LV_OPA_COVER);
+        }
+        lv_obj_set_size(s.candle_canvas, CANDLE_W, CANDLE_H);
+        lv_obj_align(s.candle_canvas, LV_ALIGN_BOTTOM_MID, 0, -38);
+        lv_obj_set_style_radius(s.candle_canvas, 12, 0);
+        lv_obj_set_style_clip_corner(s.candle_canvas, true, 0);
+        lv_obj_set_style_border_color(s.candle_canvas, lv_color_hex(COL_BORDER), 0);
+        lv_obj_set_style_border_width(s.candle_canvas, 1, 0);
 
         /* timeframe cycle button under the chart, bottom-left */
         lv_obj_t *tf_btn = lv_button_create(scr);
@@ -1592,9 +1633,13 @@ static void destroy_pages(void)
             s.pages[i].screen = NULL;
         }
     }
-    s.spark = NULL;
-    s.spark_ser = NULL;
-    s.spark_points = 0;
+    /* canvas object is destroyed with its screen; free the backing buffer */
+    s.candle_canvas = NULL;
+    if (s.candle_buf) {
+        heap_caps_free(s.candle_buf);
+        s.candle_buf = NULL;
+    }
+    s.candle_count = 0;
     s.slide_img = NULL;
 }
 

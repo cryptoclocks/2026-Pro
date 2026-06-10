@@ -36,6 +36,29 @@ export class MarketplaceService {
     return k.startsWith("sk_") && !k.includes("xxx") && !k.includes("placeholder");
   }
 
+  /** Admin view: DB-backed items incl. unpublished, plus the builtin catalog. */
+  async adminListItems() {
+    const db = await this.prisma.marketplaceItem.findMany({
+      orderBy: { createdAt: "desc" },
+    });
+    return {
+      managed: db,
+      builtin: BUILTIN_CATALOG,
+    };
+  }
+
+  async updateItem(id: string, patch: { priceCents?: number; published?: boolean; title?: string; description?: string }) {
+    return this.prisma.marketplaceItem.update({
+      where: { id },
+      data: {
+        ...(patch.priceCents !== undefined ? { priceCents: patch.priceCents } : {}),
+        ...(patch.published !== undefined ? { published: patch.published } : {}),
+        ...(patch.title !== undefined ? { title: patch.title } : {}),
+        ...(patch.description !== undefined ? { description: patch.description } : {}),
+      },
+    });
+  }
+
   async listItems(): Promise<StoreItem[]> {
     const published = await this.prisma.marketplaceItem
       .findMany({ where: { published: true } })
