@@ -456,23 +456,23 @@ static void build_clock_page(page_t *page)
     int vis_hh = (thh * CLOCK_TIME_SCALE / 256) / 2; /* visual half-height */
     lv_label_set_text(s.lbl_time, "--:--");
 
-    /* seconds: small, hugging the bottom-right corner of the minutes digits */
+    /* seconds: small orange, hugging the bottom-right of the minutes digits */
     s.lbl_sec = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_20
     lv_obj_set_style_text_font(s.lbl_sec, &lv_font_montserrat_20, 0);
 #endif
-    lv_obj_set_style_text_color(s.lbl_sec, lv_color_hex(THEMES[th].accent), 0);
+    lv_obj_set_style_text_color(s.lbl_sec, lv_color_hex(0xFF9500), 0); /* orange */
     lv_label_set_text(s.lbl_sec, "");
-    lv_obj_align(s.lbl_sec, LV_ALIGN_CENTER, vis_hw + 12, CLOCK_TIME_Y + vis_hh - 22);
+    lv_obj_align(s.lbl_sec, LV_ALIGN_CENTER, vis_hw + 12, CLOCK_TIME_Y + vis_hh - 32);
 
-    /* date: just below the time block */
+    /* date: above the time block */
     s.lbl_date = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_20
     lv_obj_set_style_text_font(s.lbl_date, &lv_font_montserrat_20, 0);
 #endif
     lv_obj_set_style_text_color(s.lbl_date, lv_color_hex(THEMES[th].date), 0);
     lv_label_set_text(s.lbl_date, "");
-    lv_obj_align(s.lbl_date, LV_ALIGN_CENTER, 0, CLOCK_TIME_Y + vis_hh + 12);
+    lv_obj_align(s.lbl_date, LV_ALIGN_CENTER, 0, CLOCK_TIME_Y - vis_hh - 6);
 
     /* brand logo bottom-center (uploaded to /pages/clock/assets/logo.png) */
     const char *logo_dirs[2] = { STORAGE_SD_BASE, STORAGE_LFS_BASE };
