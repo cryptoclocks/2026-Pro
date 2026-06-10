@@ -4,6 +4,7 @@ import { create } from "zustand";
 import type { WidgetNode, WidgetType } from "@ccp/shared";
 import { SCREEN } from "@ccp/shared";
 import { TEMPLATES, type TemplateKey } from "./templates";
+import { defaultProps } from "./widgetProps";
 
 export type Orientation = "landscape" | "portrait";
 
@@ -67,7 +68,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       y: Math.round(y),
       w: size.w,
       h: size.h,
-      props: type === "label" ? { text: "Text" } : type === "button" ? { text: "Button" } : {},
+      props: defaultProps(type),
       style: {},
     };
     set({ widgets: [...get().widgets, widget], counter: n, selectedId: widget.id });

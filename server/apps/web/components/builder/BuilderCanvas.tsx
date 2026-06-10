@@ -44,14 +44,12 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
     data: { from: "canvas" },
   });
 
-  const bound = simulate ? resolveText(widget) : null;
   const hasBinding = (widget.bindings?.length ?? 0) > 0;
-  const label =
-    bound ??
-    (widget.props?.text as string | undefined) ??
-    (widget.type === "canvas" ? "WASM canvas" : widget.type);
-
-  const isChart = widget.type === "chart";
+  // widgets that paint their own visuals shouldn't get the default panel fill
+  const SELF_DRAWN = ["arc", "bar", "slider", "switch", "led", "qrcode", "spinner", "chart"];
+  const bg =
+    widget.style?.bg_color ??
+    (widget.type === "chart" ? "#161B22" : SELF_DRAWN.includes(widget.type) ? "transparent" : "#181C22");
 
   return (
     <div
@@ -62,23 +60,27 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
         e.stopPropagation();
         select(widget.id);
       }}
-      className={`absolute flex items-center justify-center text-xs overflow-hidden cursor-move select-none rounded ${
-        selected ? "ring-2 ring-[var(--ccp-accent)]" : "ring-1 ring-[var(--ccp-border)]"
+      className={`absolute flex items-center justify-center text-xs overflow-hidden cursor-move select-none ${
+        selected ? "ring-2 ring-[var(--ccp-accent)]" : "ring-1 ring-[var(--ccp-border)]/40"
       }`}
       style={{
         left: widget.x,
         top: widget.y,
         width: widget.w,
         height: widget.h,
-        background: widget.style?.bg_color ?? (isChart ? "#161B22" : "#181C22"),
+        background: bg,
         color: widget.style?.text_color ?? "#EAECEF",
         textAlign: (widget.style?.align as "left" | "center" | "right") ?? "center",
-        fontSize: widget.h >= 70 ? 26 : 12,
         borderRadius: widget.style?.radius ?? 4,
+        border:
+          (widget.style?.border_width ?? 0) > 0
+            ? `${widget.style?.border_width}px solid ${widget.style?.border_color ?? "#2b3139"}`
+            : undefined,
+        opacity: widget.style?.opa !== undefined ? Number(widget.style.opa) / 255 : 1,
         transform: transform ? `translate(${transform.x}px, ${transform.y}px)` : undefined,
       }}
     >
-      {isChart && simulate ? <MockCandles /> : label}
+      <WidgetInner widget={widget} simulate={simulate} />
       {hasBinding && !simulate && (
         <span className="absolute top-0 right-0 text-[8px] bg-[var(--ccp-accent)] text-black px-1 rounded-bl">
           ⛓
@@ -86,6 +88,112 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
       )}
     </div>
   );
+}
+
+const N = (v: unknown, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
+
+/** Render the visual interior of a widget from its props (SquareLine-style). */
+function WidgetInner({ widget: w, simulate }: { widget: WidgetNode; simulate: boolean }) {
+  const p = w.props ?? {};
+  const accent = w.style?.text_color ?? "#15c3a6";
+
+  switch (w.type) {
+    case "label": {
+      const txt = (simulate ? resolveText(w) : null) ?? (p.text as string) ?? "Label";
+      return <span style={{ fontSize: w.h >= 60 ? 26 : 13, width: "100%" }}>{txt}</span>;
+    }
+    case "button":
+      return (
+        <span className="px-2 rounded" style={{ background: "#2b3139", lineHeight: `${Math.max(0, w.h - 8)}px` }}>
+          {(p.text as string) ?? "Button"}
+        </span>
+      );
+    case "image":
+    case "gif":
+      return (
+        <span className="text-[10px] text-[var(--ccp-muted)] flex flex-col items-center">
+          🖼<span className="truncate max-w-full">{((p.src as string) ?? w.type).split("/").pop()}</span>
+        </span>
+      );
+    case "arc": {
+      const ratio = (N(p.value, 40) - N(p.min, 0)) / Math.max(1, N(p.max, 100) - N(p.min, 0));
+      const r = Math.min(w.w, w.h) / 2 - 4;
+      const c = 2 * Math.PI * r;
+      return (
+        <svg width={w.w} height={w.h}>
+          <circle cx={w.w / 2} cy={w.h / 2} r={r} fill="none" stroke="#2b3139" strokeWidth={6} />
+          <circle
+            cx={w.w / 2} cy={w.h / 2} r={r} fill="none" stroke={accent} strokeWidth={6}
+            strokeDasharray={`${c * ratio} ${c}`} strokeLinecap="round"
+            transform={`rotate(-90 ${w.w / 2} ${w.h / 2})`}
+          />
+        </svg>
+      );
+    }
+    case "bar":
+    case "slider": {
+      const ratio = (N(p.value, 50) - N(p.min, 0)) / Math.max(1, N(p.max, 100) - N(p.min, 0));
+      return (
+        <div className="relative w-full mx-1 rounded-full" style={{ height: 6, background: "#2b3139" }}>
+          <div className="absolute left-0 top-0 h-full rounded-full" style={{ width: `${ratio * 100}%`, background: accent }} />
+          {w.type === "slider" && (
+            <div className="absolute rounded-full" style={{ width: 14, height: 14, top: -4, left: `calc(${ratio * 100}% - 7px)`, background: accent }} />
+          )}
+        </div>
+      );
+    }
+    case "switch": {
+      const on = Boolean(p.checked);
+      return (
+        <div className="rounded-full flex items-center" style={{ width: 44, height: 22, background: on ? accent : "#2b3139", padding: 2, justifyContent: on ? "flex-end" : "flex-start" }}>
+          <div className="rounded-full bg-white" style={{ width: 18, height: 18 }} />
+        </div>
+      );
+    }
+    case "checkbox":
+      return (
+        <span className="flex items-center gap-1 text-[12px]">
+          <span style={{ width: 14, height: 14, borderRadius: 3, background: p.checked ? accent : "transparent", border: "1px solid #5a6", display: "inline-block" }} />
+          {(p.text as string) ?? "Option"}
+        </span>
+      );
+    case "led":
+      return <div className="rounded-full" style={{ width: Math.min(w.w, w.h) - 4, height: Math.min(w.w, w.h) - 4, background: (p.color as string) ?? "#0ECB81", boxShadow: `0 0 10px ${(p.color as string) ?? "#0ECB81"}` }} />;
+    case "qrcode":
+      return (
+        <div className="grid" style={{ gridTemplateColumns: "repeat(7,1fr)", width: Math.min(w.w, w.h) - 6, height: Math.min(w.w, w.h) - 6, background: "#fff", padding: 2 }}>
+          {Array.from({ length: 49 }).map((_, i) => (
+            <div key={i} style={{ background: (i * 7 + ((i / 7) | 0)) % 3 ? "#000" : "#fff" }} />
+          ))}
+        </div>
+      );
+    case "spinner":
+      return <div className="rounded-full animate-spin" style={{ width: Math.min(w.w, w.h) - 6, height: Math.min(w.w, w.h) - 6, border: `4px solid #2b3139`, borderTopColor: accent }} />;
+    case "dropdown":
+    case "roller": {
+      const opts = String((p.options as string) ?? "").split("\n").filter(Boolean);
+      const sel = opts[N(p.selected, 0)] ?? opts[0] ?? w.type;
+      return <span className="flex items-center justify-between w-full px-2 text-[12px]">{sel}<span className="text-[var(--ccp-muted)]">▾</span></span>;
+    }
+    case "chart":
+      return simulate ? <MockCandles /> : <span className="text-[11px] text-[var(--ccp-muted)]">{(p.chart_type as string) ?? "chart"}</span>;
+    case "list": {
+      const items = String((p.items as string) ?? "").split("\n").filter(Boolean);
+      return <div className="w-full text-[11px] text-left px-1">{items.slice(0, 4).map((it, i) => <div key={i} className="truncate border-b border-[var(--ccp-border)]/40 py-0.5">{it}</div>)}</div>;
+    }
+    case "tabs": {
+      const tabs = String((p.tabs as string) ?? "").split("\n").filter(Boolean);
+      return <div className="w-full flex gap-1 text-[11px] px-1">{tabs.map((t, i) => <span key={i} className={`px-1 ${i === 0 ? "border-b-2 border-[var(--ccp-accent)]" : "text-[var(--ccp-muted)]"}`}>{t}</span>)}</div>;
+    }
+    case "textarea":
+      return <span className="text-[12px] text-[var(--ccp-muted)] w-full px-2 text-left">{(p.text as string) || (p.placeholder as string) || "Type…"}</span>;
+    case "spinbox":
+      return <span className="text-[14px]">{N(p.value, 0)}</span>;
+    case "canvas":
+      return <span className="text-[10px] text-[var(--ccp-muted)]">WASM canvas</span>;
+    default:
+      return <span className="text-[11px] text-[var(--ccp-muted)]">{w.type}</span>;
+  }
 }
 
 export function BuilderCanvas() {
