@@ -9,6 +9,7 @@ interface StoreItem {
   description: string;
   priceCents: number;
   currency: string;
+  kind: string;
 }
 interface ManagedItem {
   id: string;
@@ -16,6 +17,8 @@ interface ManagedItem {
   title: string;
   description: string | null;
   priceCents: number;
+  currency: string;
+  kind: string;
   published: boolean;
 }
 
@@ -29,7 +32,7 @@ export default function StorePage() {
     api("/api/v1/store/items", token).then(setItems).catch(() => setErr("Cannot reach the Hub API."));
     if (me?.isAdmin) {
       api("/api/v1/store/admin/items", token)
-        .then((r: { managed: ManagedItem[] }) => setManaged(r.managed))
+        .then((r: ManagedItem[] | { managed: ManagedItem[] }) => setManaged(Array.isArray(r) ? r : r.managed))
         .catch(() => {});
     }
   }, [token, me]);
@@ -56,9 +59,10 @@ export default function StorePage() {
         {items.map((it) => (
           <div key={it.slug} className="card p-4 flex flex-col gap-2">
             <div className="font-semibold">{it.title}</div>
+            <div className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)]">{it.kind}</div>
             <div className="text-sm text-[var(--ccp-muted)] flex-1">{it.description}</div>
             <div className="text-[var(--ccp-accent)] font-bold">
-              {it.priceCents === 0 ? "Free" : `$${(it.priceCents / 100).toFixed(2)}`}
+              {formatMoney(it.priceCents, it.currency)}
             </div>
           </div>
         ))}
@@ -78,7 +82,8 @@ export default function StorePage() {
                 <thead className="text-[var(--ccp-muted)] text-left">
                   <tr className="border-b border-[var(--ccp-border)]">
                     <th className="p-3">Page</th>
-                    <th className="p-3">Price (¢)</th>
+                    <th className="p-3">Kind</th>
+                    <th className="p-3">Price</th>
                     <th className="p-3">Published</th>
                   </tr>
                 </thead>
@@ -86,13 +91,15 @@ export default function StorePage() {
                   {managed.map((m) => (
                     <tr key={m.id} className="border-b border-[var(--ccp-border)]">
                       <td className="p-3">{m.title}</td>
+                      <td className="p-3"><span className="pill">{m.kind}</span></td>
                       <td className="p-3">
                         <input
                           className="input w-24"
                           type="number"
-                          defaultValue={m.priceCents}
-                          onBlur={(e) => patch(m.id, { priceCents: Number(e.target.value) })}
+                          defaultValue={minorToMajor(m.priceCents)}
+                          onBlur={(e) => patch(m.id, { priceCents: majorToMinor(Number(e.target.value)) })}
                         />
+                        <span className="ml-2 text-xs text-[var(--ccp-muted)]">{m.currency.toUpperCase()}</span>
                       </td>
                       <td className="p-3">
                         <button
@@ -112,4 +119,20 @@ export default function StorePage() {
       )}
     </main>
   );
+}
+
+function formatMoney(minor: number, currency: string) {
+  if (minor === 0) return "Free";
+  return new Intl.NumberFormat(currency.toLowerCase() === "thb" ? "th-TH" : "en-US", {
+    style: "currency",
+    currency: currency.toUpperCase(),
+  }).format(minorToMajor(minor));
+}
+
+function minorToMajor(value: number) {
+  return Number((value / 100).toFixed(2));
+}
+
+function majorToMinor(value: number) {
+  return Math.round(value * 100);
 }

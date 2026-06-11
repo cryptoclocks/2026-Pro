@@ -10,6 +10,7 @@ interface CatalogSeed {
   kind: Kind;
   icon: string;
   priceCents: number;
+  currency?: string;
 }
 
 /**
@@ -19,18 +20,21 @@ interface CatalogSeed {
  * crypto / slideshow) ship free and are always available — not listed here.
  */
 const CATALOG: CatalogSeed[] = [
+  { slug: "clock-alarm", title: "Clock Alarm", kind: "FEATURE", icon: "alarm",
+    description: "Alarm add-on for the Clock page with sound and device-side controls.", priceCents: 9900, currency: "thb" },
+  /* Policy: default pages are Free; nothing is priced in USD (THB only, paid = ฿49). */
   { slug: "crypto-alerts", title: "Crypto Price Alerts", kind: "FEATURE", icon: "speed",
-    description: "Full-screen + sound alerts when a coin crosses your high/low price (needs admin approval).", priceCents: 99 },
+    description: "Full-screen + sound alerts when a coin crosses your high/low price (needs admin approval).", priceCents: 4900, currency: "thb" },
   { slug: "weather", title: "Weather", kind: "PAGE", icon: "cloud",
-    description: "Local forecast, hi/lo, conditions.", priceCents: 199 },
+    description: "Local forecast, hi/lo, conditions.", priceCents: 0, currency: "thb" },
   { slug: "news-ticker", title: "News Ticker", kind: "PAGE", icon: "newspaper",
-    description: "Scrolling headlines from your feeds.", priceCents: 199 },
+    description: "Scrolling headlines from your feeds.", priceCents: 0, currency: "thb" },
   { slug: "calendar", title: "Calendar", kind: "PAGE", icon: "event",
-    description: "Today's agenda from Google Calendar.", priceCents: 299 },
+    description: "Today's agenda from Google Calendar.", priceCents: 0, currency: "thb" },
   { slug: "stocks", title: "Stocks", kind: "PAGE", icon: "trending_up",
-    description: "Track equities & indices alongside crypto.", priceCents: 299 },
+    description: "Track equities & indices alongside crypto.", priceCents: 0, currency: "thb" },
   { slug: "fear-greed", title: "Fear & Greed", kind: "PAGE", icon: "speed",
-    description: "Crypto market sentiment gauge.", priceCents: 99 },
+    description: "Crypto market sentiment gauge.", priceCents: 0, currency: "thb" },
 ];
 
 @Injectable()
@@ -46,10 +50,10 @@ export class MarketplaceService implements OnModuleInit {
       await this.prisma.marketplaceItem
         .upsert({
           where: { slug: c.slug },
-          update: { title: c.title, description: c.description, kind: c.kind, icon: c.icon },
+          update: { title: c.title, description: c.description, kind: c.kind, icon: c.icon, priceCents: c.priceCents, currency: c.currency ?? "thb" },
           create: {
             slug: c.slug, title: c.title, description: c.description,
-            kind: c.kind, icon: c.icon, priceCents: c.priceCents, published: true,
+            kind: c.kind, icon: c.icon, priceCents: c.priceCents, currency: c.currency ?? "usd", published: true,
           },
         })
         .catch((e) => this.log.warn(`seed ${c.slug}: ${e}`));

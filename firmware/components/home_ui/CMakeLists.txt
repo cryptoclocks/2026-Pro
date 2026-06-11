@@ -3,6 +3,7 @@ idf_component_register(
     INCLUDE_DIRS "include"
     REQUIRES display_engine storage board_bsp net_manager device_security
              ota_manager audio_engine esp_http_client mbedtls json lvgl
+             ui_renderer sync_manager
     PRIV_INCLUDE_DIRS "../../main"
 )
 

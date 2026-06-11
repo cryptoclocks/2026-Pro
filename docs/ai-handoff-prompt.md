@@ -61,19 +61,39 @@ over MQTT; extra pages sold via Stripe. Three codebases: `firmware/`, `server/`
   Device re-syncs from server every boot. Push settings: `PUT /api/v1/devices/{id}/settings`.
 - Auth: Supabase email OTP; admin = email in `ADMIN_EMAILS` (`server/.env`). Guards in
   `auth/auth.guards.ts`. RBAC: admin endpoints under `/admin/*` and `/me/*` (user).
+  For repeatable local admin UI tests only, API accepts signed `ccpdev.*` tokens when
+  started with `CCP_DEV_AUTH=1`; production must not enable it.
 - Billing: Stripe checkout → webhook → `Entitlement(user×MarketplaceItem)` → MQTT sync.
 - Optional features (e.g. crypto alerts) need **manual admin approval**:
   app `POST /me/feature-requests` → web `/approvals` → approve merges into device settings.
+- Builder publish now creates/updates a draft `MarketplaceItem` for the package slug.
+  Admin publishes it in `/store`, then grants it per-device from Fleet Rights. If the
+  item is `kind=PAGE`, `grantItem()` assigns the latest `PayloadVersion` and pushes MQTT
+  `cmd:sync`.
 
 ### Suggested next work (see project-progress.md 🟡/⬜)
 - M5: move Builder bundle storage from local filesystem to object store (MinIO/S3).
-  Local API already supports edit Rust in `/builder` → compile wasm → publish `bundle.zip`
-  + manifest + `PayloadVersion` → assign → `cmd:sync`; production still needs object storage,
-  authz around downloads, and real ESP32 validation of server-rendered layout/WASM pages.
+  Local API/web already supports edit Rust in `/builder` → compile wasm → publish
+  `bundle.zip` + manifest + `PayloadVersion` → draft Store item → admin publish →
+  Fleet Rights grant → `cmd:sync`; production still needs object storage, authz around
+  downloads, and visual ESP32 validation of server-rendered layout/WASM pages.
 - Implement real widget rendering in `ui_renderer` for server layouts + WASM host bindings.
 - Deploy Hub to Vercel + Supabase (env wiring is documented); production MQTT TLS (8883).
 - Build iOS app; finish the admin fleet app.
 - Wire Stripe live keys; verify checkout→entitlement→device end-to-end.
+
+### Latest verified local flow (2026-06-11)
+- Fleet admin 500 was fixed by JSON-safe BigInt serialization; `/` shows
+  `ccp-983daee91478` as 1 online device.
+- Store seed includes `Clock Alarm` (`clock-alarm`, `FEATURE`) at 99 THB.
+- Builder UX: Edit Properties/Simulate toggle, Simulation panel hides properties,
+  Add binding source starts blank with `?` tooltips, and Edit Logic is per page/template
+  (Clock/Crypto/Welcome/Blank no-op; LED Toggle has the LED Rust sample).
+- Web E2E test published `com.ccp.webtest290533@1.0.0` from Builder, Store item
+  `com-ccp-webtest290533` was published in `/store`, Fleet Rights granted it to
+  `ccp-983daee91478`, and MQTT logs show both `settings` and `sync` commands acked
+  `ok:true` by the ESP32. Bundle URL returned 200 and contained `layout.json` +
+  `wasm/logic.wasm`.
 
 Always confirm changes on real hardware/servers where possible, keep secrets out of
 git, and update `docs/project-progress.md` as you complete items.

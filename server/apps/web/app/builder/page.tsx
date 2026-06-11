@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DndContext, DragOverlay, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
-import type { WidgetType } from "@ccp/shared";
-import { DEFAULT_LOGIC_SOURCE, useBuilder, type CompiledWasm, type WasmModuleConfig } from "@/components/builder/store";
+import type { Layout, WidgetType } from "@ccp/shared";
+import { NOOP_LOGIC_SOURCE, UNAVAILABLE_LOGIC_SOURCE, useBuilder, type CompiledWasm, type WasmModuleConfig } from "@/components/builder/store";
 import { WidgetPalette } from "@/components/builder/WidgetPalette";
 import { BuilderCanvas } from "@/components/builder/BuilderCanvas";
 import { Inspector } from "@/components/builder/Inspector";
 import { exportLayout, downloadLayout } from "@/components/builder/exportLayout";
+import { SimSession, base64ToBytes, getSimSession, useSim } from "@/components/builder/wasmSim";
 import { API, useAuth } from "@/lib/auth";
 
 type CompileWasmResponse = {
@@ -20,6 +21,17 @@ type CompileWasmResponse = {
   diagnostics?: string;
 };
 
+type SavedBuilderPage = {
+  packageId: string;
+  title: string;
+  latest: { version: string; createdAt: string; sizeBytes: number };
+  marketplaceItem?: { slug: string; published: boolean } | null;
+};
+
+type BuilderPageResponse = SavedBuilderPage & {
+  latest: SavedBuilderPage["latest"] & { layout: Layout };
+};
+
 export default function BuilderPage() {
   const b = useBuilder();
   const { me, token } = useAuth();
@@ -27,9 +39,73 @@ export default function BuilderPage() {
   const [dragLabel, setDragLabel] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   const [logicOpen, setLogicOpen] = useState(false);
-  const [busy, setBusy] = useState<"compile" | "publish" | null>(null);
+  const [busy, setBusy] = useState<"compile" | "publish" | "load" | null>(null);
+  const [savedPages, setSavedPages] = useState<SavedBuilderPage[]>([]);
+  const [simEpoch, setSimEpoch] = useState(0);
+  const simRef = useRef<SimSession | null>(null);
 
   useEffect(() => setMounted(true), []);
+
+  /* Simulate = run the page for real: compile (if needed) and execute the same
+     wasm the device gets, fed with real time / live market data. */
+  useEffect(() => {
+    if (!b.simulate) return;
+    let cancelled = false;
+    (async () => {
+      const state = useBuilder.getState();
+      useSim.getState().reset();
+      let compiled = state.compiledWasm;
+      const wantsWasm =
+        state.logicSource !== NOOP_LOGIC_SOURCE && state.logicSource !== UNAVAILABLE_LOGIC_SOURCE;
+      if (wantsWasm && !compiled) {
+        useSim.getState().pushLog("sys", "compiling Rust logic for simulation…");
+        try {
+          compiled = await compileLogic(state.logicSource);
+          state.setCompiledWasm(compiled);
+          state.upsertWasmModule({ id: compiled.moduleId, path: compiled.path, memory_kb: 128 });
+          useSim.getState().pushLog("sys", `compiled ${compiled.path} (${compiled.sizeBytes} bytes)`);
+        } catch (err) {
+          useSim.getState().pushLog("err", `compile failed: ${err instanceof Error ? err.message : String(err)}`);
+          compiled = null;
+        }
+      }
+      if (cancelled) return;
+      const session = await SimSession.start({
+        widgets: state.widgets,
+        dataSources: state.dataSources,
+        wasmBytes: compiled && wantsWasm ? base64ToBytes(compiled.wasmBase64) : null,
+        defaultTickMs: state.wasmModules[0]?.tick_ms,
+      });
+      if (cancelled) {
+        session.stop();
+        return;
+      }
+      simRef.current = session;
+    })().catch((err) => {
+      useSim.getState().pushLog("err", err instanceof Error ? err.message : String(err));
+    });
+    return () => {
+      cancelled = true;
+      simRef.current?.stop();
+      simRef.current = null;
+    };
+  }, [b.simulate, simEpoch]);
+
+  useEffect(() => {
+    if (!token || !me?.id) {
+      setSavedPages([]);
+      return;
+    }
+    fetch(`${API}/api/v1/payloads/builder-pages`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(await readApiError(res));
+        return res.json() as Promise<SavedBuilderPage[]>;
+      })
+      .then(setSavedPages)
+      .catch((err) => console.debug("[builder] saved-pages:load-failed", err));
+  }, [token, me?.id]);
 
   if (!mounted) {
     return (
@@ -78,8 +154,40 @@ export default function BuilderPage() {
       orientation: b.orientation,
       dataSources: b.dataSources,
       wasmModules: wasmModulesForExport(),
+      logicSource: b.logicSource,
       widgets: b.widgets,
     });
+
+  const refreshSavedPages = async () => {
+    if (!token || !me?.id) return;
+    const res = await fetch(`${API}/api/v1/payloads/builder-pages`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(await readApiError(res));
+    setSavedPages((await res.json()) as SavedBuilderPage[]);
+  };
+
+  const loadSavedPage = async (packageId: string) => {
+    if (!packageId || !token) return;
+    try {
+      setBusy("load");
+      console.debug("[builder] saved-page:load", { packageId });
+      const res = await fetch(`${API}/api/v1/payloads/builder-pages/${encodeURIComponent(packageId)}/latest`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(await readApiError(res));
+      const json = (await res.json()) as BuilderPageResponse;
+      b.loadLayout(json.latest.layout);
+      setMessage(
+        `✓ Opened "${json.title}" ${json.latest.version} from server\n\n` +
+          "Edits now happen on this saved page. Use Save / Publish to write a new bundle/version back to the Hub.",
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const onExport = () => {
     try {
@@ -94,6 +202,7 @@ export default function BuilderPage() {
     try {
       setBusy("publish");
       const layout = buildLayout();
+      console.debug("[builder] publish:start", { packageId: layout.meta.id, version: layout.meta.version });
 
       if (!me?.id) {
         const res = await fetch(`${API}/api/v1/payloads/validate`, {
@@ -102,12 +211,21 @@ export default function BuilderPage() {
           body: JSON.stringify({ layout }),
         });
         if (!res.ok) throw new Error(await readApiError(res));
-        downloadLayout(layout);
         setMessage(
-          `✓ Layout validated and exported for "${layout.meta.name}".\n\n` +
-            "Login as admin before publishing to the server/store or assigning this page to a device.",
+          `✓ Layout is valid for "${layout.meta.name}".\n\n` +
+            "Sign in as admin, then press Save / Publish to save it into the Hub and Store. Use Export layout.json only when you explicitly want a local file.",
         );
         return;
+      }
+
+      const savedPackageExists = savedPages.some((page) => page.packageId === layout.meta.id);
+      const hasWasm = (layout.wasm?.length ?? 0) > 0;
+      const logicChanged = b.logicSource !== b.logicStarterSource;
+      if (hasWasm && !b.compiledWasm && !savedPackageExists) {
+        throw new Error("Compile Rust before the first Save / Publish for a page with WASM logic.");
+      }
+      if (hasWasm && logicChanged && !b.compiledWasm) {
+        throw new Error("Logic changed. Click Edit Logic → Compile Rust before Save / Publish.");
       }
 
       const res = await fetch(`${API}/api/v1/payloads/publish-compiled`, {
@@ -134,10 +252,14 @@ export default function BuilderPage() {
         bundleUrl: string;
         bundleSha256: string;
         sizeBytes: number;
+        marketplaceItem?: { slug: string; title: string; published: boolean };
       };
+      console.debug("[builder] publish:done", published);
+      await refreshSavedPages();
       setMessage(
-        `✓ Published "${layout.meta.name}" ${published.version}\n\n` +
+        `✓ Saved / Published "${layout.meta.name}" ${published.version}\n\n` +
           `PayloadVersion: ${published.payloadVersionId}\n` +
+          (published.marketplaceItem ? `Store item: ${published.marketplaceItem.slug} (${published.marketplaceItem.published ? "published" : "draft"})\n` : "") +
           `Bundle: ${published.bundleUrl}\n` +
           `SHA256: ${published.bundleSha256}\n` +
           `Size: ${published.sizeBytes} bytes\n\n` +
@@ -153,24 +275,14 @@ export default function BuilderPage() {
   const onCompileLogic = async () => {
     try {
       setBusy("compile");
-      const res = await fetch(`${API}/api/v1/payloads/compile-wasm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: b.logicSource, moduleId: "logic" }),
-      });
-      if (!res.ok) throw new Error(await readApiError(res));
-      const json = (await res.json()) as CompileWasmResponse;
-      const compiled: CompiledWasm = {
-        moduleId: json.moduleId,
-        path: json.path,
-        sizeBytes: json.sizeBytes,
-        sha256: json.sha256,
-        wasmBase64: json.wasmBase64,
-        compiledAt: new Date().toISOString(),
-        diagnostics: json.diagnostics,
-      };
+      if (b.logicSource === UNAVAILABLE_LOGIC_SOURCE) {
+        throw new Error("This older page has no saved Rust source. Paste the source or click Reset page logic before compiling.");
+      }
+      console.debug("[builder] compile:start", { moduleId: "logic", sourceBytes: new Blob([b.logicSource]).size });
+      const compiled = await compileLogic(b.logicSource);
       b.setCompiledWasm(compiled);
       b.upsertWasmModule({ id: compiled.moduleId, path: compiled.path, memory_kb: 128 });
+      console.debug("[builder] compile:done", { path: compiled.path, sizeBytes: compiled.sizeBytes, sha256: compiled.sha256 });
       setMessage(`✓ Logic compiled to ${compiled.path} (${compiled.sizeBytes} bytes)\nSHA256: ${compiled.sha256}`);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
@@ -217,14 +329,33 @@ export default function BuilderPage() {
               if (e.target.value) b.loadTemplate(e.target.value as never);
               e.target.value = "";
             }}
-            title="Load a starter page"
+            title="Starter template: creates an editable copy, not a live device page"
           >
-            <option value="">Load template…</option>
+            <option value="">Starter template…</option>
             <option value="clock">Clock</option>
             <option value="crypto">Crypto</option>
+            <option value="weather">Weather</option>
             <option value="welcome">Welcome</option>
             <option value="led_toggle">LED Toggle</option>
             <option value="blank">Blank</option>
+          </select>
+
+          <select
+            className="px-2 py-1 rounded bg-[var(--ccp-panel)] border border-[var(--ccp-border)] w-48"
+            value=""
+            disabled={!token || busy !== null}
+            onChange={(e) => {
+              void loadSavedPage(e.target.value);
+              e.target.value = "";
+            }}
+            title="Open a page already saved/published on the Hub"
+          >
+            <option value="">{token ? "Open saved page…" : "Sign in to open saved pages"}</option>
+            {savedPages.map((page) => (
+              <option key={page.packageId} value={page.packageId}>
+                {page.title} {page.latest.version}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -236,7 +367,7 @@ export default function BuilderPage() {
                 !b.simulate ? "bg-[var(--ccp-accent)] text-black font-semibold" : "bg-[var(--ccp-panel)]"
               }`}
             >
-              Edit
+              Edit Properties
             </button>
             <button
               onClick={() => b.setSimulate(true)}
@@ -244,7 +375,7 @@ export default function BuilderPage() {
                 b.simulate ? "bg-[var(--ccp-accent)] text-black font-semibold" : "bg-[var(--ccp-panel)]"
               }`}
             >
-              ▶ Simulate
+              Simulate
             </button>
           </div>
 
@@ -265,7 +396,7 @@ export default function BuilderPage() {
             disabled={busy !== null}
             className="px-4 py-1.5 rounded bg-[var(--ccp-accent)] text-black font-semibold"
           >
-            {busy === "publish" ? "Publishing…" : "Publish…"}
+            {busy === "publish" ? "Saving…" : "Save / Publish"}
           </button>
         </div>
       </div>
@@ -280,7 +411,7 @@ export default function BuilderPage() {
         <div className="grid grid-cols-[280px_minmax(520px,1fr)_320px] gap-4 flex-1 min-h-0">
           <BuilderSidebar />
           <BuilderCanvas />
-          <Inspector />
+          {b.simulate ? <SimulateInspector onRestart={() => setSimEpoch((n) => n + 1)} /> : <Inspector />}
         </div>
         <DragOverlay>
           {dragLabel ? (
@@ -308,12 +439,13 @@ function LogicEditor({
   onCompile,
 }: {
   open: boolean;
-  busy: "compile" | "publish" | null;
+  busy: "compile" | "publish" | "load" | null;
   onClose: () => void;
   onCompile: () => void;
 }) {
   const source = useBuilder((s) => s.logicSource);
   const setSource = useBuilder((s) => s.setLogicSource);
+  const resetSource = useBuilder((s) => s.resetLogicSource);
   const compiled = useBuilder((s) => s.compiledWasm);
 
   if (!open) return null;
@@ -325,12 +457,12 @@ function LogicEditor({
           <div className="min-w-0">
             <h2 className="font-semibold text-[var(--ccp-fg)]">Page Logic</h2>
             <p className="text-xs text-[var(--ccp-muted)] truncate">
-              Rust source compiled by the server into wasm/page.wasm for this page only.
+              Rust source for this page only. Compile to attach wasm/logic.wasm before publishing.
             </p>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button className="btn px-3 py-1.5 text-xs" onClick={() => setSource(DEFAULT_LOGIC_SOURCE)}>
-              Reset template
+            <button className="btn px-3 py-1.5 text-xs" onClick={resetSource}>
+              Reset page logic
             </button>
             <button className="btn px-3 py-1.5 text-xs" onClick={onCompile} disabled={busy !== null}>
               {busy === "compile" ? "Compiling…" : "Compile Rust"}
@@ -360,6 +492,130 @@ function LogicEditor({
       </section>
     </div>
   );
+}
+
+function SimulateInspector({ onRestart }: { onRestart: () => void }) {
+  const wasmStatus = useSim((s) => s.wasmStatus);
+  const ticks = useSim((s) => s.ticks);
+  const logs = useSim((s) => s.logs);
+  const streams = useSim((s) => s.streams);
+  const compiled = useBuilder((s) => s.compiledWasm);
+  const [stream, setStream] = useState("");
+  const [payload, setPayload] = useState('{"price": 64000}');
+  const logRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
+  }, [logs.length]);
+
+  const statusLabel =
+    wasmStatus === "running"
+      ? `wasm running · ${compiled ? `${compiled.sizeBytes} bytes` : ""} · ${ticks} ticks`
+      : wasmStatus === "error"
+        ? "wasm error — see log"
+        : "bindings only (no wasm logic)";
+  const statusColor =
+    wasmStatus === "running" ? "text-[#0ECB81]" : wasmStatus === "error" ? "text-[#F6465D]" : "text-[var(--ccp-muted)]";
+  const MODE_LABEL: Record<string, string> = {
+    time: "real time",
+    binance: "live Binance",
+    mock: "mock once",
+    manual: "manual",
+  };
+
+  return (
+    <aside className="min-h-0 overflow-y-auto text-xs text-[var(--ccp-muted)] border border-[var(--ccp-border)] rounded-lg p-3 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="uppercase tracking-wide text-[var(--ccp-accent)]">Simulation</h2>
+        <button className="btn py-1 px-2 text-xs" onClick={onRestart}>Restart</button>
+      </div>
+
+      <div className={`rounded border border-[var(--ccp-border)] p-2 ${statusColor}`}>
+        {statusLabel}
+        <div className="text-[10px] text-[var(--ccp-muted)] mt-1">
+          This runs the exact wasm a CryptoClock receives — clicks, ticks and data go through the same ABI.
+        </div>
+      </div>
+
+      <section>
+        <h3 className="uppercase tracking-wide mb-1">Data streams</h3>
+        {streams.length === 0 && <div className="text-[var(--ccp-muted)]">none (add Data Sources or subscribe in logic)</div>}
+        <div className="space-y-1">
+          {streams.map((s) => (
+            <div key={s.stream} className="rounded border border-[var(--ccp-border)] p-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[var(--ccp-fg)] truncate">{s.stream}</span>
+                <span className="shrink-0 px-1 rounded bg-[var(--ccp-panel-2)]">{MODE_LABEL[s.mode]}</span>
+              </div>
+              {s.lastAt && (
+                <div className="text-[10px] truncate" title={s.lastPayload}>
+                  {s.lastAt} · {s.lastPayload}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h3 className="uppercase tracking-wide mb-1">Send test payload</h3>
+        <select className="select w-full text-xs px-2 py-1 mb-1" value={stream} onChange={(e) => setStream(e.target.value)}>
+          <option value="">choose stream…</option>
+          {streams.map((s) => (
+            <option key={s.stream} value={s.stream}>{s.stream}</option>
+          ))}
+        </select>
+        <textarea
+          className="input w-full text-xs px-2 py-1 font-mono h-16 resize-none"
+          value={payload}
+          onChange={(e) => setPayload(e.target.value)}
+        />
+        <button
+          className="btn w-full py-1 text-xs mt-1"
+          disabled={!stream}
+          onClick={() => getSimSession()?.deliver(stream, payload)}
+        >
+          Deliver to page
+        </button>
+      </section>
+
+      <section className="flex flex-col min-h-0">
+        <h3 className="uppercase tracking-wide mb-1">Log</h3>
+        <div ref={logRef} className="rounded border border-[var(--ccp-border)] bg-[#050808] p-2 h-44 overflow-y-auto font-mono text-[10px] space-y-0.5">
+          {logs.map((l, i) => (
+            <div
+              key={i}
+              className={
+                l.level === "err" ? "text-[#F6465D]" : l.level === "warn" ? "text-[#F0B90B]" : l.level === "sys" ? "text-[#15c3a6]" : "text-[#DCEBE7]"
+              }
+            >
+              {l.at} {l.msg}
+            </div>
+          ))}
+          {logs.length === 0 && <div>—</div>}
+        </div>
+      </section>
+    </aside>
+  );
+}
+
+async function compileLogic(source: string): Promise<CompiledWasm> {
+  const res = await fetch(`${API}/api/v1/payloads/compile-wasm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, moduleId: "logic" }),
+  });
+  if (!res.ok) throw new Error(await readApiError(res));
+  const json = (await res.json()) as CompileWasmResponse;
+  return {
+    moduleId: json.moduleId,
+    path: json.path,
+    sizeBytes: json.sizeBytes,
+    sha256: json.sha256,
+    wasmBase64: json.wasmBase64,
+    compiledAt: new Date().toISOString(),
+    diagnostics: json.diagnostics,
+  };
 }
 
 function BuilderSidebar() {

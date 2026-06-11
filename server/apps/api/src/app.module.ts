@@ -9,6 +9,7 @@ import { MarketplaceModule } from "./marketplace/marketplace.module";
 import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
 import { FeaturesModule } from "./features/features.module";
+import { FeedsModule } from "./feeds/feeds.module";
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { FeaturesModule } from "./features/features.module";
     MarketplaceModule,
     UsersModule,
     FeaturesModule,
+    FeedsModule,
   ],
 })
 export class AppModule {}

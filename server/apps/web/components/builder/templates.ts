@@ -1,47 +1,117 @@
 import type { WidgetNode } from "@ccp/shared";
 
-export type TemplateKey = "blank" | "clock" | "crypto" | "welcome" | "led_toggle";
+export type TemplateKey = "blank" | "clock" | "crypto" | "weather" | "welcome" | "led_toggle";
 
 /** Starter layouts — the "old pages" a designer can load and tweak. */
 export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[] }> = {
   blank: { name: "Blank", widgets: [] },
 
+  /* Mirrors the native clock page (home_ui.c): date above, big time, small
+     orange seconds at the minutes' baseline, 48x48 brand logo bottom-center.
+     Driven by CLOCK_LOGIC_SOURCE (real wasm) — not by mock bindings. */
   clock: {
     name: "Clock",
     widgets: [
       {
-        type: "label", id: "time", x: 40, y: 90, w: 400, h: 110,
-        props: { text: "12:34" },
-        style: { text_color: "#00D1FF", align: "center", font: "montserrat_48" },
-        bindings: [{ prop: "text", source: "clock", path: "hhmm" }],
+        type: "label", id: "date", x: 40, y: 92, w: 400, h: 26,
+        props: { text: "Wednesday  11 Jun 2026" },
+        style: { text_color: "#848E9C", align: "center", font: "montserrat_20" },
       },
       {
-        type: "label", id: "date", x: 40, y: 210, w: 400, h: 28,
-        props: { text: "Tue 10 Jun 2026" },
-        style: { text_color: "#848E9C", align: "center" },
-        bindings: [{ prop: "text", source: "clock", path: "date" }],
+        type: "label", id: "time", x: 40, y: 126, w: 400, h: 60,
+        props: { text: "--:--" },
+        style: { text_color: "#00D1FF", align: "center", font: "montserrat_48" },
+      },
+      {
+        type: "label", id: "sec", x: 318, y: 160, w: 40, h: 26,
+        props: { text: "" },
+        style: { text_color: "#FF9500", align: "left", font: "montserrat_20" },
+      },
+      {
+        type: "image", id: "logo", x: 216, y: 266, w: 48, h: 48,
+        props: { src: "A:/pages/clock/assets/logo.png" }, style: {},
       },
     ],
   },
 
+  /* Faithful copy of the native crypto page (home_ui.c build_crypto_page):
+     symbol-cycle button, USD/THB toggle, live dot, 48pt price, 24h change,
+     444x130 candlestick canvas (drawn by CRYPTO_LOGIC_SOURCE wasm), timeframe
+     cycle button, "Binance · live" status. Same colors/positions as the C code. */
   crypto: {
     name: "Crypto",
     widgets: [
       {
-        type: "label", id: "pair", x: 18, y: 12, w: 200, h: 28,
+        type: "button", id: "sym_btn", x: 50, y: 8, w: 150, h: 36,
         props: { text: "BTC/USDT" },
-        style: { text_color: "#EAECEF" },
+        style: { bg_color: "#161B22", text_color: "#EAECEF", radius: 8, border_width: 1, border_color: "#2B3139", font: "montserrat_20" },
+        actions: [{ on: "clicked", do: "wasm.event", target: "logic", event_id: 101 }],
       },
       {
-        type: "label", id: "price", x: 18, y: 50, w: 300, h: 56,
-        props: { text: "64,231" },
-        style: { text_color: "#0ECB81", font: "montserrat_48" },
-        bindings: [{ prop: "text", source: "crypto", path: "BTCUSDT.price", format: "$%s" }],
+        type: "button", id: "cur_btn", x: 366, y: 8, w: 58, h: 32,
+        props: { text: "USD" },
+        style: { bg_color: "#161B22", text_color: "#F0B90B", radius: 8, border_width: 1, border_color: "#F0B90B" },
+        actions: [{ on: "clicked", do: "wasm.event", target: "logic", event_id: 102 }],
       },
       {
-        type: "chart", id: "candles", x: 18, y: 170, w: 444, h: 130,
-        props: {}, style: { bg_color: "#161B22", radius: 12 },
-        bindings: [{ prop: "series", source: "crypto", path: "BTCUSDT.klines" }],
+        type: "led", id: "dot", x: 208, y: 22, w: 10, h: 10,
+        props: { on: false, color: "#848E9C" }, style: {},
+      },
+      {
+        type: "label", id: "price", x: 18, y: 58, w: 330, h: 58,
+        props: { text: "--" },
+        style: { text_color: "#EAECEF", align: "left", font: "montserrat_48" },
+      },
+      {
+        type: "label", id: "change", x: 20, y: 116, w: 280, h: 26,
+        props: { text: "loading..." },
+        style: { text_color: "#848E9C", align: "left", font: "montserrat_20" },
+      },
+      {
+        type: "canvas", id: "candles", x: 18, y: 152, w: 444, h: 130,
+        props: {}, style: { bg_color: "#161B22", radius: 12, border_width: 1, border_color: "#2B3139" },
+      },
+      {
+        type: "button", id: "tf_btn", x: 16, y: 286, w: 64, h: 30,
+        props: { text: "15m" },
+        style: { bg_color: "#161B22", text_color: "#EAECEF", radius: 8, border_width: 1, border_color: "#2B3139" },
+        actions: [{ on: "clicked", do: "wasm.event", target: "logic", event_id: 103 }],
+      },
+      {
+        type: "label", id: "updated", x: 280, y: 286, w: 184, h: 18,
+        props: { text: "connecting..." },
+        style: { text_color: "#848E9C", align: "right" },
+      },
+    ],
+  },
+
+  /* Sellable Weather page — bindings fill the labels from stream weather.bangkok
+     (mock values in Simulate until a server-side weather feeder publishes). */
+  weather: {
+    name: "Weather",
+    widgets: [
+      {
+        type: "label", id: "city", x: 40, y: 36, w: 400, h: 32,
+        props: { text: "Bangkok" },
+        style: { text_color: "#EAECEF", align: "center", font: "montserrat_28" },
+        bindings: [{ prop: "text", source: "weather", path: "city" }],
+      },
+      {
+        type: "label", id: "temp", x: 40, y: 96, w: 400, h: 60,
+        props: { text: "31°C" },
+        style: { text_color: "#15C3A6", align: "center", font: "montserrat_48" },
+        bindings: [{ prop: "text", source: "weather", path: "temp" }],
+      },
+      {
+        type: "label", id: "desc", x: 40, y: 176, w: 400, h: 26,
+        props: { text: "Partly cloudy" },
+        style: { text_color: "#848E9C", align: "center", font: "montserrat_20" },
+        bindings: [{ prop: "text", source: "weather", path: "desc" }],
+      },
+      {
+        type: "label", id: "updated", x: 40, y: 286, w: 400, h: 18,
+        props: { text: "CryptoClock Weather" },
+        style: { text_color: "#848E9C", align: "center" },
       },
     ],
   },
@@ -107,11 +177,3 @@ export const MOCK: Record<string, Record<string, unknown>> = {
   device: { name: "Lobby display", battery: "92%" },
 };
 
-/** Resolve a widget's text binding to a mock display string (simulate mode). */
-export function resolveText(w: WidgetNode): string | null {
-  const b = w.bindings?.find((x) => x.prop === "text");
-  if (!b) return null;
-  const raw = MOCK[b.source]?.[b.path ?? ""];
-  if (raw === undefined) return `{${b.source}.${b.path ?? ""}}`;
-  return b.format ? b.format.replace("%s", String(raw)) : String(raw);
-}

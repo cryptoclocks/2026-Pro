@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -7,6 +7,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { LayoutSchema, type Layout, type Manifest } from "@ccp/shared";
+import type { User } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 
 const execFileAsync = promisify(execFile);
@@ -37,6 +38,8 @@ type BundleFile = {
  */
 @Injectable()
 export class PayloadsService {
+  private readonly logger = new Logger(PayloadsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   validateLayout(layout: unknown): Layout {
@@ -75,6 +78,7 @@ export class PayloadsService {
 
     const moduleId = assertIdent(input.moduleId || "logic", "moduleId");
     const root = await mkdtemp(join(tmpdir(), "ccp-page-logic-"));
+    this.logger.debug(`compileRustWasm:start module=${moduleId} bytes=${Buffer.byteLength(input.source, "utf8")}`);
 
     try {
       await mkdir(join(root, "src"), { recursive: true });
@@ -101,6 +105,7 @@ export class PayloadsService {
         throw new BadRequestException(`Compiled WASM size must be 1..${MAX_WASM_BYTES} bytes`);
       }
 
+      this.logger.debug(`compileRustWasm:done module=${moduleId} size=${wasm.length} sha256=${sha256(wasm)}`);
       return {
         ok: true,
         moduleId,
@@ -113,6 +118,7 @@ export class PayloadsService {
     } catch (err) {
       if (err instanceof BadRequestException) throw err;
       const e = err as { message?: string; stdout?: string; stderr?: string };
+      this.logger.warn(`compileRustWasm:fail module=${moduleId}: ${[e.stderr, e.stdout, e.message].filter(Boolean).join(" ").slice(0, 500)}`);
       throw new BadRequestException({
         message: "Rust WASM compile failed",
         diagnostics: [e.stderr, e.stdout, e.message].filter(Boolean).join("\n").trim(),
@@ -135,6 +141,7 @@ export class PayloadsService {
 
     const packageId = opts.layout.meta.id;
     const version = opts.version || opts.layout.meta.version;
+    this.logger.debug(`publishCompiled:start package=${packageId} version=${version} wasm=${opts.wasmFiles?.length ?? 0}`);
     const files: BundleFile[] = [
       {
         path: "layout.json",
@@ -151,8 +158,27 @@ export class PayloadsService {
       files.push({ path, data });
     }
 
+    const bundled = new Set(files.map((file) => file.path));
+    for (const module of opts.layout.wasm ?? []) {
+      const path = assertBundlePath(module.path);
+      if (bundled.has(path)) continue;
+      const previous = await this.readLatestPayloadFile(packageId, path);
+      if (!previous) {
+        throw new BadRequestException(
+          `${path} is referenced by the layout but no compiled file was provided. Compile Rust before the first publish.`,
+        );
+      }
+      files.push({ path, data: previous });
+      bundled.add(path);
+      this.logger.debug(`publishCompiled:carried-forward ${path} package=${packageId}`);
+    }
+
     const manifest = this.buildManifest(packageId, version, files);
-    const bundle = buildZip(files);
+    // firmware sync_manager verifies <dir>/manifest.json after unzip — ship it inside the bundle
+    const bundle = buildZip([
+      ...files,
+      { path: "manifest.json", data: Buffer.from(JSON.stringify(manifest, null, 2), "utf8") },
+    ]);
     const bundleSha256 = sha256(bundle);
     const bundleKey = `payloads/${packageId}/${version}/bundle.zip`;
     const storageRoot = this.storageRoot();
@@ -179,6 +205,14 @@ export class PayloadsService {
       sizeBytes: bundle.length,
       manifest,
     });
+    const marketplaceItem = await this.ensureMarketplaceItem({
+      ownerId: opts.ownerId,
+      payloadId: payloadVersion.payloadId,
+      packageId,
+      title: opts.title || opts.layout.meta.name,
+      description: opts.layout.meta.description,
+    });
+    this.logger.debug(`publishCompiled:done package=${packageId} version=${version} pv=${payloadVersion.id} item=${marketplaceItem.slug} bundle=${bundle.length}`);
 
     return {
       ok: true,
@@ -190,6 +224,14 @@ export class PayloadsService {
       bundleSha256,
       sizeBytes: bundle.length,
       manifest,
+      marketplaceItem: {
+        id: marketplaceItem.id,
+        slug: marketplaceItem.slug,
+        title: marketplaceItem.title,
+        published: marketplaceItem.published,
+        priceCents: marketplaceItem.priceCents,
+        currency: marketplaceItem.currency,
+      },
     };
   }
 
@@ -266,8 +308,119 @@ export class PayloadsService {
     return readFile(path);
   }
 
+  async listBuilderPages(user: User) {
+    const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+    const payloads = await this.prisma.payload.findMany({
+      where: isAdmin ? undefined : { ownerId: user.id },
+      orderBy: { createdAt: "desc" },
+      include: {
+        owner: { select: { email: true, name: true } },
+        marketItems: true,
+        versions: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+    });
+
+    return payloads
+      .filter((payload) => payload.versions.length > 0)
+      .map((payload) => {
+        const latest = payload.versions[0];
+        const item = payload.marketItems[0] ?? null;
+        return {
+          id: payload.id,
+          packageId: payload.packageId,
+          title: payload.title,
+          type: payload.type,
+          owner: payload.owner,
+          latest: {
+            id: latest.id,
+            version: latest.version,
+            status: latest.status,
+            createdAt: latest.createdAt,
+            sizeBytes: latest.sizeBytes,
+            bundleSha256: latest.bundleSha256,
+          },
+          marketplaceItem: item
+            ? {
+                id: item.id,
+                slug: item.slug,
+                title: item.title,
+                kind: item.kind,
+                published: item.published,
+                priceCents: item.priceCents,
+                currency: item.currency,
+              }
+            : null,
+        };
+      });
+  }
+
+  async getLatestBuilderPage(packageId: string, user: User) {
+    const payload = await this.prisma.payload.findUnique({
+      where: { packageId },
+      include: {
+        owner: { select: { email: true, name: true } },
+        marketItems: true,
+        versions: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
+    });
+    if (!payload || payload.versions.length === 0) {
+      throw new NotFoundException("builder page not found");
+    }
+    const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+    if (!isAdmin && payload.ownerId !== user.id) {
+      throw new NotFoundException("builder page not found");
+    }
+    const latest = payload.versions[0];
+    const item = payload.marketItems[0] ?? null;
+    return {
+      id: payload.id,
+      packageId: payload.packageId,
+      title: payload.title,
+      type: payload.type,
+      owner: payload.owner,
+      latest: {
+        id: latest.id,
+        version: latest.version,
+        status: latest.status,
+        createdAt: latest.createdAt,
+        sizeBytes: latest.sizeBytes,
+        bundleSha256: latest.bundleSha256,
+        manifest: latest.manifest,
+        layout: latest.layout,
+      },
+      marketplaceItem: item
+        ? {
+            id: item.id,
+            slug: item.slug,
+            title: item.title,
+            kind: item.kind,
+            published: item.published,
+            priceCents: item.priceCents,
+            currency: item.currency,
+          }
+        : null,
+    };
+  }
+
   private storageRoot() {
     return process.env.PAYLOAD_STORAGE_DIR || join(process.cwd(), "storage");
+  }
+
+  private async readLatestPayloadFile(packageId: string, path: string): Promise<Buffer | null> {
+    const version = await this.prisma.payloadVersion.findFirst({
+      where: { payload: { packageId } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (!version) return null;
+    const fullPath = join(this.storageRoot(), "payloads", packageId, version.version, assertBundlePath(path));
+    if (!existsSync(fullPath)) return null;
+    return readFile(fullPath);
   }
 
   private resolveCargo() {
@@ -286,6 +439,38 @@ export class PayloadsService {
       if (existsSync(sibling)) return sibling;
     }
     return undefined;
+  }
+
+  private async ensureMarketplaceItem(opts: {
+    ownerId: string;
+    payloadId: string;
+    packageId: string;
+    title: string;
+    description?: string;
+  }) {
+    const slug = slugFromPackageId(opts.packageId);
+    return this.prisma.marketplaceItem.upsert({
+      where: { slug },
+      update: {
+        title: opts.title,
+        description: opts.description,
+        payloadId: opts.payloadId,
+        authorId: opts.ownerId,
+        kind: "PAGE",
+      },
+      create: {
+        slug,
+        title: opts.title,
+        description: opts.description,
+        kind: "PAGE",
+        icon: "widgets",
+        payloadId: opts.payloadId,
+        authorId: opts.ownerId,
+        priceCents: 0,
+        currency: "thb",
+        published: false,
+      },
+    });
   }
 }
 
@@ -329,6 +514,14 @@ function assertBundlePath(path: string) {
 
 function sha256(data: Buffer) {
   return createHash("sha256").update(data).digest("hex");
+}
+
+function slugFromPackageId(packageId: string) {
+  return packageId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
 }
 
 function buildZip(files: BundleFile[]) {

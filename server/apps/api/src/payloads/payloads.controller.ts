@@ -1,4 +1,6 @@
-import { Body, Controller, Get, Header, Param, Post, StreamableFile } from "@nestjs/common";
+import { Body, Controller, Get, Header, Param, Post, StreamableFile, UseGuards } from "@nestjs/common";
+import type { User } from "@prisma/client";
+import { CurrentUser, UserGuard } from "../auth/auth.guards";
 import { PayloadsService } from "./payloads.service";
 
 @Controller()
@@ -21,12 +23,28 @@ export class PayloadsController {
     });
   }
 
+  /** Admin/user Builder library: pages that can be opened again for editing. */
+  @Get("payloads/builder-pages")
+  @UseGuards(UserGuard)
+  builderPages(@CurrentUser() user: User) {
+    return this.payloads.listBuilderPages(user);
+  }
+
+  /** Open the latest published/saved layout back into Builder. */
+  @Get("payloads/builder-pages/:packageId/latest")
+  @UseGuards(UserGuard)
+  latestBuilderPage(@Param("packageId") packageId: string, @CurrentUser() user: User) {
+    return this.payloads.getLatestBuilderPage(packageId, user);
+  }
+
   /**
    * Builder path: validate layout, zip layout.json + compiled wasm files, store
    * bundle locally, and register an immediately assignable PayloadVersion.
    */
   @Post("payloads/publish-compiled")
+  @UseGuards(UserGuard)
   publishCompiled(
+    @CurrentUser() user: User,
     @Body()
     body: {
       ownerId: string;
@@ -38,7 +56,7 @@ export class PayloadsController {
   ) {
     const layout = this.payloads.validateLayout(body.layout);
     return this.payloads.publishCompiled({
-      ownerId: body.ownerId,
+      ownerId: user.id,
       title: body.title,
       version: body.version,
       layout,
@@ -51,7 +69,9 @@ export class PayloadsController {
    * M5 swaps this for multipart upload -> MinIO -> server-side manifest.
    */
   @Post("payloads/publish")
+  @UseGuards(UserGuard)
   publish(
+    @CurrentUser() user: User,
     @Body()
     body: {
       ownerId: string;
@@ -66,7 +86,7 @@ export class PayloadsController {
   ) {
     const layout = this.payloads.validateLayout(body.layout);
     return this.payloads.publishVersion({
-      ownerId: body.ownerId,
+      ownerId: user.id,
       packageId: layout.meta.id,
       title: body.title || layout.meta.name,
       version: body.version || layout.meta.version,

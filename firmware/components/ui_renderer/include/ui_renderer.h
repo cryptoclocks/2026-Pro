@@ -61,6 +61,10 @@ esp_err_t ui_renderer_load_json(const char *json, size_t len, const char *base_d
 
 esp_err_t ui_renderer_show_page(const char *page_id);
 
+/** Screen of the package's first page; NULL when no layout is loaded.
+ *  home_ui adopts this screen into its swipe rotation (purchased pages). */
+lv_obj_t *ui_renderer_main_screen(void);
+
 /** Widget registry (stable indices for the WASM ABI). -1 / NULL when absent. */
 int       ui_renderer_widget_index(const char *id);
 lv_obj_t *ui_renderer_widget_by_index(int idx);

@@ -146,6 +146,11 @@ export const LayoutSchema = z.object({
       }),
     )
     .optional(),
+  builder: z
+    .object({
+      logic_source: z.string().max(128 * 1024).optional(),
+    })
+    .optional(),
   pages: z
     .array(
       z.object({

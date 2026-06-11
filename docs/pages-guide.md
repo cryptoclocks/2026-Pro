@@ -13,6 +13,9 @@
 
 ทุกหน้าหลักอยู่ในไฟล์เดียว: [`firmware/components/home_ui/home_ui.c`](../firmware/components/home_ui/home_ui.c)
 
+> 📘 อยากเขียน **logic** ของหน้า (ทั้ง native C และหน้า Builder/WASM แบบ Rust)
+> ดูคู่มือละเอียดทีละบรรทัดที่ [logic-guide.md](logic-guide.md)
+
 ---
 
 ## 1. หน้า Clock (นาฬิกา)

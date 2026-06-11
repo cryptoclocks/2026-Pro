@@ -27,6 +27,7 @@ interface AuthCtx {
   loading: boolean;
   hashError: string | null;
   requestLoginLink: (email: string) => Promise<string | null>;
+  signInWithGoogle: () => void;
   requestOtp: (email: string) => Promise<string | null>;
   verifyOtp: (email: string, code: string) => Promise<boolean>;
   signOut: () => void;
@@ -104,6 +105,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const requestOtp = requestLoginLink;
 
+  const signInWithGoogle = () => {
+    const redirectTo =
+      typeof window === "undefined" ? undefined : `${window.location.origin}/login`;
+    const url = new URL(`${SB_URL}/auth/v1/authorize`);
+    url.searchParams.set("provider", "google");
+    if (redirectTo) url.searchParams.set("redirect_to", redirectTo);
+    window.location.assign(url.toString());
+  };
+
   const verifyOtp = async (email: string, code: string): Promise<boolean> => {
     const res = await fetch(`${SB_URL}/auth/v1/verify`, {
       method: "POST",
@@ -127,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ token, me, loading, hashError, requestLoginLink, requestOtp, verifyOtp, signOut }}>
+    <Ctx.Provider value={{ token, me, loading, hashError, requestLoginLink, signInWithGoogle, requestOtp, verifyOtp, signOut }}>
       {children}
     </Ctx.Provider>
   );

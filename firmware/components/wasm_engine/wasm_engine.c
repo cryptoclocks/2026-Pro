@@ -9,6 +9,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <pthread.h>
+#include "esp_pthread.h"
 #include "freertos/queue.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -341,7 +343,10 @@ static void run_job(const wasm_job_t *job)
     }
 }
 
-static void wasm_task(void *arg)
+/* WAMR's esp-idf port calls pthread_self() when instantiating/destroying
+ * exec envs, which asserts on a raw FreeRTOS task — the worker must be a
+ * real pthread so it owns pthread TLS. */
+static void *wasm_task(void *arg)
 {
     wasm_job_t job;
     while (true) {
@@ -350,6 +355,7 @@ static void wasm_task(void *arg)
             free(job.payload);
         }
     }
+    return NULL;
 }
 
 /* deadline watchdog: terminate the active call when it overruns */
@@ -390,9 +396,16 @@ esp_err_t wasm_engine_init(const wasm_engine_hooks_t *hooks)
     s_eng.queue = xQueueCreate(16, sizeof(wasm_job_t));
     ESP_RETURN_ON_FALSE(s_eng.queue, ESP_ERR_NO_MEM, TAG, "queue");
 
-    BaseType_t ok = xTaskCreatePinnedToCore(wasm_task, "wasm_exec", WASM_TASK_STACK,
-                                            NULL, WASM_TASK_PRIO, &s_eng.task, WASM_TASK_CORE);
-    ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_FAIL, TAG, "task");
+    esp_pthread_cfg_t tcfg = esp_pthread_get_default_config();
+    tcfg.thread_name = "wasm_exec";
+    tcfg.stack_size = WASM_TASK_STACK;
+    tcfg.prio = WASM_TASK_PRIO;
+    tcfg.pin_to_core = WASM_TASK_CORE;
+    ESP_RETURN_ON_ERROR(esp_pthread_set_cfg(&tcfg), TAG, "pthread cfg");
+    pthread_t exec_thread;
+    ESP_RETURN_ON_FALSE(pthread_create(&exec_thread, NULL, wasm_task, NULL) == 0,
+                        ESP_FAIL, TAG, "task");
+    pthread_detach(exec_thread);
 
     const esp_timer_create_args_t sup_args = {
         .callback = supervisor_cb, .name = "wasm_sup",

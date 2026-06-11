@@ -25,6 +25,10 @@ void home_ui_show_wifi_setup(const char *ap_ssid);
 /** Build (if needed) and show the first enabled page. */
 void home_ui_show_home(void);
 
+/** Park the display on a blank screen (call before ui_renderer reloads a
+ *  package whose screens may be live); home_ui_reload() cleans it up. */
+void home_ui_park(void);
+
 /** True while a built-in screen owns the display (vs. a ui_renderer package). */
 bool home_ui_owns_screen(void);
 

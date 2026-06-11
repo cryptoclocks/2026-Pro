@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 
 export default function LoginPage() {
-  const { requestLoginLink, verifyOtp, hashError, me } = useAuth();
+  const { requestLoginLink, signInWithGoogle, verifyOtp, hashError, me } = useAuth();
   const router = useRouter();
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -41,7 +41,7 @@ export default function LoginPage() {
       <div className="card p-7 w-full max-w-sm">
         <h1 className="text-xl font-semibold mb-1">Sign in</h1>
         <p className="text-sm text-[var(--ccp-muted)] mb-5">
-          Admin & user console. We&apos;ll email you a sign-in link.
+          Admin & user console. Use Google or an email sign-in link.
         </p>
         {hashError && (
           <div className="text-[var(--ccp-red)] text-sm mb-3 border border-[var(--ccp-red)]/40 rounded p-2">
@@ -49,6 +49,18 @@ export default function LoginPage() {
             one below and click it once.
           </div>
         )}
+        <button
+          className="btn btn-primary w-full justify-center mb-4"
+          disabled={busy}
+          onClick={signInWithGoogle}
+        >
+          Sign in with Google
+        </button>
+        <div className="flex items-center gap-3 mb-4">
+          <div className="h-px flex-1 bg-[var(--ccp-border)]" />
+          <span className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)]">or email link</span>
+          <div className="h-px flex-1 bg-[var(--ccp-border)]" />
+        </div>
         <label className="block text-xs text-[var(--ccp-muted)] mb-1">Email</label>
         <input
           className="input w-full mb-3"
@@ -74,7 +86,7 @@ export default function LoginPage() {
         )}
         {err && <div className="text-[var(--ccp-red)] text-sm mb-3">{err}</div>}
         <button
-          className="btn btn-primary w-full justify-center"
+          className="btn w-full justify-center"
           disabled={busy}
           onClick={sent ? verify : send}
         >

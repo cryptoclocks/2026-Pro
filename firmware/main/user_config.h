@@ -17,7 +17,7 @@
 /* Base URL ของ Hub API — ตอนนี้ชี้เครื่อง Mac ที่รัน `pnpm dev` (IP จาก
  * `ipconfig getifaddr en0`) / deploy Vercel แล้วเปลี่ยนเป็น URL จริง
  * เช่น "https://cryptoclock-hub.vercel.app" */
-#define CCP_CFG_SERVER_BASE_URL   "http://192.168.1.139:4000"
+#define CCP_CFG_SERVER_BASE_URL   "http://192.168.1.39:4000"
 
 /* ---------- เวลา ---------- */
 /* ไทย = UTC+7 = 420 นาที */

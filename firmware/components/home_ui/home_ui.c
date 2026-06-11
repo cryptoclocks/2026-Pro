@@ -1,4 +1,6 @@
 #include "home_ui.h"
+#include "ui_renderer.h"
+#include "sync_manager.h"
 #include "display_engine.h"
 #include "storage.h"
 #include "ccp_board.h"
@@ -42,12 +44,13 @@ static const char *TAG = "home_ui";
 #define MAX_SLIDES       8
 #define SPARK_POINTS     60
 
-typedef enum { PAGE_CLOCK, PAGE_CRYPTO, PAGE_SLIDESHOW } page_kind_t;
+typedef enum { PAGE_CLOCK, PAGE_CRYPTO, PAGE_SLIDESHOW, PAGE_PACKAGE } page_kind_t;
 
 typedef struct {
     page_kind_t kind;
     char id[16];
     lv_obj_t *screen;
+    bool external;   /* screen owned by ui_renderer (purchased page) */
 } page_t;
 
 #define MAX_SYMBOLS 4
@@ -97,6 +100,7 @@ static struct {
     int page_count;
     int current;
     bool owns_screen;
+    lv_obj_t *park_screen;
     bool net_connected;
     char ip[16];
 
@@ -1456,11 +1460,24 @@ static void build_page(int idx)
     if (p->screen) {
         return;
     }
+    if (p->kind == PAGE_PACKAGE) {
+        lv_obj_t *pkg_scr = ui_renderer_main_screen();
+        if (pkg_scr) {
+            /* adopt the renderer-owned screen: swipe nav only, no home chrome
+             * (kept pristine so renderer reloads stay consistent) */
+            p->screen = pkg_scr;
+            p->external = true;
+            lv_obj_add_event_cb(p->screen, gesture_cb, LV_EVENT_GESTURE, NULL);
+            return;
+        }
+        /* package vanished since setup: fall through to an empty base screen */
+    }
     p->screen = screen_base();
     switch (p->kind) {
     case PAGE_CLOCK:     build_clock_page(p); break;
     case PAGE_CRYPTO:    build_crypto_page(p); break;
     case PAGE_SLIDESHOW: build_slideshow_page(p); break;
+    case PAGE_PACKAGE:   break;
     }
     add_menu_button(p->screen);
     add_page_dots(p->screen, idx);
@@ -1637,8 +1654,13 @@ static void destroy_pages(void)
     if (s.menu) { lv_obj_delete(s.menu); s.menu = NULL; }
     for (int i = 0; i < s.page_count; i++) {
         if (s.pages[i].screen) {
-            lv_obj_delete(s.pages[i].screen);
+            if (s.pages[i].external) {
+                lv_obj_remove_event_cb(s.pages[i].screen, gesture_cb);
+            } else {
+                lv_obj_delete(s.pages[i].screen);
+            }
             s.pages[i].screen = NULL;
+            s.pages[i].external = false;
         }
     }
     /* canvas object is destroyed with its screen; free the backing buffer */
@@ -1651,6 +1673,19 @@ static void destroy_pages(void)
     s.slide_img = NULL;
 }
 
+/* A purchased page is shown when the installed package id matches the page
+ * slug from settings.pages: "com.ccp.weather" <-> "weather". */
+static bool package_page_available(const char *page_id)
+{
+    char pkg[64] = "";
+    sync_manager_active_id(pkg, sizeof(pkg));
+    size_t pl = strlen(pkg), il = strlen(page_id);
+    if (!pl || pl <= il || !ui_renderer_main_screen()) {
+        return false;
+    }
+    return pkg[pl - il - 1] == '.' && !strcmp(pkg + pl - il, page_id);
+}
+
 static void setup_pages_from_cfg(void)
 {
     s.page_count = 0;
@@ -1661,7 +1696,8 @@ static void setup_pages_from_cfg(void)
         if (!strcmp(p->id, "clock")) p->kind = PAGE_CLOCK;
         else if (!strcmp(p->id, "crypto")) p->kind = PAGE_CRYPTO;
         else if (!strcmp(p->id, "slideshow")) p->kind = PAGE_SLIDESHOW;
-        else continue; /* unknown page id (future: purchased layout pages) */
+        else if (package_page_available(p->id)) p->kind = PAGE_PACKAGE;
+        else continue; /* page id without an installed package -> skip */
         s.page_count++;
     }
     if (s.page_count == 0) {
@@ -1669,6 +1705,12 @@ static void setup_pages_from_cfg(void)
         s.pages[0].kind = PAGE_CLOCK;
         s.page_count = 1;
     }
+    char list[96] = "";
+    for (int i = 0; i < s.page_count; i++) {
+        strlcat(list, s.pages[i].id, sizeof(list));
+        if (i < s.page_count - 1) strlcat(list, ",", sizeof(list));
+    }
+    ESP_LOGI(TAG, "pages in rotation: %s", list);
 }
 
 esp_err_t home_ui_init(void)
@@ -1701,6 +1743,19 @@ void home_ui_network_changed(bool connected, const char *ip)
     }
 }
 
+void home_ui_park(void)
+{
+    if (!display_engine_lock(0)) {
+        return;
+    }
+    if (s.owns_screen && !s.park_screen) {
+        s.park_screen = lv_obj_create(NULL);
+        lv_obj_set_style_bg_color(s.park_screen, lv_color_hex(COL_BG), 0);
+        lv_screen_load(s.park_screen);
+    }
+    display_engine_unlock();
+}
+
 esp_err_t home_ui_reload(void)
 {
     if (!display_engine_lock(0)) {
@@ -1731,6 +1786,10 @@ esp_err_t home_ui_reload(void)
     }
     if (parking) {
         lv_obj_delete(parking);
+    }
+    if (s.park_screen) {
+        lv_obj_delete(s.park_screen);
+        s.park_screen = NULL;
     }
     display_engine_unlock();
     return ESP_OK;

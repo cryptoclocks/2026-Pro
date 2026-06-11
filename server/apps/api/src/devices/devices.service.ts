@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { hash, compare } from "bcryptjs";
 import { nanoid } from "nanoid";
 import { PrismaService } from "../prisma/prisma.service";
@@ -8,6 +8,8 @@ import type { User } from "@prisma/client";
 
 @Injectable()
 export class DevicesService {
+  private readonly logger = new Logger(DevicesService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly mqtt: MqttBridgeService,
@@ -58,6 +60,7 @@ export class DevicesService {
 
   async listForUser(user: Pick<User, "id" | "role">) {
     const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+    this.logger.debug(`listForUser role=${user.role} admin=${isAdmin}`);
     const devices = await this.prisma.device.findMany({
       where: isAdmin ? undefined : { ownerId: user.id },
       include: {
@@ -73,8 +76,19 @@ export class DevicesService {
         where: { deviceId: d.deviceId },
         include: { item: true },
       });
-      out.push({ ...d, entitlements: ents.map((e) => ({ slug: e.item.slug, title: e.item.title, kind: e.item.kind, source: e.source })) });
+      out.push(
+        jsonSafe({
+          ...d,
+          entitlements: ents.map((e) => ({
+            slug: e.item.slug,
+            title: e.item.title,
+            kind: e.item.kind,
+            source: e.source,
+          })),
+        }),
+      );
     }
+    this.logger.debug(`listForUser returned ${out.length} devices`);
     return out;
   }
 
@@ -105,7 +119,7 @@ export class DevicesService {
       bundle_size: version.sizeBytes,
     };
     const cmdId = this.mqtt.sendCommand(device.deviceId, "sync", params as unknown as Record<string, unknown>);
-    return { device, cmdId };
+    return jsonSafe({ device, cmdId });
   }
 
   sendCommand(hwDeviceId: string, type: Parameters<MqttBridgeService["sendCommand"]>[1], params?: Record<string, unknown>) {
@@ -145,22 +159,39 @@ export class DevicesService {
   async grantItem(hwDeviceId: string, slug: string, actorUserId: string) {
     const [device, item] = await Promise.all([
       this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } }),
-      this.prisma.marketplaceItem.findUnique({ where: { slug } }),
+      this.prisma.marketplaceItem.findUnique({
+        where: { slug },
+        include: {
+          payloadRef: {
+            include: {
+              versions: { where: { status: "PUBLISHED" }, orderBy: { createdAt: "desc" }, take: 1 },
+            },
+          },
+        },
+      }),
     ]);
     if (!device) throw new NotFoundException("device not found");
     if (!item) throw new NotFoundException("item not found");
     const userId = device.ownerId ?? actorUserId;
+    this.logger.debug(`grantItem device=${hwDeviceId} slug=${slug} user=${userId}`);
     await this.prisma.entitlement.upsert({
       where: { deviceId_itemId: { deviceId: hwDeviceId, itemId: item.id } },
       update: { userId, source: "GIFT" },
       create: { deviceId: hwDeviceId, itemId: item.id, userId, source: "GIFT" },
     });
-    return this.syncEntitlements(hwDeviceId);
+    const synced = await this.syncEntitlements(hwDeviceId);
+    const latest = item.payloadRef?.versions[0];
+    if (latest) {
+      const assigned = await this.assignPayload(device.id, latest.id);
+      return { ok: true, entitlementSynced: synced, assigned };
+    }
+    return { ok: true, entitlementSynced: synced };
   }
 
   async revokeItem(hwDeviceId: string, slug: string) {
     const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
     if (!item) throw new NotFoundException("item not found");
+    this.logger.debug(`revokeItem device=${hwDeviceId} slug=${slug}`);
     await this.prisma.entitlement
       .delete({ where: { deviceId_itemId: { deviceId: hwDeviceId, itemId: item.id } } })
       .catch(() => undefined);
@@ -183,9 +214,37 @@ export class DevicesService {
   async syncEntitlements(hwDeviceId: string) {
     const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
     if (!device) return;
-    const slugs = await this.entitlementSlugs(hwDeviceId);
+    const ents = await this.prisma.entitlement.findMany({
+      where: { deviceId: hwDeviceId },
+      include: { item: true },
+    });
     const cfg = ((device.settings as Record<string, unknown>) ?? {});
-    cfg.entitlements = slugs;
+    cfg.entitlements = ents.map((e) => e.item.slug);
+
+    // PAGE rights also enter/leave the swipe rotation (settings.pages).
+    // Native ids stay untouched; entitled package pages are appended, revoked ones removed.
+    const NATIVE = new Set(["clock", "crypto", "slideshow"]);
+    const entitledPages = ents.filter((e) => e.item.kind === "PAGE").map((e) => e.item.slug);
+    const pages = Array.isArray(cfg.pages) ? (cfg.pages as string[]) : ["clock", "crypto", "slideshow"];
+    const kept = pages.filter((p) => NATIVE.has(p) || entitledPages.includes(p));
+    for (const slug of entitledPages) if (!kept.includes(slug)) kept.push(slug);
+    cfg.pages = kept;
+
     return this.putSettings(hwDeviceId, cfg);
   }
+}
+
+function jsonSafe<T>(value: T): T {
+  if (typeof value === "bigint") {
+    return value.toString() as T;
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => jsonSafe(item)) as T;
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, jsonSafe(item)]),
+    ) as T;
+  }
+  return value;
 }

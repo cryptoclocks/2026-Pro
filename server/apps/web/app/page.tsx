@@ -21,7 +21,7 @@ interface Device {
   owner?: { email: string; name: string | null } | null;
   entitlements?: Ent[];
 }
-interface CatalogItem { slug: string; title: string; kind: string; priceCents: number }
+interface CatalogItem { slug: string; title: string; kind: string; priceCents: number; currency: string; published?: boolean }
 
 export default function FleetPage() {
   return (
@@ -32,7 +32,7 @@ export default function FleetPage() {
 }
 
 function Fleet() {
-  const { token } = useAuth();
+  const { token, me } = useAuth();
   const [devices, setDevices] = useState<Device[]>([]);
   const [catalog, setCatalog] = useState<CatalogItem[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -53,10 +53,12 @@ function Fleet() {
 
   useEffect(() => {
     load();
-    api("/api/v1/store/items", token).then(setCatalog).catch(() => {});
+    api(me?.isAdmin ? "/api/v1/store/admin/items" : "/api/v1/store/items", token)
+      .then((r: CatalogItem[] | { managed: CatalogItem[] }) => setCatalog(Array.isArray(r) ? r : r.managed))
+      .catch(() => {});
     const t = setInterval(load, 10000);
     return () => clearInterval(t);
-  }, [load, token]);
+  }, [load, token, me]);
 
   const online = devices.filter((d) => d.online).length;
 
@@ -202,7 +204,9 @@ function RightsModal({ device, catalog, token, onClose, onChanged }: {
           <div key={c.slug} className="flex items-center gap-2 py-1.5 border-b border-[var(--ccp-border)]/40">
             <div className="flex-1">
               <div className="text-sm">{c.title} <span className="pill ml-1">{c.kind}</span></div>
-              <div className="text-[11px] text-[var(--ccp-muted)]">{c.slug} · ${(c.priceCents / 100).toFixed(2)}</div>
+              <div className="text-[11px] text-[var(--ccp-muted)]">
+                {c.slug} · {formatMoney(c.priceCents, c.currency)}{c.published === false ? " · draft" : ""}
+              </div>
             </div>
             <button className={has ? "btn btn-danger" : "btn btn-primary"} disabled={busy} onClick={() => toggle(c.slug, has)}>
               {has ? "Revoke" : "Grant"}
@@ -212,6 +216,14 @@ function RightsModal({ device, catalog, token, onClose, onChanged }: {
       })}
     </Modal>
   );
+}
+
+function formatMoney(minor: number, currency: string) {
+  if (minor === 0) return "Free";
+  return new Intl.NumberFormat(currency.toLowerCase() === "thb" ? "th-TH" : "en-US", {
+    style: "currency",
+    currency: currency.toUpperCase(),
+  }).format(minor / 100);
 }
 
 function SettingsModal({ device, token, onClose, onSaved }: {

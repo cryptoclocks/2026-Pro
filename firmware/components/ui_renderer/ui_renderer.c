@@ -908,9 +908,8 @@ esp_err_t ui_renderer_load_json(const char *json, size_t len, const char *base_d
         }
     }
 
-    if (s_ui.page_count > 0) {
-        lv_screen_load(s_ui.pages[0].screen);
-    }
+    /* note: no lv_screen_load here — home_ui owns the display and adopts
+     * package screens into its page rotation (ui_renderer_main_screen) */
     display_engine_unlock();
     cJSON_Delete(root);
 
@@ -937,6 +936,11 @@ esp_err_t ui_renderer_init(const ui_hooks_t *hooks)
         s_ui.hooks = *hooks;
     }
     return ESP_OK;
+}
+
+lv_obj_t *ui_renderer_main_screen(void)
+{
+    return s_ui.page_count > 0 ? s_ui.pages[0].screen : NULL;
 }
 
 esp_err_t ui_renderer_show_page(const char *page_id)

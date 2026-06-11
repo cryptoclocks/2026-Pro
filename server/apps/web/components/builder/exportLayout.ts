@@ -13,6 +13,7 @@ export function exportLayout(opts: {
   orientation: "landscape" | "portrait";
   dataSources: DataSourceConfig[];
   wasmModules: WasmModuleConfig[];
+  logicSource: string;
   widgets: WidgetNode[];
 }): Layout {
   const candidate = {
@@ -30,11 +31,12 @@ export function exportLayout(opts: {
         ...m,
         tick_ms: m.tick_ms && m.tick_ms >= 16 ? m.tick_ms : undefined,
       })),
+    builder: opts.logicSource ? { logic_source: opts.logicSource } : undefined,
     pages: [
       {
         id: "main",
         bg: "#0B0E11",
-        widgets: opts.widgets,
+        widgets: sanitizeWidgets(opts.widgets),
       },
     ],
   };
@@ -48,6 +50,18 @@ export function exportLayout(opts: {
     throw new Error(`Layout invalid:\n${issues}`);
   }
   return parsed.data;
+}
+
+function sanitizeWidgets(widgets: WidgetNode[]): WidgetNode[] {
+  return widgets.map((widget) => {
+    const bindings = widget.bindings?.filter((binding) => binding.source.trim());
+    const children = widget.children ? sanitizeWidgets(widget.children) : undefined;
+    return {
+      ...widget,
+      bindings: bindings?.length ? bindings : undefined,
+      children,
+    };
+  });
 }
 
 export function downloadLayout(layout: Layout): void {

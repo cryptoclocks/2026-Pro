@@ -4,10 +4,24 @@ import type { WidgetNode } from "@ccp/shared";
 import { useBuilder } from "./store";
 import { COMMON_STYLE, WIDGET_PROPS, type PropDef } from "./widgetProps";
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Help({ text }: { text: string }) {
+  return (
+    <span
+      className="inline-flex items-center justify-center w-4 h-4 rounded-full border border-[var(--ccp-border)] text-[10px] text-[var(--ccp-muted)]"
+      title={text}
+    >
+      ?
+    </span>
+  );
+}
+
+function Row({ label, help, children }: { label: string; help?: string; children: React.ReactNode }) {
   return (
     <label className="flex items-center justify-between gap-2 text-xs py-0.5">
-      <span className="text-[var(--ccp-muted)] truncate">{label}</span>
+      <span className="text-[var(--ccp-muted)] truncate flex items-center gap-1">
+        {label}
+        {help ? <Help text={help} /> : null}
+      </span>
       {children}
     </label>
   );
@@ -492,15 +506,16 @@ function BindingEditor({
   const sourceIds = Array.from(new Set([...dataSources.map((d) => d.id), ...bindings.map((b) => b.source)].filter(Boolean)));
 
   const setBinding = (index: number, patch: Partial<NonNullable<WidgetNode["bindings"]>[number]>) => {
-    const base = bindings[index] ?? { prop: "text", source: sourceIds[0] ?? "", path: "$" };
+    const base = bindings[index] ?? { prop: "text", source: "", path: "" };
     const next = [...bindings];
     next[index] = { ...base, ...patch };
-    setBindings(widget.id, next.filter((b) => b.source));
+    setBindings(widget.id, next);
   };
   const add = () => {
+    console.debug("[builder] binding:add", { widget: widget.id, sources: sourceIds });
     setBindings(widget.id, [
       ...bindings,
-      { prop: widget.type === "chart" ? "series.0" : "text", source: sourceIds[0] ?? "", path: "$" },
+      { prop: widget.type === "chart" ? "series.0" : "text", source: "", path: "" },
     ]);
   };
   const remove = (index: number) => {
@@ -520,7 +535,7 @@ function BindingEditor({
                 Remove
               </button>
             </div>
-            <Row label="target">
+            <Row label="target" help="Widget property to update, such as text, value, visibility, color, image src, or chart series.">
               <select
                 className={inputCls}
                 value={b.prop}
@@ -533,7 +548,7 @@ function BindingEditor({
                 ))}
               </select>
             </Row>
-            <Row label="source">
+            <Row label="source" help="Data Source id from the left panel. Example: crypto, clock, weather. Leave blank until you choose where data comes from.">
               {sourceIds.length ? (
                 <select
                   className={inputCls}
@@ -556,7 +571,7 @@ function BindingEditor({
                 />
               )}
             </Row>
-            <Row label="path">
+            <Row label="path" help="Path inside the incoming JSON payload. Example: $.last, BTCUSDT.price, or hhmm for mock data.">
               <input
                 className={inputCls}
                 placeholder="$.price"
@@ -564,7 +579,7 @@ function BindingEditor({
                 onChange={(e) => setBinding(index, { path: e.target.value || undefined })}
               />
             </Row>
-            <Row label="format">
+            <Row label="format" help="Optional display format. Use %s as the incoming value, e.g. $%s or Temp %s C.">
               <input
                 className={inputCls}
                 placeholder="$%,.2f"
@@ -572,7 +587,7 @@ function BindingEditor({
                 onChange={(e) => setBinding(index, { format: e.target.value || undefined })}
               />
             </Row>
-            <Row label="scale">
+            <Row label="scale" help="Optional numeric multiplier before showing the value, e.g. 100 for percent.">
               <input
                 className={inputCls}
                 type="number"

@@ -74,19 +74,22 @@ static void load_active_or_recovery(void)
         ui_renderer_show_lock_screen();
         return;
     }
+    /* purchased package (layout+wasm) loads alongside the built-in suite;
+     * home_ui adopts its screen as an extra swipe page (settings.pages) */
     char dir[220];
     sync_manager_active_dir(dir, sizeof(dir));
+    bool pkg_loaded = false;
     if (dir[0] && ui_renderer_load_dir(dir) == ESP_OK) {
         subscribe_layout_streams();
         wasm_engine_load_modules();
-        return;
+        pkg_loaded = true;
     }
-    if (ui_renderer_load_dir(STORAGE_RECOVERY_DIR) == ESP_OK) {
-        ESP_LOGW(TAG, "running recovery layout");
-        return;
-    }
-    /* no server package installed -> built-in home suite */
     home_ui_show_home();
+    if (pkg_loaded) {
+        /* page list was enumerated before the package existed — rebuild so
+         * the purchased page joins the rotation */
+        home_ui_reload();
+    }
 }
 
 /* ------------------------------------------------------- settings sync */
@@ -220,11 +223,13 @@ static int hook_audio_stop_int(void) { return audio_engine_stop(); }
 static void on_package_activated(const char *pkg, const char *ver, const char *dir)
 {
     ESP_LOGI(TAG, "activating %s@%s", pkg, ver);
+    home_ui_park(); /* renderer reload deletes screens home may be showing */
     wasm_engine_unload_all();
     if (ui_renderer_load_dir(dir) == ESP_OK) {
         subscribe_layout_streams();
         wasm_engine_load_modules();
     }
+    home_ui_reload(); /* re-adopt the fresh package screen into the rotation */
     publish_status();
 }
 

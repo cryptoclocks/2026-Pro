@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import type { WidgetNode, WidgetType } from "@ccp/shared";
+import type { Layout, WidgetNode, WidgetType } from "@ccp/shared";
 import { SCREEN } from "@ccp/shared";
 import { TEMPLATES, type TemplateKey } from "./templates";
 import { defaultProps } from "./widgetProps";
@@ -38,6 +38,7 @@ interface BuilderState {
   dataSources: DataSourceConfig[];
   wasmModules: WasmModuleConfig[];
   logicSource: string;
+  logicStarterSource: string;
   compiledWasm: CompiledWasm | null;
   widgets: WidgetNode[];
   selectedId: string | null;
@@ -54,6 +55,7 @@ interface BuilderState {
   removeWasmModule: (index: number) => void;
   upsertWasmModule: (module: WasmModuleConfig) => void;
   setLogicSource: (source: string) => void;
+  resetLogicSource: () => void;
   setCompiledWasm: (compiled: CompiledWasm | null) => void;
   addWidget: (type: WidgetType, x?: number, y?: number) => void;
   moveWidget: (id: string, dx: number, dy: number) => void;
@@ -65,6 +67,7 @@ interface BuilderState {
   setSimulate: (simulate: boolean) => void;
   toggleSimulate: () => void;
   loadTemplate: (key: TemplateKey) => void;
+  loadLayout: (layout: Layout) => void;
 }
 
 const DEFAULT_SIZE: Partial<Record<WidgetType, { w: number; h: number }>> = {
@@ -81,7 +84,725 @@ const DEFAULT_SIZE: Partial<Record<WidgetType, { w: number; h: number }>> = {
   scale: { w: 160, h: 160 },
 };
 
-export const DEFAULT_LOGIC_SOURCE = `#![no_std]
+export const NOOP_LOGIC_SOURCE = `#![no_std]
+
+const CCP_ABI_VERSION: u32 = 1;
+const CCP_OK: i32 = 0;
+const CCP_ERR_INVAL: i32 = -1;
+
+#[no_mangle]
+pub extern "C" fn ccp_on_init(abi_version: u32) -> i32 {
+    if abi_version != CCP_ABI_VERSION {
+        return CCP_ERR_INVAL;
+    }
+    CCP_OK
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_tick(_now_ms: u64) {}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_event(_widget: i32, _event: u32, _p0: i32, _p1: i32) {}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_data(_stream_handle: i32, _payload_ptr: u32, _len: u32) {}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_destroy() {}
+
+static mut ARENA: [u8; 4 * 1024] = [0; 4 * 1024];
+static mut ARENA_TOP: usize = 0;
+static mut ARENA_LAST: usize = 0;
+
+#[no_mangle]
+pub extern "C" fn ccp_malloc(size: u32) -> u32 {
+    let size = ((size as usize) + 7) & !7;
+    unsafe {
+        if ARENA_TOP + size > ARENA.len() {
+            return 0;
+        }
+        ARENA_LAST = ARENA_TOP;
+        let ptr = ARENA.as_mut_ptr().add(ARENA_TOP) as u32;
+        ARENA_TOP += size;
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_free(ptr: u32) {
+    unsafe {
+        let last_ptr = ARENA.as_mut_ptr().add(ARENA_LAST) as u32;
+        if ptr == last_ptr {
+            ARENA_TOP = ARENA_LAST;
+        }
+    }
+}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+`;
+
+/* Real working clock logic — same time-keeping approach as the native clock
+   (ask the host for epoch seconds every tick; host = SNTP on device, the
+   real system clock in the browser simulator). Widget ids: time / sec / date. */
+export const CLOCK_LOGIC_SOURCE = `#![no_std]
+
+const CCP_ABI_VERSION: u32 = 1;
+const CCP_OK: i32 = 0;
+const CCP_ERR_INVAL: i32 = -1;
+const TZ_OFFSET_MIN: i64 = 7 * 60; // Asia/Bangkok UTC+7 — change for other zones
+
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn ccp_ui_get_widget(id: *const u8, id_len: u32) -> i32;
+    fn ccp_ui_set_text(widget: i32, text: *const u8, len: u32) -> i32;
+    fn ccp_request_tick(interval_ms: u32) -> i32;
+    fn ccp_time_unix() -> u64;
+}
+
+static mut W_TIME: i32 = -1;
+static mut W_SEC: i32 = -1;
+static mut W_DATE: i32 = -1;
+static mut LAST: i64 = -1;
+
+#[no_mangle]
+pub extern "C" fn ccp_on_init(abi_version: u32) -> i32 {
+    if abi_version != CCP_ABI_VERSION {
+        return CCP_ERR_INVAL;
+    }
+    unsafe {
+        W_TIME = ccp_ui_get_widget(b"time".as_ptr(), 4);
+        W_SEC = ccp_ui_get_widget(b"sec".as_ptr(), 3);
+        W_DATE = ccp_ui_get_widget(b"date".as_ptr(), 4);
+        ccp_request_tick(250); // check 4x/s so the seconds flip cleanly
+    }
+    CCP_OK
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_tick(_now_ms: u64) {
+    unsafe {
+        let utc = ccp_time_unix();
+        if utc == 0 {
+            // device: SNTP not synced yet (never happens in the browser sim)
+            set_text(W_TIME, b"--:--");
+            set_text(W_SEC, b"");
+            set_text(W_DATE, b"Syncing time...");
+            return;
+        }
+        let local = utc as i64 + TZ_OFFSET_MIN * 60;
+        if local == LAST {
+            return; // same second -> nothing to redraw
+        }
+        LAST = local;
+
+        let sod = local.rem_euclid(86400) as u32; // seconds of day
+        let h = sod / 3600;
+        let m = (sod / 60) % 60;
+        let s = sod % 60;
+
+        let mut tb = [0u8; 5]; // "HH:MM"
+        put2(&mut tb[0..2], h);
+        tb[2] = b':';
+        put2(&mut tb[3..5], m);
+        set_text(W_TIME, &tb);
+
+        let mut sb = [0u8; 2]; // "SS"
+        put2(&mut sb[0..2], s);
+        set_text(W_SEC, &sb);
+
+        // "Wednesday  11 Jun 2026" — same format as the native clock page
+        let days = local.div_euclid(86400);
+        let (y, mo, d) = civil_from_days(days);
+        static WD: [&[u8]; 7] = [b"Sunday", b"Monday", b"Tuesday", b"Wednesday",
+                                 b"Thursday", b"Friday", b"Saturday"];
+        static MO: [&[u8]; 12] = [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun",
+                                  b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
+        let wd = WD[(days + 4).rem_euclid(7) as usize]; // 1970-01-01 = Thursday
+        let mut db = [0u8; 28];
+        let mut n = 0;
+        n += copy(&mut db[n..], wd);
+        n += copy(&mut db[n..], b"  ");
+        if d >= 10 {
+            db[n] = b'0' + (d / 10) as u8;
+            n += 1;
+        }
+        db[n] = b'0' + (d % 10) as u8;
+        n += 1;
+        n += copy(&mut db[n..], b" ");
+        n += copy(&mut db[n..], MO[(mo - 1) as usize]);
+        n += copy(&mut db[n..], b" ");
+        let yv = y as u32;
+        db[n] = b'0' + (yv / 1000 % 10) as u8;
+        db[n + 1] = b'0' + (yv / 100 % 10) as u8;
+        db[n + 2] = b'0' + (yv / 10 % 10) as u8;
+        db[n + 3] = b'0' + (yv % 10) as u8;
+        n += 4;
+        set_text(W_DATE, &db[..n]);
+    }
+}
+
+unsafe fn set_text(widget: i32, text: &[u8]) {
+    if widget >= 0 {
+        ccp_ui_set_text(widget, text.as_ptr(), text.len() as u32);
+    }
+}
+
+fn put2(out: &mut [u8], v: u32) {
+    out[0] = b'0' + (v / 10 % 10) as u8;
+    out[1] = b'0' + (v % 10) as u8;
+}
+
+fn copy(out: &mut [u8], src: &[u8]) -> usize {
+    out[..src.len()].copy_from_slice(src);
+    src.len()
+}
+
+/* days since 1970-01-01 -> (year, month 1-12, day 1-31)
+   Howard Hinnant's civil_from_days — correct for all leap years */
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_event(_widget: i32, _event: u32, _p0: i32, _p1: i32) {}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_data(_stream_handle: i32, _payload_ptr: u32, _len: u32) {}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_destroy() {}
+
+static mut ARENA: [u8; 4 * 1024] = [0; 4 * 1024];
+static mut ARENA_TOP: usize = 0;
+static mut ARENA_LAST: usize = 0;
+
+#[no_mangle]
+pub extern "C" fn ccp_malloc(size: u32) -> u32 {
+    let size = ((size as usize) + 7) & !7;
+    unsafe {
+        if ARENA_TOP + size > ARENA.len() {
+            return 0;
+        }
+        ARENA_LAST = ARENA_TOP;
+        let ptr = ARENA.as_mut_ptr().add(ARENA_TOP) as u32;
+        ARENA_TOP += size;
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_free(ptr: u32) {
+    unsafe {
+        let last_ptr = ARENA.as_mut_ptr().add(ARENA_LAST) as u32;
+        if ptr == last_ptr {
+            ARENA_TOP = ARENA_LAST;
+        }
+    }
+}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+`;
+
+/* Faithful port of the native crypto page behavior (home_ui.c):
+   symbol cycle (event 101), USD/THB toggle (102), timeframe cycle (103),
+   live price + 24h change with green/red color, candlestick chart drawn on a
+   canvas with the same algorithm (6% pad, slot*7/10 body, 1px wick). */
+export const CRYPTO_LOGIC_SOURCE = `#![no_std]
+
+const CCP_ABI_VERSION: u32 = 1;
+const CCP_OK: i32 = 0;
+const CCP_ERR_INVAL: i32 = -1;
+
+const EVT_SYMBOL: u32 = 101;
+const EVT_CURRENCY: u32 = 102;
+const EVT_TIMEFRAME: u32 = 103;
+
+const COL_PANEL: u32 = 0x161B22;
+const COL_GREEN: u32 = 0x0ECB81;
+const COL_RED: u32 = 0xF6465D;
+const CANDLE_W: i32 = 444;
+const CANDLE_H: i32 = 130;
+const MAXC: usize = 60;
+
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn ccp_ui_get_widget(id: *const u8, id_len: u32) -> i32;
+    fn ccp_ui_set_text(widget: i32, text: *const u8, len: u32) -> i32;
+    fn ccp_ui_set_color(widget: i32, argb: u32, part: u32) -> i32;
+    fn ccp_canvas_fill_rect(w: i32, x: i32, y: i32, rw: i32, rh: i32, argb: u32) -> i32;
+    fn ccp_canvas_draw_line(w: i32, x0: i32, y0: i32, x1: i32, y1: i32, argb: u32, width: u32) -> i32;
+    fn ccp_canvas_flush(w: i32) -> i32;
+    fn ccp_data_subscribe(stream: *const u8, len: u32) -> i32;
+    fn ccp_data_unsubscribe(handle: i32) -> i32;
+}
+
+static SYMBOLS: [&[u8]; 4] = [b"BTCUSDT", b"ETHUSDT", b"BNBUSDT", b"SOLUSDT"];
+static TFS: [&[u8]; 4] = [b"15m", b"1h", b"4h", b"1d"];
+
+static mut W_SYM: i32 = -1;
+static mut W_CUR: i32 = -1;
+static mut W_PRICE: i32 = -1;
+static mut W_CHANGE: i32 = -1;
+static mut W_CANDLES: i32 = -1;
+static mut W_TF: i32 = -1;
+static mut W_UPD: i32 = -1;
+static mut W_DOT: i32 = -1;
+
+static mut SYM_IDX: usize = 0;
+static mut TF_IDX: usize = 0;
+static mut THB: bool = false;
+static mut RATE: f64 = 0.0;
+static mut PRICE: f64 = 0.0;
+static mut CHG: f64 = 0.0;
+static mut HAVE_QUOTE: bool = false;
+
+static mut H_TICKER: [i32; 4] = [-1; 4];
+static mut H_FX: i32 = -1;
+static mut H_KLINES: i32 = -1;
+
+static mut CO: [f64; MAXC] = [0.0; MAXC];
+static mut CH: [f64; MAXC] = [0.0; MAXC];
+static mut CL: [f64; MAXC] = [0.0; MAXC];
+static mut CC: [f64; MAXC] = [0.0; MAXC];
+static mut NCANDLES: usize = 0;
+
+#[no_mangle]
+pub extern "C" fn ccp_on_init(abi_version: u32) -> i32 {
+    if abi_version != CCP_ABI_VERSION {
+        return CCP_ERR_INVAL;
+    }
+    unsafe {
+        W_SYM = get(b"sym_btn");
+        W_CUR = get(b"cur_btn");
+        W_PRICE = get(b"price");
+        W_CHANGE = get(b"change");
+        W_CANDLES = get(b"candles");
+        W_TF = get(b"tf_btn");
+        W_UPD = get(b"updated");
+        W_DOT = get(b"dot");
+
+        let mut i = 0;
+        while i < SYMBOLS.len() {
+            let mut b = [0u8; 32];
+            let mut n = 0;
+            n += copy(&mut b[n..], b"market.");
+            n += copy(&mut b[n..], SYMBOLS[i]);
+            n += copy(&mut b[n..], b".ticker");
+            H_TICKER[i] = ccp_data_subscribe(b.as_ptr(), n as u32);
+            i += 1;
+        }
+        H_FX = ccp_data_subscribe(b"fx.USDTHB".as_ptr(), 9);
+        sub_klines();
+        update_header();
+        render_price();
+        render_candles();
+    }
+    CCP_OK
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_event(_widget: i32, event: u32, _p0: i32, _p1: i32) {
+    unsafe {
+        match event {
+            EVT_SYMBOL => {
+                SYM_IDX = (SYM_IDX + 1) % SYMBOLS.len();
+                NCANDLES = 0;
+                HAVE_QUOTE = false;
+                sub_klines();
+                update_header();
+                render_price();
+                render_candles();
+            }
+            EVT_CURRENCY => {
+                THB = !THB;
+                update_header();
+                render_price();
+            }
+            EVT_TIMEFRAME => {
+                TF_IDX = (TF_IDX + 1) % TFS.len();
+                NCANDLES = 0;
+                sub_klines();
+                update_header();
+                render_candles();
+            }
+            _ => {}
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_data(h: i32, payload_ptr: u32, len: u32) {
+    unsafe {
+        let b = core::slice::from_raw_parts(payload_ptr as *const u8, len as usize);
+        if h == H_KLINES {
+            let no = key_array(b, b"\\"o\\":[", &mut CO);
+            let nh = key_array(b, b"\\"h\\":[", &mut CH);
+            let nl = key_array(b, b"\\"l\\":[", &mut CL);
+            let nc = key_array(b, b"\\"c\\":[", &mut CC);
+            let mut n = no;
+            if nh < n { n = nh; }
+            if nl < n { n = nl; }
+            if nc < n { n = nc; }
+            NCANDLES = n;
+            render_candles();
+        } else if h == H_FX {
+            if let Some(r) = key_f64(b, b"\\"rate\\":") {
+                RATE = r;
+                render_price();
+            }
+        } else if h == H_TICKER[SYM_IDX] {
+            if let Some(p) = key_f64(b, b"\\"price\\":") {
+                PRICE = p;
+                HAVE_QUOTE = true;
+                if let Some(cp) = key_f64(b, b"\\"changePct\\":") {
+                    CHG = cp;
+                }
+                // live tick updates the forming candle's close/high/low (like native)
+                if NCANDLES > 0 {
+                    let i = NCANDLES - 1;
+                    CC[i] = p;
+                    if p > CH[i] { CH[i] = p; }
+                    if p < CL[i] { CL[i] = p; }
+                    render_candles();
+                }
+                render_price();
+                ccp_ui_set_color(W_DOT, COL_GREEN, 0);
+                set_text(W_UPD, b"Binance \\xc2\\xb7 live");
+            }
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_tick(_now_ms: u64) {}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_destroy() {}
+
+/* ----------------------------------------------------------- rendering */
+
+unsafe fn update_header() {
+    let s = SYMBOLS[SYM_IDX];
+    let mut b = [0u8; 16];
+    let mut n = 0;
+    n += copy(&mut b[n..], &s[..s.len() - 4]); // strip USDT
+    n += copy(&mut b[n..], b"/USDT");
+    set_text(W_SYM, &b[..n]);
+    set_text(W_CUR, if THB { b"THB" } else { b"USD" });
+    set_text(W_TF, TFS[TF_IDX]);
+}
+
+unsafe fn render_price() {
+    if !HAVE_QUOTE {
+        set_text(W_PRICE, b"--");
+        set_text(W_CHANGE, b"loading...");
+        return;
+    }
+    let thb = THB && RATE > 0.0;
+    let p = if thb { PRICE * RATE } else { PRICE };
+    let mut buf = [0u8; 32];
+    let mut n = 0;
+    n += copy(&mut buf[n..], if thb { &b"THB "[..] } else { &b"$"[..] });
+    n += fmt_price(&mut buf[n..], p);
+    set_text(W_PRICE, &buf[..n]);
+
+    let mut cb = [0u8; 24];
+    let mut m = 0;
+    cb[m] = if CHG < 0.0 { b'-' } else { b'+' };
+    m += 1;
+    let a = if CHG < 0.0 { -CHG } else { CHG };
+    let cents = (a * 100.0 + 0.5) as u64;
+    m += fmt_u64(&mut cb[m..], cents / 100, false);
+    cb[m] = b'.';
+    m += 1;
+    cb[m] = b'0' + ((cents / 10) % 10) as u8;
+    m += 1;
+    cb[m] = b'0' + (cents % 10) as u8;
+    m += 1;
+    m += copy(&mut cb[m..], b"% (24h)");
+    set_text(W_CHANGE, &cb[..m]);
+    ccp_ui_set_color(W_CHANGE, if CHG < 0.0 { COL_RED } else { COL_GREEN }, 1);
+}
+
+/* same algorithm as home_ui.c candle_render(): 6% pad, body 7/10 slot, 1px wick */
+unsafe fn render_candles() {
+    if W_CANDLES < 0 {
+        return;
+    }
+    ccp_canvas_fill_rect(W_CANDLES, 0, 0, CANDLE_W, CANDLE_H, COL_PANEL);
+    let n = NCANDLES;
+    if n == 0 {
+        ccp_canvas_flush(W_CANDLES);
+        return;
+    }
+    let mut lo = CL[0];
+    let mut hi = CH[0];
+    let mut i = 1;
+    while i < n {
+        if CL[i] < lo { lo = CL[i]; }
+        if CH[i] > hi { hi = CH[i]; }
+        i += 1;
+    }
+    if hi <= lo { hi = lo + 1.0; }
+    let pad = (hi - lo) * 0.06;
+    lo -= pad;
+    hi += pad;
+    let range = hi - lo;
+    let mut slot = CANDLE_W / n as i32;
+    if slot < 1 { slot = 1; }
+    let mut body_w = slot * 7 / 10;
+    if body_w < 1 { body_w = 1; }
+
+    i = 0;
+    while i < n {
+        let up = CC[i] >= CO[i];
+        let col = if up { COL_GREEN } else { COL_RED };
+        let xc = i as i32 * slot + slot / 2;
+        let yh = y_of(CH[i], hi, range);
+        let yl = y_of(CL[i], hi, range);
+        ccp_canvas_draw_line(W_CANDLES, xc, yh, xc, yl, col, 1);
+        let mut ya = y_of(if up { CC[i] } else { CO[i] }, hi, range);
+        let mut yb = y_of(if up { CO[i] } else { CC[i] }, hi, range);
+        if yb <= ya { yb = ya + 1; }
+        if ya < 0 { ya = 0; }
+        ccp_canvas_fill_rect(W_CANDLES, xc - body_w / 2, ya, body_w, yb - ya, col);
+        i += 1;
+    }
+    ccp_canvas_flush(W_CANDLES);
+}
+
+fn y_of(v: f64, hi: f64, range: f64) -> i32 {
+    ((hi - v) / range * (CANDLE_H - 1) as f64) as i32
+}
+
+/* ------------------------------------------------------------- helpers */
+
+unsafe fn get(id: &[u8]) -> i32 {
+    ccp_ui_get_widget(id.as_ptr(), id.len() as u32)
+}
+
+unsafe fn set_text(widget: i32, text: &[u8]) {
+    if widget >= 0 {
+        ccp_ui_set_text(widget, text.as_ptr(), text.len() as u32);
+    }
+}
+
+unsafe fn sub_klines() {
+    if H_KLINES >= 0 {
+        ccp_data_unsubscribe(H_KLINES);
+    }
+    let mut b = [0u8; 40];
+    let mut n = 0;
+    n += copy(&mut b[n..], b"market.");
+    n += copy(&mut b[n..], SYMBOLS[SYM_IDX]);
+    n += copy(&mut b[n..], b".klines.");
+    n += copy(&mut b[n..], TFS[TF_IDX]);
+    H_KLINES = ccp_data_subscribe(b.as_ptr(), n as u32);
+}
+
+fn copy(out: &mut [u8], src: &[u8]) -> usize {
+    out[..src.len()].copy_from_slice(src);
+    src.len()
+}
+
+fn fmt_u64(out: &mut [u8], mut v: u64, commas: bool) -> usize {
+    let mut tmp = [0u8; 24];
+    let mut k = 0;
+    if v == 0 {
+        tmp[0] = b'0';
+        k = 1;
+    }
+    while v > 0 {
+        tmp[k] = b'0' + (v % 10) as u8;
+        v /= 10;
+        k += 1;
+    }
+    let mut n = 0;
+    let mut i = k;
+    while i > 0 {
+        i -= 1;
+        out[n] = tmp[i];
+        n += 1;
+        if commas && i > 0 && i % 3 == 0 {
+            out[n] = b',';
+            n += 1;
+        }
+    }
+    n
+}
+
+fn fmt_price(out: &mut [u8], p: f64) -> usize {
+    if p >= 1.0 {
+        let cents = (p * 100.0 + 0.5) as u64;
+        let mut n = fmt_u64(out, cents / 100, p >= 1000.0);
+        out[n] = b'.';
+        n += 1;
+        out[n] = b'0' + ((cents / 10) % 10) as u8;
+        n += 1;
+        out[n] = b'0' + (cents % 10) as u8;
+        n += 1;
+        n
+    } else {
+        // sub-$1 coins: 0.xxxxxx
+        let micros = (p * 1_000_000.0 + 0.5) as u64 % 1_000_000;
+        out[0] = b'0';
+        out[1] = b'.';
+        let mut n = 2;
+        let mut div = 100_000u64;
+        while div > 0 {
+            out[n] = b'0' + ((micros / div) % 10) as u8;
+            n += 1;
+            div /= 10;
+        }
+        n
+    }
+}
+
+/* tiny JSON scanners — payloads are trusted server feeds */
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.len() > hay.len() {
+        return None;
+    }
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        if &hay[i..i + needle.len()] == needle {
+            return Some(i + needle.len());
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_f64(b: &[u8], pos: &mut usize) -> f64 {
+    let n = b.len();
+    while *pos < n && b[*pos] == b' ' {
+        *pos += 1;
+    }
+    let mut neg = false;
+    if *pos < n && b[*pos] == b'-' {
+        neg = true;
+        *pos += 1;
+    }
+    let mut v: f64 = 0.0;
+    while *pos < n && b[*pos].is_ascii_digit() {
+        v = v * 10.0 + (b[*pos] - b'0') as f64;
+        *pos += 1;
+    }
+    if *pos < n && b[*pos] == b'.' {
+        *pos += 1;
+        let mut scale = 0.1;
+        while *pos < n && b[*pos].is_ascii_digit() {
+            v += (b[*pos] - b'0') as f64 * scale;
+            scale *= 0.1;
+            *pos += 1;
+        }
+    }
+    if *pos < n && (b[*pos] == b'e' || b[*pos] == b'E') {
+        *pos += 1;
+        let mut eneg = false;
+        if *pos < n && (b[*pos] == b'+' || b[*pos] == b'-') {
+            eneg = b[*pos] == b'-';
+            *pos += 1;
+        }
+        let mut e = 0i32;
+        while *pos < n && b[*pos].is_ascii_digit() {
+            e = e * 10 + (b[*pos] - b'0') as i32;
+            *pos += 1;
+        }
+        let mut k = 0;
+        while k < e {
+            v = if eneg { v * 0.1 } else { v * 10.0 };
+            k += 1;
+        }
+    }
+    if neg { -v } else { v }
+}
+
+fn key_f64(b: &[u8], key: &[u8]) -> Option<f64> {
+    match find(b, key) {
+        Some(mut pos) => Some(parse_f64(b, &mut pos)),
+        None => None,
+    }
+}
+
+fn key_array(b: &[u8], key: &[u8], out: &mut [f64; MAXC]) -> usize {
+    let mut pos = match find(b, key) {
+        Some(p) => p,
+        None => return 0,
+    };
+    let mut n = 0usize;
+    while pos < b.len() && n < MAXC {
+        out[n] = parse_f64(b, &mut pos);
+        n += 1;
+        while pos < b.len() && b[pos] == b' ' {
+            pos += 1;
+        }
+        if pos < b.len() && b[pos] == b',' {
+            pos += 1;
+        } else {
+            break;
+        }
+    }
+    n
+}
+
+static mut ARENA: [u8; 16 * 1024] = [0; 16 * 1024];
+static mut ARENA_TOP: usize = 0;
+static mut ARENA_LAST: usize = 0;
+
+#[no_mangle]
+pub extern "C" fn ccp_malloc(size: u32) -> u32 {
+    let size = ((size as usize) + 7) & !7;
+    unsafe {
+        if ARENA_TOP + size > ARENA.len() {
+            return 0;
+        }
+        ARENA_LAST = ARENA_TOP;
+        let ptr = ARENA.as_mut_ptr().add(ARENA_TOP) as u32;
+        ARENA_TOP += size;
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_free(ptr: u32) {
+    unsafe {
+        let last_ptr = ARENA.as_mut_ptr().add(ARENA_LAST) as u32;
+        if ptr == last_ptr {
+            ARENA_TOP = ARENA_LAST;
+        }
+    }
+}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+`;
+
+export const UNAVAILABLE_LOGIC_SOURCE = `// Source for this published WASM was not saved by the older Builder.
+// You can still edit widget properties and Save / Publish; the server will carry
+// the previous wasm file forward. To change logic, paste the Rust source here
+// or click Reset page logic to start from the no-op template, then Compile Rust.
+`;
+
+export const LED_TOGGLE_LOGIC_SOURCE = `#![no_std]
 
 const CCP_ABI_VERSION: u32 = 1;
 const CCP_OK: i32 = 0;
@@ -214,11 +935,10 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   packageId: "com.ccp.my-page",
   name: "My Page",
   version: "1.0.0",
-  dataSources: [
-    { id: "crypto", stream: "market.BTCUSDT.ticker", format: "json", sample_hint_ms: 1000 },
-  ],
+  dataSources: [],
   wasmModules: [],
-  logicSource: DEFAULT_LOGIC_SOURCE,
+  logicSource: NOOP_LOGIC_SOURCE,
+  logicStarterSource: NOOP_LOGIC_SOURCE,
   compiledWasm: null,
   widgets: [],
   selectedId: null,
@@ -260,6 +980,11 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         : [...get().wasmModules, module],
     }),
   setLogicSource: (source) => set({ logicSource: source, compiledWasm: null }),
+  resetLogicSource: () =>
+    set({
+      logicSource: get().logicStarterSource === UNAVAILABLE_LOGIC_SOURCE ? NOOP_LOGIC_SOURCE : get().logicStarterSource,
+      compiledWasm: null,
+    }),
   setCompiledWasm: (compiled) => set({ compiledWasm: compiled }),
 
   addWidget: (type, x = 20, y = 20) => {
@@ -328,18 +1053,79 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   loadTemplate: (key) => {
     const t = TEMPLATES[key];
     // deep clone so edits don't mutate the template constant
-    const isLedToggle = key === "led_toggle";
+    const logicSource =
+      key === "led_toggle" ? LED_TOGGLE_LOGIC_SOURCE :
+      key === "clock" ? CLOCK_LOGIC_SOURCE :
+      key === "crypto" ? CRYPTO_LOGIC_SOURCE :
+      NOOP_LOGIC_SOURCE;
+    const wasmModules = key === "led_toggle" || key === "clock" || key === "crypto"
+      ? [{ id: "logic", path: "wasm/page.wasm", memory_kb: key === "crypto" ? 256 : 128 }]
+      : [];
+    console.debug("[builder] loadTemplate", { key, widgets: t.widgets.length });
     set({
       widgets: JSON.parse(JSON.stringify(t.widgets)) as WidgetNode[],
       name: t.name === "Blank" ? get().name : t.name,
-      packageId: isLedToggle ? "com.ccp.led-toggle" : get().packageId,
-      wasmModules: isLedToggle
-        ? [{ id: "logic", path: "wasm/page.wasm", memory_kb: 128 }]
-        : get().wasmModules,
-      logicSource: isLedToggle ? DEFAULT_LOGIC_SOURCE : get().logicSource,
+      packageId:
+        key === "led_toggle" ? "com.ccp.led-toggle" :
+        key === "clock" ? "com.ccp.clock-custom" :
+        key === "crypto" ? "com.ccp.crypto-custom" :
+        key === "weather" ? "com.ccp.weather" :
+        key === "welcome" ? "com.ccp.welcome-custom" :
+        get().packageId,
+      dataSources: key === "weather"
+        ? [{ id: "weather", stream: "weather.bangkok", format: "json" as const, sample_hint_ms: 60000 }]
+        : key === "crypto"
+        ? [
+            { id: "btc", stream: "market.BTCUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 },
+            { id: "eth", stream: "market.ETHUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 },
+            { id: "bnb", stream: "market.BNBUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 },
+            { id: "sol", stream: "market.SOLUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 },
+            { id: "fx", stream: "fx.USDTHB", format: "json" as const },
+            { id: "kl", stream: "market.BTCUSDT.klines.15m", format: "json" as const, sample_hint_ms: 15000 },
+          ]
+        : [],
+      wasmModules,
+      logicSource,
+      logicStarterSource: logicSource,
       compiledWasm: null,
       selectedId: null,
+      simulate: false,
       counter: t.widgets.length,
     });
   },
+
+  loadLayout: (layout) => {
+    const widgets = JSON.parse(JSON.stringify(layout.pages[0]?.widgets ?? [])) as WidgetNode[];
+    const logicSource = layout.builder?.logic_source || ((layout.wasm?.length ?? 0) > 0 ? UNAVAILABLE_LOGIC_SOURCE : NOOP_LOGIC_SOURCE);
+    console.debug("[builder] loadLayout", {
+      packageId: layout.meta.id,
+      version: layout.meta.version,
+      widgets: widgets.length,
+      wasm: layout.wasm?.length ?? 0,
+    });
+    set({
+      packageId: layout.meta.id,
+      name: layout.meta.name,
+      version: layout.meta.version,
+      orientation: layout.display?.orientation ?? "landscape",
+      dataSources: (layout.data_sources ?? []) as DataSourceConfig[],
+      wasmModules: (layout.wasm ?? []) as WasmModuleConfig[],
+      logicSource,
+      logicStarterSource: logicSource,
+      compiledWasm: null,
+      widgets,
+      selectedId: null,
+      simulate: false,
+      counter: nextCounter(widgets),
+    });
+  },
 }));
+
+function nextCounter(widgets: WidgetNode[]) {
+  let max = widgets.length;
+  for (const widget of widgets) {
+    const match = widget.id.match(/_(\d+)$/);
+    if (match) max = Math.max(max, Number(match[1]));
+  }
+  return max;
+}
