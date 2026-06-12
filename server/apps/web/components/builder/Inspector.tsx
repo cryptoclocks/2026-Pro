@@ -169,6 +169,7 @@ export function Inspector() {
   const updateProps = useBuilder((s) => s.updateProps);
   const setBindings = useBuilder((s) => s.setBindings);
   const removeWidget = useBuilder((s) => s.removeWidget);
+  const assets = useBuilder((s) => s.assets);
 
   if (!widget) {
     return (
@@ -225,11 +226,24 @@ export function Inspector() {
           <SectionTitle>Properties</SectionTitle>
           {typeProps.map((def) => (
             <Row key={def.key} label={def.label}>
-              <Control
-                def={def}
-                value={widget.props?.[def.key]}
-                onChange={(v) => updateProps(widget.id, { [def.key]: v })}
-              />
+              {def.key === "src" && (widget.type === "image" || widget.type === "gif") && assets.length > 0 ? (
+                <select
+                  className="select text-xs px-2 py-1 w-full"
+                  value={assets.some((a) => a.id === widget.props?.src) ? String(widget.props?.src) : ""}
+                  onChange={(e) => updateProps(widget.id, { src: e.target.value })}
+                >
+                  <option value="">— pick an uploaded asset —</option>
+                  {assets.filter((a) => a.type === "image" || a.type === "gif").map((a) => (
+                    <option key={a.id} value={a.id}>{a.id} ({a.type})</option>
+                  ))}
+                </select>
+              ) : (
+                <Control
+                  def={def}
+                  value={widget.props?.[def.key]}
+                  onChange={(v) => updateProps(widget.id, { [def.key]: v })}
+                />
+              )}
             </Row>
           ))}
         </>

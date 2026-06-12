@@ -1,5 +1,16 @@
 # แผน: Asset Pipeline (อัปโหลดรูป/GIF/เสียงต่อหน้า → ลง SD ของนาฬิกา)
 
+> **อัปเดต 2026-06-13: สร้างเสร็จแล้ว** — Builder มี "Assets" panel (ปุ่ม Upload รับ
+> PNG/GIF/WAV/TTF จากเครื่อง → เก็บเป็น data URL ใน store), Inspector ของ image/gif มี
+> dropdown เลือก asset เป็น `src`, ตอน Publish ไฟล์ถูก fetch→base64→ใส่ bundle (`assetFiles`)
+> → เครื่องแตกลง `/sd/packages/<pkg>/<ver>/assets/` → widget เรียกผ่าน `find_asset`.
+> ทดสอบในเบราว์เซอร์: อัปโหลด PNG → ตั้งเป็น src ของ image widget → render บน artboard.
+> เพดานต่อไฟล์ 4MB, รูปต้องเป็น PNG/GIF (จอ decode JPEG ไม่ได้).
+
+---
+
+# แผน: Asset Pipeline (อัปโหลดรูป/GIF/เสียงต่อหน้า → ลง SD ของนาฬิกา)
+
 เป้าหมาย: แอดมินแนบไฟล์ (GIF จาก lottiefiles, PNG, WAV) ในหน้าที่ออกแบบใน Builder
 → กด Publish → ไฟล์ถูกใส่ใน bundle.zip → นาฬิกาดาวน์โหลดลง SD → widget อ้างถึงได้
 

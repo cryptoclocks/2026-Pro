@@ -699,6 +699,76 @@ function LayersPanel() {
   );
 }
 
+const MAX_ASSET_BYTES = 4 * 1024 * 1024;
+
+/** slug a filename base for use as an asset id: "My Logo.png" -> "my_logo" */
+function assetIdFromName(name: string): string {
+  const base = name.replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  return base || "asset";
+}
+
+/** Upload page assets (PNG/GIF/WAV) from disk; on Publish they're bundled into
+    the package zip and the device extracts them to its SD card. */
+function AssetsPanel() {
+  const assets = useBuilder((s) => s.assets);
+  const addAsset = useBuilder((s) => s.addAsset);
+  const removeAsset = useBuilder((s) => s.removeAsset);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onFiles = (files: FileList | null) => {
+    setErr(null);
+    for (const file of Array.from(files ?? [])) {
+      const ext = (file.name.split(".").pop() || "bin").toLowerCase();
+      const type =
+        ext === "gif" ? "gif" :
+        ext === "png" ? "image" :
+        ext === "wav" ? "audio" :
+        ext === "ttf" || ext === "otf" ? "font" : "bin";
+      if (ext === "jpg" || ext === "jpeg") { setErr("JPEG can't be decoded on the device — use PNG."); continue; }
+      if (file.size > MAX_ASSET_BYTES) { setErr(`${file.name} is too big (max 4MB).`); continue; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const id = assetIdFromName(file.name);
+        addAsset({ id, type, path: `assets/${id}.${ext}`, src: reader.result as string, sizeBytes: file.size });
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  return (
+    <section className="border border-[var(--ccp-border)] rounded-lg p-3 min-w-0">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="uppercase tracking-wide text-[var(--ccp-muted)]">Assets</h2>
+        <label className="btn py-1 px-2 text-xs cursor-pointer">
+          Upload
+          <input type="file" accept=".png,.gif,.wav,.ttf,.otf" multiple className="hidden"
+            onChange={(e) => { onFiles(e.target.files); e.target.value = ""; }} />
+        </label>
+      </div>
+      {err && <div className="text-[var(--ccp-down)] mb-2">{err}</div>}
+      {assets.length === 0 ? (
+        <div className="text-[var(--ccp-muted)]">none — upload a PNG/GIF (e.g. a logo) and reference it from an image/gif widget&apos;s src.</div>
+      ) : (
+        <div className="space-y-1">
+          {assets.map((a) => (
+            <div key={a.id} className="flex items-center gap-2 border-t border-[var(--ccp-border)]/60 pt-1 first:border-t-0 first:pt-0">
+              {(a.type === "image" || a.type === "gif") && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={a.src} alt={a.id} className="w-8 h-8 object-contain rounded bg-black/20 shrink-0" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[var(--ccp-text)]">{a.id} <span className="text-[var(--ccp-muted)]">· {a.type}</span></div>
+                <div className="truncate text-[10px] text-[var(--ccp-muted)]">{a.path}{a.sizeBytes ? ` · ${Math.ceil(a.sizeBytes / 1024)}KB` : ""}</div>
+              </div>
+              <button className="btn py-1 px-2 text-xs" onClick={() => removeAsset(a.id)}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function LayoutDataPanel() {
   const dataSources = useBuilder((s) => s.dataSources);
   const wasmModules = useBuilder((s) => s.wasmModules);
@@ -711,6 +781,7 @@ function LayoutDataPanel() {
 
   return (
     <div className="space-y-4 text-xs">
+      <AssetsPanel />
       <section className="border border-[var(--ccp-border)] rounded-lg p-3 min-w-0">
         <div className="flex items-center justify-between mb-2">
           <h2 className="uppercase tracking-wide text-[var(--ccp-muted)]">Data Sources</h2>
