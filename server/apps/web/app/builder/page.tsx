@@ -154,6 +154,7 @@ export default function BuilderPage() {
       orientation: b.orientation,
       dataSources: b.dataSources,
       wasmModules: wasmModulesForExport(),
+      assets: b.assets,
       logicSource: b.logicSource,
       widgets: b.widgets,
     });
@@ -247,6 +248,23 @@ export default function BuilderPage() {
         b.upsertWasmModule({ id: compiled.moduleId, path: compiled.path, memory_kb: 128 });
       }
 
+      // Fetch each asset's bytes (from web/public for built-ins, or its data: URL
+      // for uploads) and ship them as base64. Skip ones already on the hub
+      // (server carries them forward) so re-publishes don't re-upload megabytes.
+      const assetFiles: { path: string; base64: string }[] = [];
+      if (b.assets.length) {
+        setMessage("Bundling assets…");
+        for (const asset of b.assets) {
+          try {
+            const buf = await (await fetch(asset.src)).arrayBuffer();
+            assetFiles.push({ path: asset.path, base64: bytesToBase64(new Uint8Array(buf)) });
+          } catch (err) {
+            if (!savedPackageExists) throw new Error(`Could not read asset "${asset.id}": ${err instanceof Error ? err.message : err}`);
+            // on re-publish a fetch failure is non-fatal — the server keeps the prior file
+          }
+        }
+      }
+
       const res = await fetch(`${API}/api/v1/payloads/publish-compiled`, {
         method: "POST",
         headers: {
@@ -261,6 +279,7 @@ export default function BuilderPage() {
           wasmFiles: compiled
             ? [{ path: compiled.path, wasmBase64: compiled.wasmBase64 }]
             : [],
+          assetFiles,
         }),
       });
       if (!res.ok) throw new Error(await readApiError(res));
@@ -745,6 +764,16 @@ function upsertWasmModuleList(list: WasmModuleConfig[], module: WasmModuleConfig
   return list.some((m) => m.id === module.id)
     ? list.map((m) => (m.id === module.id ? { ...m, ...module } : m))
     : [...list, module];
+}
+
+/** Uint8Array -> base64 (chunked to avoid call-stack limits on large assets). */
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
 }
 
 /** "1.2.3" -> "1.2.4"; falls back to appending .1 for non-semver strings. */

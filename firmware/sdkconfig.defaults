@@ -49,6 +49,8 @@ CONFIG_LV_USE_QRCODE=y
 # PNG/JPG decoders for SD-card images (slideshow, avatars, assets)
 CONFIG_LV_USE_LODEPNG=y
 CONFIG_LV_USE_TJPGD=y
+# animated GIF widget (lv_gif) for Builder page assets, e.g. weather icons
+CONFIG_LV_USE_GIF=y
 # decoded-image cache: 0 = decoded PNG/JPEG never gets a draw buffer -> images
 # silently don't render. Give the cache 3MB of PSRAM (holds several frames).
 CONFIG_LV_CACHE_DEF_SIZE=3145728

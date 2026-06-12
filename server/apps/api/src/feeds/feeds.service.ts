@@ -199,6 +199,7 @@ export function weatherPayload(city: string, tempC: number, humidity: number, co
     code,
     desc,
     theme, // clear | partly | cloudy | rain | thunder | snow | fog
+    icon: theme, // asset id of the matching weather GIF (bound to the gif widget's src)
   };
 }
 

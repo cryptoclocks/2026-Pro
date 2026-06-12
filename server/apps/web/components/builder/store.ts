@@ -20,6 +20,24 @@ export type WasmModuleConfig = {
   canvas_ids?: string[];
   memory_kb?: number;
 };
+export type AssetType = "image" | "gif" | "font" | "audio" | "lottie" | "bin";
+export type AssetEntry = {
+  id: string;
+  type: AssetType;
+  path: string; // bundle-relative, e.g. assets/clear.gif
+  src: string; // URL or data: URL the Builder renders/uploads from
+  sizeBytes?: number;
+};
+
+/** Built-in weather GIFs (Lottie→GIF), served from web/public, one per theme. */
+export const WEATHER_ASSETS: AssetEntry[] = (
+  ["clear", "partly", "cloudy", "rain", "thunder", "snow", "fog"] as const
+).map((id) => ({
+  id,
+  type: "gif" as const,
+  path: `assets/${id}.gif`,
+  src: `/weather-icons/${id}.gif`,
+}));
 export type CompiledWasm = {
   moduleId: string;
   path: string;
@@ -37,6 +55,7 @@ interface BuilderState {
   version: string;
   dataSources: DataSourceConfig[];
   wasmModules: WasmModuleConfig[];
+  assets: AssetEntry[];
   logicSource: string;
   logicStarterSource: string;
   compiledWasm: CompiledWasm | null;
@@ -46,6 +65,8 @@ interface BuilderState {
   simulate: boolean;
 
   setOrientation: (o: Orientation) => void;
+  addAsset: (asset: AssetEntry) => void;
+  removeAsset: (id: string) => void;
   setMeta: (m: Partial<Pick<BuilderState, "packageId" | "name" | "version">>) => void;
   updateDataSource: (index: number, patch: Partial<DataSourceConfig>) => void;
   addDataSource: () => void;
@@ -946,30 +967,11 @@ unsafe fn draw_scene() {
         ccp_canvas_fill_rect(W_SCENE, 0, i * bh, W, bh + 1, col);
         i += 1;
     }
-    match THEME {
-        0 => draw_sun(CX, CY, 40, accent, true),
-        1 => {
-            draw_sun(CX + 22, CY - 18, 26, accent, true);
-            draw_cloud(CX - 6, CY + 18, 0xEFF3F8);
-        }
-        2 => {
-            draw_cloud(CX - 18, CY - 6, 0xE3E8EF);
-            draw_cloud(CX + 18, CY + 16, 0xCfd7e0);
-        }
-        3 => {
-            draw_cloud(CX, CY - 18, 0xC7D0DA);
-            draw_rain(CX, CY + 6, accent);
-        }
-        4 => {
-            draw_cloud(CX, CY - 18, 0x9aa0b5);
-            draw_rain(CX, CY + 6, 0x9fb6d6);
-            draw_bolt(CX, CY + 4, accent);
-        }
-        5 => {
-            draw_cloud(CX, CY - 18, 0xDDE6EF);
-            draw_snow(CX, CY + 6, 0xFFFFFF);
-        }
-        _ => draw_fog(accent),
+    // The weather icon is an animated GIF widget layered above this canvas, so
+    // the scene only paints the themed gradient. For thunder we briefly light up
+    // the whole sky (the GIF still renders on top of the flash).
+    if THEME == 4 && FRAME % 48 < 3 {
+        ccp_canvas_fill_rect(W_SCENE, 0, 0, W, H, lerp(accent, 0xFFFFFF, 1, 2));
     }
     ccp_canvas_flush(W_SCENE);
 }
@@ -1284,6 +1286,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   version: "1.0.0",
   dataSources: [],
   wasmModules: [],
+  assets: [],
   logicSource: NOOP_LOGIC_SOURCE,
   logicStarterSource: NOOP_LOGIC_SOURCE,
   compiledWasm: null,
@@ -1293,6 +1296,9 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   simulate: false,
 
   setOrientation: (o) => set({ orientation: o }),
+  addAsset: (asset) =>
+    set((s) => ({ assets: [...s.assets.filter((a) => a.id !== asset.id), asset] })),
+  removeAsset: (id) => set((s) => ({ assets: s.assets.filter((a) => a.id !== id) })),
   setMeta: (m) => set(m),
   updateDataSource: (index, patch) =>
     set({
@@ -1434,6 +1440,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
           ]
         : [],
       wasmModules,
+      assets: key === "weather" ? WEATHER_ASSETS.map((a) => ({ ...a })) : [],
       logicSource,
       logicStarterSource: logicSource,
       compiledWasm: null,
@@ -1459,6 +1466,16 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       orientation: layout.display?.orientation ?? "landscape",
       dataSources: (layout.data_sources ?? []) as DataSourceConfig[],
       wasmModules: (layout.wasm ?? []) as WasmModuleConfig[],
+      assets: (layout.assets ?? []).map((a) => {
+        const builtin = WEATHER_ASSETS.find((w) => w.id === a.id);
+        return {
+          id: a.id,
+          type: a.type as AssetType,
+          path: a.path,
+          // built-in weather GIFs render from web/public; others from the saved bundle file
+          src: builtin?.src ?? `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}/api/v1/packages/${layout.meta.id}/${layout.meta.version}/${a.path}`,
+        };
+      }),
       logicSource,
       logicStarterSource: logicSource,
       compiledWasm: null,

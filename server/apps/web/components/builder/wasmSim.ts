@@ -466,6 +466,9 @@ export class SimSession {
         } else if (b.prop === "series" && Array.isArray(raw)) {
           // what ui_renderer does for lv_chart: numeric array -> chart points
           useSim.getState().patchOverride(w.id, { series: raw.map((v) => Number(v) || 0) });
+        } else if (b.prop === "src") {
+          // ui_renderer maps the value through find_asset; BuilderCanvas resolves it too
+          useSim.getState().patchOverride(w.id, { src: String(raw) });
         }
       }
     }
@@ -673,6 +676,7 @@ function weatherPayload(city: string, tempC: number, humidity: number, code: num
     code,
     desc,
     theme,
+    icon: theme,
   };
 }
 

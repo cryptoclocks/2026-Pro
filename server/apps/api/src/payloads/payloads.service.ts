@@ -14,6 +14,7 @@ import { MqttBridgeService } from "../mqtt/mqtt-bridge.service";
 const execFileAsync = promisify(execFile);
 const MAX_LOGIC_SOURCE_BYTES = 128 * 1024;
 const MAX_WASM_BYTES = 2 * 1024 * 1024;
+const MAX_ASSET_BYTES = 4 * 1024 * 1024; // per-file cap for gif/png/wav assets
 
 type CompileRustWasmInput = {
   source: string;
@@ -23,6 +24,11 @@ type CompileRustWasmInput = {
 type PublishedWasmFile = {
   path: string;
   wasmBase64: string;
+};
+
+type PublishedAssetFile = {
+  path: string; // bundle-relative, e.g. assets/clear.gif
+  base64: string;
 };
 
 type BundleFile = {
@@ -138,6 +144,7 @@ export class PayloadsService {
     version?: string;
     layout: Layout;
     wasmFiles?: PublishedWasmFile[];
+    assetFiles?: PublishedAssetFile[];
   }) {
     if (!opts.ownerId) {
       throw new BadRequestException("ownerId is required to publish");
@@ -162,6 +169,18 @@ export class PayloadsService {
       files.push({ path, data });
     }
 
+    const seenAsset = new Set(files.map((f) => f.path));
+    for (const asset of opts.assetFiles ?? []) {
+      const path = assertBundlePath(asset.path);
+      if (seenAsset.has(path)) continue; // sent twice → keep first
+      const data = Buffer.from(asset.base64, "base64");
+      if (data.length === 0 || data.length > MAX_ASSET_BYTES) {
+        throw new BadRequestException(`${path} size must be 1..${MAX_ASSET_BYTES} bytes`);
+      }
+      files.push({ path, data });
+      seenAsset.add(path);
+    }
+
     const bundled = new Set(files.map((file) => file.path));
     for (const module of opts.layout.wasm ?? []) {
       const path = assertBundlePath(module.path);
@@ -175,6 +194,22 @@ export class PayloadsService {
       files.push({ path, data: previous });
       bundled.add(path);
       this.logger.debug(`publishCompiled:carried-forward ${path} package=${packageId}`);
+    }
+
+    // Carry assets referenced by the layout forward from the previous version so
+    // re-publishing a page (e.g. moving a widget) doesn't require re-uploading them.
+    for (const asset of opts.layout.assets ?? []) {
+      const path = assertBundlePath(asset.path);
+      if (bundled.has(path)) continue;
+      const previous = await this.readLatestPayloadFile(packageId, path);
+      if (!previous) {
+        throw new BadRequestException(
+          `asset "${asset.id}" (${path}) is referenced by the layout but was not uploaded. Add the file in the Builder Assets panel before publishing.`,
+        );
+      }
+      files.push({ path, data: previous });
+      bundled.add(path);
+      this.logger.debug(`publishCompiled:carried-forward-asset ${path} package=${packageId}`);
     }
 
     const manifest = this.buildManifest(packageId, version, files);

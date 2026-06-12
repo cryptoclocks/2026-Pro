@@ -37,3 +37,4 @@ JC3248W535EN/
 # Rust build outputs
 wasm-apps/**/target/
 target/
+/weather/

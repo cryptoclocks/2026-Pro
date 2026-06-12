@@ -1,6 +1,7 @@
 #include "ui_renderer.h"
 #include "display_engine.h"
 #include "storage.h"
+#include "widgets/gif/lv_gif.h" /* lv_gif_class / lv_gif_set_src for runtime src binding */
 
 #include <stdio.h>
 #include <string.h>
@@ -1074,7 +1075,12 @@ static void apply_binding(const binding_t *b, const cJSON *value)
         if (asset) {
             char path[220];
             asset_lv_path(asset, path, sizeof(path));
-            lv_image_set_src(obj, path);
+            /* gif needs its own setter to (re)start animation; image otherwise */
+            if (lv_obj_check_type(obj, &lv_gif_class)) {
+                lv_gif_set_src(obj, path);
+            } else {
+                lv_image_set_src(obj, path);
+            }
         }
         break;
     }

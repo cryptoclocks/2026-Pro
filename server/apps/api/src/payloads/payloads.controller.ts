@@ -52,6 +52,7 @@ export class PayloadsController {
       version?: string;
       layout: unknown;
       wasmFiles?: { path: string; wasmBase64: string }[];
+      assetFiles?: { path: string; base64: string }[];
     },
   ) {
     const layout = this.payloads.validateLayout(body.layout);
@@ -61,6 +62,7 @@ export class PayloadsController {
       version: body.version,
       layout,
       wasmFiles: body.wasmFiles ?? [],
+      assetFiles: body.assetFiles ?? [],
     });
   }
 

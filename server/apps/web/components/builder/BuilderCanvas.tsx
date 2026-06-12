@@ -188,6 +188,7 @@ function WidgetInner({
   ov?: SimOverride;
 }) {
   const p = w.props ?? {};
+  const assets = useBuilder((s) => s.assets);
   const accent = ov?.indicatorColor ?? w.style?.text_color ?? "#15c3a6";
 
   switch (w.type) {
@@ -218,15 +219,22 @@ function WidgetInner({
     }
     case "image":
     case "gif": {
-      const src = ov?.src ?? (p.src as string) ?? "";
-      // brand logo asset exists on the web too — show the real image
-      if (src.toLowerCase().includes("logo")) {
+      const ref = ov?.src ?? (p.src as string) ?? "";
+      // resolve to an uploaded/built-in asset by id or bundle path (the device
+      // does the same via find_asset); fall back to the raw string as a URL
+      const asset = assets.find((a) => a.id === ref || a.path === ref || a.path === `assets/${ref}`);
+      const url = asset?.src ?? ref;
+      if (url && (url.startsWith("/") || url.startsWith("http") || url.startsWith("data:"))) {
+        // eslint-disable-next-line @next/next/no-img-element
+        return <img src={url} alt={w.id} style={{ width: "100%", height: "100%", objectFit: "contain" }} />;
+      }
+      if (ref.toLowerCase().includes("logo")) {
         // eslint-disable-next-line @next/next/no-img-element
         return <img src="/logo.png" alt="logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} />;
       }
       return (
         <span className="text-[10px] text-[var(--ccp-muted)] flex flex-col items-center">
-          🖼<span className="truncate max-w-full">{(src || w.type).split("/").pop()}</span>
+          🖼<span className="truncate max-w-full">{(ref || w.type).split("/").pop()}</span>
         </span>
       );
     }

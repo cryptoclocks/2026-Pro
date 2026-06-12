@@ -97,6 +97,13 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         props: {}, style: { bg_color: "#4E83B4" },
       },
       {
+        // animated weather icon (Lottie→GIF); src swaps to the asset matching
+        // weather.icon (clear/partly/cloudy/rain/thunder/snow/fog)
+        type: "gif", id: "icon", x: 286, y: 70, w: 160, h: 160,
+        props: { src: "clear" }, style: {},
+        bindings: [{ prop: "src", source: "weather", path: "icon" }],
+      },
+      {
         type: "label", id: "city", x: 18, y: 16, w: 280, h: 24,
         props: { text: "Bangkok" },
         style: { text_color: "#FFFFFF", align: "left", font: "montserrat_20", opa: 220 },
