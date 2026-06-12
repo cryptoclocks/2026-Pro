@@ -18,6 +18,7 @@ export class FeedsService implements OnModuleInit, OnModuleDestroy {
   private busy = false;
   private lastFetch = new Map<string, number>(); // stream -> epoch ms
   private cache = new Map<string, unknown>(); // stream -> last payload
+  private published = new Set<string>(); // "deviceId|stream" already sent the cached value
 
   constructor(
     private readonly prisma: PrismaService,
@@ -61,12 +62,23 @@ export class FeedsService implements OnModuleInit, OnModuleDestroy {
       const streams = new Set<string>();
       for (const list of targets.values()) for (const s of list) streams.add(s);
 
+      // track which devices already have each stream this run, so a freshly
+      // online device gets the cached value within 5s (MQTT data isn't retained)
+      const seen = this.published;
       for (const stream of streams) {
-        const payload = await this.fetchStream(stream);
-        if (payload === null) continue; // not due yet or unknown pattern
-        this.cache.set(stream, payload);
+        const fresh = await this.fetchStream(stream); // null = cadence not due
+        if (fresh !== null) this.cache.set(stream, fresh);
+        const payload = fresh ?? this.cache.get(stream);
+        if (payload === undefined) continue; // nothing fetched yet (e.g. slow first call)
+
         for (const [deviceId, list] of targets) {
-          if (list.includes(stream)) this.mqtt.publishData(deviceId, stream, payload);
+          if (!list.includes(stream)) continue;
+          const key = `${deviceId}|${stream}`;
+          // publish on a fresh fetch, or once to a device that hasn't seen it yet
+          if (fresh !== null || !seen.has(key)) {
+            this.mqtt.publishData(deviceId, stream, payload);
+            seen.add(key);
+          }
         }
       }
     } catch (err) {
@@ -128,15 +140,24 @@ export class FeedsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  private static readonly FX_FALLBACK: Record<string, number> = {
+    USDTHB: 32.9, USDJPY: 157, EURTHB: 35.5, USDEUR: 0.93,
+  };
+
   private async fetchFx(pair: string) {
     const base = pair.slice(0, 3);
     const quote = pair.slice(3);
-    const res = await fetch(`https://open.er-api.com/v6/latest/${base}`);
-    if (!res.ok) throw new Error(`er-api ${res.status}`);
-    const j = (await res.json()) as { rates?: Record<string, number> };
-    const rate = j.rates?.[quote];
-    if (!rate) throw new Error(`no rate ${pair}`);
-    return { pair, rate };
+    try {
+      const res = await fetch(`https://open.er-api.com/v6/latest/${base}`);
+      if (res.ok) {
+        const j = (await res.json()) as { rates?: Record<string, number> };
+        const rate = j.rates?.[quote];
+        if (rate) return { pair, rate };
+      }
+    } catch {
+      /* offline → fall through to fallback so the device never sees rate 0 */
+    }
+    return { pair, rate: FeedsService.FX_FALLBACK[pair] ?? 1 };
   }
 
   private static readonly CITIES: Record<string, { name: string; lat: number; lon: number }> = {

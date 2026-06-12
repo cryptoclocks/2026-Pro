@@ -517,7 +517,11 @@ export class SimSession {
       this.feeders.push(setInterval(feed, Math.max(5000, hintMs ?? 15_000)));
     } else if (fx) {
       info = { source: src, stream, mode: "binance" };
+      // deliver a fallback rate immediately so the THB toggle never sees rate=0,
+      // then fetch the real rate and refresh hourly
+      this.deliver(stream, JSON.stringify({ pair: fx[1], rate: fxFallback(fx[1]) }));
       void this.feedFx(stream, fx[1]);
+      this.feeders.push(setInterval(() => void this.feedFx(stream, fx[1]), 3_600_000));
     } else if (MOCK[src]) {
       info = { source: src, stream, mode: "mock" };
       this.deliver(stream, JSON.stringify(MOCK[src]));
@@ -603,7 +607,7 @@ export class SimSession {
 
   /** USD->THB (etc.) rate — same source the firmware uses (open.er-api.com). */
   private async feedFx(stream: string, pair: string) {
-    const base = pair.slice(0, 3) === "USD" ? "USD" : pair.slice(0, 3);
+    const base = pair.slice(0, 3);
     const quote = pair.slice(3);
     let rate = 0;
     try {
@@ -615,7 +619,7 @@ export class SimSession {
     } catch {
       /* offline */
     }
-    if (!rate) rate = quote === "THB" ? 36.5 : 1; // offline fallback
+    if (!rate) rate = fxFallback(pair); // offline fallback
     if (this.stopped) return;
     this.deliver(stream, JSON.stringify({ pair, rate }));
   }
@@ -659,6 +663,12 @@ function lookupPath(data: Record<string, unknown>, path: string): unknown {
 
 function opts_defaultTick(v: number | undefined): v is number {
   return typeof v === "number" && v > 0;
+}
+
+/** Offline / pre-fetch fallback FX rates (approx, June 2026). */
+function fxFallback(pair: string): number {
+  const RATES: Record<string, number> = { USDTHB: 32.9, USDJPY: 157, EURTHB: 35.5, USDEUR: 0.93 };
+  return RATES[pair] ?? 1;
 }
 
 export function base64ToBytes(b64: string) {

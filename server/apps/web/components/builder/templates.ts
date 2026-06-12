@@ -58,7 +58,7 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         props: { on: false, color: "#848E9C" }, style: {},
       },
       {
-        type: "label", id: "price", x: 18, y: 58, w: 330, h: 58,
+        type: "label", id: "price", x: 18, y: 58, w: 444, h: 58,
         props: { text: "--" },
         style: { text_color: "#EAECEF", align: "left", font: "montserrat_48" },
       },
