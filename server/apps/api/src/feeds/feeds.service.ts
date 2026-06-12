@@ -200,8 +200,20 @@ export function weatherPayload(city: string, tempC: number, humidity: number, co
     desc,
     theme, // clear | partly | cloudy | rain | thunder | snow | fog
     icon: theme, // asset id of the matching weather GIF (bound to the gif widget's src)
+    bg: THEME_BG[theme] ?? "#27384B", // full-screen background color for the theme
   };
 }
+
+/** Themed background colors (dark enough for white text + the GIF to pop). */
+const THEME_BG: Record<string, string> = {
+  clear: "#2B6FB0",
+  partly: "#3C6E9E",
+  cloudy: "#49566A",
+  rain: "#27384B",
+  thunder: "#1C1736",
+  snow: "#5A7390",
+  fog: "#5B636E",
+};
 
 /** WMO weather code → (label, animation theme). */
 export function wmoToDescTheme(code: number): [string, string] {

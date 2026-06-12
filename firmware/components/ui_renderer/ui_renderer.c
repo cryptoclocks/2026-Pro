@@ -461,9 +461,17 @@ static void apply_style(lv_obj_t *obj, const cJSON *style)
      * than montserrat_48 by transform-scaling, like the native clock. Pivot at
      * top-left so the widget keeps its x/y anchor as it grows. */
     if ((it = cJSON_GetObjectItem(style, "scale")) && cJSON_IsNumber(it) && it->valuedouble > 0) {
+        /* transform_scale enlarges a label beyond the max bitmap font (like the
+         * native clock's 3x time). Size to content + clip so the transformed
+         * draw has a tight box. NOTE: transform_scale must NOT share a screen
+         * with an animated GIF widget — LVGL's transformed draw + the GIF
+         * decoder corrupt each other and crash. Safe on text-only pages. */
+        if (lv_obj_check_type(obj, &lv_label_class)) {
+            lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
+            lv_obj_set_width(obj, LV_SIZE_CONTENT);
+            lv_obj_set_height(obj, LV_SIZE_CONTENT);
+        }
         lv_obj_set_style_transform_scale(obj, (int)(it->valuedouble * 256.0 + 0.5), 0);
-        lv_obj_set_style_transform_pivot_x(obj, 0, 0);
-        lv_obj_set_style_transform_pivot_y(obj, 0, 0);
     }
     if ((c = jstr(style, "align", NULL))) {
         lv_text_align_t a = LV_TEXT_ALIGN_LEFT;

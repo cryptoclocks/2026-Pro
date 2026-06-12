@@ -677,8 +677,14 @@ function weatherPayload(city: string, tempC: number, humidity: number, code: num
     desc,
     theme,
     icon: theme,
+    bg: WX_BG[theme] ?? "#27384B",
   };
 }
+
+const WX_BG: Record<string, string> = {
+  clear: "#2B6FB0", partly: "#3C6E9E", cloudy: "#49566A",
+  rain: "#27384B", thunder: "#1C1736", snow: "#5A7390", fog: "#5B636E",
+};
 
 function wmoToDescTheme(code: number): [string, string] {
   if (code <= 1) return [code === 0 ? "Clear sky" : "Mainly clear", "clear"];

@@ -85,16 +85,20 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     ],
   },
 
-  /* Cute animated Weather page. Full-screen "scene" canvas is painted by
-     WEATHER_LOGIC_SOURCE (gradient bg + animated icon, switched on weather
-     theme); the clock is wasm-driven; city/temp/humidity/desc come from
-     bindings on stream weather.bangkok. Text is semi-transparent (opa). */
+  /* Cute animated Weather page. Background is a full-screen panel whose color
+     follows the weather theme (binding style.bg_color ← weather.bg); the icon is
+     an animated Lottie→GIF (src ← weather.icon); the big clock is wasm-driven;
+     city/temp/humidity/desc come from bindings on stream weather.bangkok.
+     (No canvas — keeps memory free so the clock can transform-scale safely.) */
   weather: {
     name: "Weather",
     widgets: [
       {
-        type: "canvas", id: "scene", x: 0, y: 0, w: 480, h: 320,
-        props: {}, style: { bg_color: "#4E83B4" },
+        // full-screen themed background; initial bg_color sets bg_opa=COVER so
+        // the runtime style.bg_color binding stays visible
+        type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320,
+        props: { text: "" }, style: { bg_color: "#27384B" },
+        bindings: [{ prop: "style.bg_color", source: "weather", path: "bg" }],
       },
       {
         // animated weather icon (Lottie→GIF); src swaps to the asset matching
@@ -110,10 +114,12 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         bindings: [{ prop: "text", source: "weather", path: "city" }],
       },
       {
-        // big clock: montserrat_48 scaled 1.7x (pivot top-left), driven by wasm
-        type: "label", id: "time", x: 18, y: 44, w: 320, h: 84,
+        // big clock at the max standard font, driven by wasm (ccp_time_unix).
+        // NOTE: transform "scale" crashes LVGL when an animated GIF shares the
+        // screen, so the clock stays at montserrat_48 here.
+        type: "label", id: "time", x: 18, y: 44, w: 320, h: 60,
         props: { text: "--:--" },
-        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_48", opa: 235, scale: 1.7 },
+        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_48", opa: 235 },
       },
       {
         type: "label", id: "temp", x: 18, y: 146, w: 220, h: 40,
