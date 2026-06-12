@@ -1000,6 +1000,26 @@ const char *ui_renderer_widget_id(int idx)
     return s_ui.widgets[idx].id;
 }
 
+/* serial debug: dump the loaded package's widgets (id/type/geom + label text) */
+int ui_renderer_debug_widgets(char *buf, size_t len)
+{
+    int n = snprintf(buf, len, "widgets(%d) base=%s:\n", s_ui.widget_count, s_ui.base_dir);
+    for (int i = 0; i < s_ui.widget_count && n < (int)len; i++) {
+        widget_ent_t *w = &s_ui.widgets[i];
+        lv_obj_t *o = w->obj;
+        int x = o ? lv_obj_get_x(o) : -1, y = o ? lv_obj_get_y(o) : -1;
+        int ww = o ? lv_obj_get_width(o) : -1, hh = o ? lv_obj_get_height(o) : -1;
+        n += snprintf(buf + n, len - n, "  %-10s %-7s @%d,%d %dx%d", w->id, w->type, x, y, ww, hh);
+        if (o && lv_obj_check_type(o, &lv_label_class)) {
+            const lv_font_t *f = lv_obj_get_style_text_font(o, LV_PART_MAIN);
+            n += snprintf(buf + n, len - n, " lh=%d \"%s\"",
+                          f ? (int)f->line_height : -1, lv_label_get_text(o));
+        }
+        n += snprintf(buf + n, len - n, "\n");
+    }
+    return s_ui.widget_count;
+}
+
 int ui_renderer_get_streams(char out[][96], int max)
 {
     int n = 0;

@@ -32,6 +32,10 @@ void home_ui_park(void);
 /** True while a built-in screen owns the display (vs. a ui_renderer package). */
 bool home_ui_owns_screen(void);
 
+/* serial debug console helpers */
+int  home_ui_debug_pages(char *buf, size_t len); /* writes a listing, returns page count */
+bool home_ui_goto_id(const char *id);            /* switch to a built-in page by id */
+
 /** Note connectivity changes (enables crypto polling, shows IP in menu). */
 void home_ui_network_changed(bool connected, const char *ip);
 

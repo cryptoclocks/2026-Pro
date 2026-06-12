@@ -1735,6 +1735,32 @@ void home_ui_show_home(void)
 
 bool home_ui_owns_screen(void) { return s.owns_screen; }
 
+/* ---- serial debug helpers ---- */
+int home_ui_debug_pages(char *buf, size_t len)
+{
+    int n = snprintf(buf, len, "pages(%d) current=%d:\n", s.page_count, s.current);
+    for (int i = 0; i < s.page_count && n < (int)len; i++) {
+        n += snprintf(buf + n, len - n, "  [%d]%s %s%s\n", i, s.pages[i].id,
+                      i == s.current ? "*" : "",
+                      s.pages[i].kind == PAGE_PACKAGE ? "(pkg)" : "");
+    }
+    return s.page_count;
+}
+
+bool home_ui_goto_id(const char *id)
+{
+    for (int i = 0; i < s.page_count; i++) {
+        if (!strcmp(s.pages[i].id, id)) {
+            if (display_engine_lock(200)) {
+                goto_page(i, i >= s.current);
+                display_engine_unlock();
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 void home_ui_network_changed(bool connected, const char *ip)
 {
     s.net_connected = connected;

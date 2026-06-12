@@ -70,6 +70,10 @@ int       ui_renderer_widget_index(const char *id);
 lv_obj_t *ui_renderer_widget_by_index(int idx);
 const char *ui_renderer_widget_id(int idx);
 
+/** Serial debug: write a human listing of the loaded package widgets
+ *  (id/type/geometry + label text & font line-height). Returns widget count. */
+int ui_renderer_debug_widgets(char *buf, size_t len);
+
 /** Feed an incoming data-stream payload; applies every matching binding. */
 void ui_renderer_handle_data(const char *stream, const char *payload, size_t len);
 

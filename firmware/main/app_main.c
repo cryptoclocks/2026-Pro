@@ -30,6 +30,7 @@
 #include "device_security.h"
 #include "sys_monitor.h"
 #include "home_ui.h"
+#include "dbg_console.h"
 #include "local_api.h"
 #include "user_config.h"
 
@@ -544,4 +545,7 @@ void app_main(void)
     ESP_ERROR_CHECK(sys_monitor_start(on_telemetry, 30));
 
     xTaskCreatePinnedToCore(health_gate_task, "health", 4096, NULL, 6, NULL, 0);
+
+    /* serial debug console (USB-Serial-JTAG): pages/goto/widgets/ls/cat/heap/ver */
+    dbg_console_start();
 }
