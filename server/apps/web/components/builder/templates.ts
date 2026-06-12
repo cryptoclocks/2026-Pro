@@ -85,33 +85,45 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     ],
   },
 
-  /* Sellable Weather page — bindings fill the labels from stream weather.bangkok
-     (mock values in Simulate until a server-side weather feeder publishes). */
+  /* Cute animated Weather page. Full-screen "scene" canvas is painted by
+     WEATHER_LOGIC_SOURCE (gradient bg + animated icon, switched on weather
+     theme); the clock is wasm-driven; city/temp/humidity/desc come from
+     bindings on stream weather.bangkok. Text is semi-transparent (opa). */
   weather: {
     name: "Weather",
     widgets: [
       {
-        type: "label", id: "city", x: 40, y: 36, w: 400, h: 32,
+        type: "canvas", id: "scene", x: 0, y: 0, w: 480, h: 320,
+        props: {}, style: { bg_color: "#4E83B4" },
+      },
+      {
+        type: "label", id: "city", x: 18, y: 16, w: 280, h: 24,
         props: { text: "Bangkok" },
-        style: { text_color: "#EAECEF", align: "center", font: "montserrat_28" },
+        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_20", opa: 220 },
         bindings: [{ prop: "text", source: "weather", path: "city" }],
       },
       {
-        type: "label", id: "temp", x: 40, y: 96, w: 400, h: 60,
+        type: "label", id: "time", x: 16, y: 40, w: 300, h: 58,
+        props: { text: "--:--" },
+        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_48", opa: 235 },
+      },
+      {
+        type: "label", id: "temp", x: 18, y: 116, w: 220, h: 40,
         props: { text: "31°C" },
-        style: { text_color: "#15C3A6", align: "center", font: "montserrat_48" },
+        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_28", opa: 235 },
         bindings: [{ prop: "text", source: "weather", path: "temp" }],
       },
       {
-        type: "label", id: "desc", x: 40, y: 176, w: 400, h: 26,
+        type: "label", id: "desc", x: 18, y: 160, w: 260, h: 22,
         props: { text: "Partly cloudy" },
-        style: { text_color: "#848E9C", align: "center", font: "montserrat_20" },
+        style: { text_color: "#EAF2FF", align: "left", font: "montserrat_20", opa: 210 },
         bindings: [{ prop: "text", source: "weather", path: "desc" }],
       },
       {
-        type: "label", id: "updated", x: 40, y: 286, w: 400, h: 18,
-        props: { text: "CryptoClock Weather" },
-        style: { text_color: "#848E9C", align: "center" },
+        type: "label", id: "humidity", x: 18, y: 188, w: 260, h: 22,
+        props: { text: "Humidity 68%" },
+        style: { text_color: "#EAF2FF", align: "left", font: "montserrat_20", opa: 210 },
+        bindings: [{ prop: "text", source: "weather", path: "humidity", format: "Humidity %s" }],
       },
     ],
   },

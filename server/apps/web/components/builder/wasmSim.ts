@@ -498,6 +498,7 @@ export class SimSession {
     const ticker = /^market\.([A-Z0-9]{5,12})\.ticker$/.exec(stream);
     const klines = /^market\.([A-Z0-9]{5,12})\.klines\.(\d+[mhdw])$/.exec(stream);
     const fx = /^fx\.([A-Z]{6})$/.exec(stream);
+    const weather = /^weather\.([a-z-]+)$/.exec(stream);
 
     let info: SimStreamInfo;
     if (src === "clock" || stream === "clock" || stream.startsWith("time.")) {
@@ -522,6 +523,10 @@ export class SimSession {
       this.deliver(stream, JSON.stringify({ pair: fx[1], rate: fxFallback(fx[1]) }));
       void this.feedFx(stream, fx[1]);
       this.feeders.push(setInterval(() => void this.feedFx(stream, fx[1]), 3_600_000));
+    } else if (weather) {
+      info = { source: src, stream, mode: "binance" };
+      void this.feedWeather(stream, weather[1]);
+      this.feeders.push(setInterval(() => void this.feedWeather(stream, weather[1]), 600_000));
     } else if (MOCK[src]) {
       info = { source: src, stream, mode: "mock" };
       this.deliver(stream, JSON.stringify(MOCK[src]));
@@ -623,6 +628,66 @@ export class SimSession {
     if (this.stopped) return;
     this.deliver(stream, JSON.stringify({ pair, rate }));
   }
+
+  /** Live weather from open-meteo (same payload the server feeder publishes). */
+  private async feedWeather(stream: string, citySlug: string) {
+    const city = CITIES[citySlug] ?? { name: "Bangkok", lat: 13.7563, lon: 100.5018 };
+    try {
+      const res = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
+          `&current=temperature_2m,relative_humidity_2m,weather_code`,
+      );
+      if (res.ok) {
+        const j = (await res.json()) as {
+          current?: { temperature_2m: number; relative_humidity_2m: number; weather_code: number };
+        };
+        const cw = j.current;
+        if (cw && !this.stopped) {
+          this.deliver(stream, JSON.stringify(weatherPayload(city.name, cw.temperature_2m, cw.relative_humidity_2m, cw.weather_code)));
+          return;
+        }
+      }
+    } catch {
+      /* offline → fallback below */
+    }
+    if (this.stopped) return;
+    this.deliver(stream, JSON.stringify(weatherPayload(city.name, 31, 68, 2)));
+  }
+}
+
+const CITIES: Record<string, { name: string; lat: number; lon: number }> = {
+  bangkok: { name: "Bangkok", lat: 13.7563, lon: 100.5018 },
+  "chiang-mai": { name: "Chiang Mai", lat: 18.7883, lon: 98.9853 },
+  phuket: { name: "Phuket", lat: 7.8804, lon: 98.3923 },
+};
+
+/** Mirror of the server's weatherPayload so the page behaves the same in preview. */
+function weatherPayload(city: string, tempC: number, humidity: number, code: number) {
+  const [desc, theme] = wmoToDescTheme(code);
+  return {
+    city,
+    temp: `${Math.round(tempC)}°C`,
+    temp_c: tempC,
+    humidity: `${Math.round(humidity)}%`,
+    humidity_pct: Math.round(humidity),
+    code,
+    desc,
+    theme,
+  };
+}
+
+function wmoToDescTheme(code: number): [string, string] {
+  if (code <= 1) return [code === 0 ? "Clear sky" : "Mainly clear", "clear"];
+  if (code === 2) return ["Partly cloudy", "partly"];
+  if (code === 3) return ["Overcast", "cloudy"];
+  if (code >= 45 && code <= 48) return ["Fog", "fog"];
+  if (code >= 51 && code <= 57) return ["Drizzle", "rain"];
+  if (code >= 61 && code <= 67) return ["Rain", "rain"];
+  if (code >= 71 && code <= 77) return ["Snow", "snow"];
+  if (code >= 80 && code <= 82) return ["Rain showers", "rain"];
+  if (code >= 85 && code <= 86) return ["Snow showers", "snow"];
+  if (code >= 95) return ["Thunderstorm", "thunder"];
+  return ["—", "cloudy"];
 }
 
 /* --------------------------------------------------------- module api */

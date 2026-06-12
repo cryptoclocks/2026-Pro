@@ -54,12 +54,12 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
   });
 
   const hasBinding = (widget.bindings?.length ?? 0) > 0;
-  // widgets that paint their own visuals shouldn't get the default panel fill
-  const SELF_DRAWN = ["arc", "bar", "slider", "switch", "led", "qrcode", "spinner", "chart"];
+  // Match the device: only widgets with an explicit bg_color get a fill. Labels,
+  // images and self-drawn widgets are transparent on LVGL unless styled.
   const bg =
     ov?.bg ??
     widget.style?.bg_color ??
-    (widget.type === "chart" ? "#161B22" : SELF_DRAWN.includes(widget.type) ? "transparent" : "#181C22");
+    (widget.type === "chart" ? "#161B22" : widget.type === "button" ? "#2b3139" : "transparent");
 
   /** In simulate mode events go to the real wasm session (same path as the device). */
   const simulateClick = () => {

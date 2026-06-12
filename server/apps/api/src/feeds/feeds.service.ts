@@ -166,29 +166,53 @@ export class FeedsService implements OnModuleInit, OnModuleDestroy {
     phuket: { name: "Phuket", lat: 7.8804, lon: 98.3923 },
   };
 
-  private static readonly WMO: [number, string][] = [
-    [0, "Clear sky"], [1, "Mainly clear"], [2, "Partly cloudy"], [3, "Overcast"],
-    [45, "Fog"], [51, "Light drizzle"], [61, "Light rain"], [63, "Rain"],
-    [65, "Heavy rain"], [80, "Rain showers"], [95, "Thunderstorm"],
-  ];
-
   private async fetchWeather(citySlug: string) {
     const city = FeedsService.CITIES[citySlug];
     if (!city) throw new Error(`unknown city ${citySlug}`);
     const res = await fetch(
-      `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}&current_weather=true`,
+      `https://api.open-meteo.com/v1/forecast?latitude=${city.lat}&longitude=${city.lon}` +
+        `&current=temperature_2m,relative_humidity_2m,weather_code`,
     );
     if (!res.ok) throw new Error(`open-meteo ${res.status}`);
-    const j = (await res.json()) as { current_weather?: { temperature: number; weathercode: number } };
-    const cw = j.current_weather;
-    if (!cw) throw new Error("no current_weather");
-    let desc = "—";
-    for (const [code, label] of FeedsService.WMO) if (cw.weathercode >= code) desc = label;
-    return {
-      city: city.name,
-      temp: `${Math.round(cw.temperature)}°C`,
-      temp_c: cw.temperature,
-      desc,
+    const j = (await res.json()) as {
+      current?: { temperature_2m: number; relative_humidity_2m: number; weather_code: number };
     };
+    const cw = j.current;
+    if (!cw) throw new Error("no current");
+    return weatherPayload(city.name, cw.temperature_2m, cw.relative_humidity_2m, cw.weather_code);
   }
+}
+
+/**
+ * Canonical weather payload shared by the server feeder and the Builder
+ * simulator so the Weather page behaves identically on device and in preview.
+ * `theme` is what the page wasm switches background + animation on.
+ */
+export function weatherPayload(city: string, tempC: number, humidity: number, code: number) {
+  const [desc, theme] = wmoToDescTheme(code);
+  return {
+    city,
+    temp: `${Math.round(tempC)}°C`,
+    temp_c: tempC,
+    humidity: `${Math.round(humidity)}%`,
+    humidity_pct: Math.round(humidity),
+    code,
+    desc,
+    theme, // clear | partly | cloudy | rain | thunder | snow | fog
+  };
+}
+
+/** WMO weather code → (label, animation theme). */
+export function wmoToDescTheme(code: number): [string, string] {
+  if (code <= 1) return [code === 0 ? "Clear sky" : "Mainly clear", "clear"];
+  if (code === 2) return ["Partly cloudy", "partly"];
+  if (code === 3) return ["Overcast", "cloudy"];
+  if (code >= 45 && code <= 48) return ["Fog", "fog"];
+  if (code >= 51 && code <= 57) return ["Drizzle", "rain"];
+  if (code >= 61 && code <= 67) return ["Rain", "rain"];
+  if (code >= 71 && code <= 77) return ["Snow", "snow"];
+  if (code >= 80 && code <= 82) return ["Rain showers", "rain"];
+  if (code >= 85 && code <= 86) return ["Snow showers", "snow"];
+  if (code >= 95) return ["Thunderstorm", "thunder"];
+  return ["—", "cloudy"];
 }

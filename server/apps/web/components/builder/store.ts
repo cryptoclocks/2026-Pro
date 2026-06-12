@@ -796,6 +796,353 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 `;
 
+/* Cute animated Weather page: full-screen canvas "scene" that the wasm paints
+   each tick with a weather-themed gradient background + a procedurally animated
+   icon (sun w/ rotating rays, drifting clouds, falling rain/snow, lightning
+   flash, fog). Text (city/temp/humidity/desc) comes from bindings; the clock is
+   driven here from ccp_time_unix. theme switches on the weather payload's
+   "theme" field (clear|partly|cloudy|rain|thunder|snow|fog). */
+export const WEATHER_LOGIC_SOURCE = `#![no_std]
+
+const CCP_ABI_VERSION: u32 = 1;
+const CCP_OK: i32 = 0;
+const CCP_ERR_INVAL: i32 = -1;
+const TZ_OFFSET_MIN: i64 = 7 * 60;
+
+const W: i32 = 480;
+const H: i32 = 320;
+const CX: i32 = 352; // weather icon center
+const CY: i32 = 150;
+
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn ccp_ui_get_widget(id: *const u8, id_len: u32) -> i32;
+    fn ccp_ui_set_text(widget: i32, text: *const u8, len: u32) -> i32;
+    fn ccp_canvas_fill_rect(w: i32, x: i32, y: i32, rw: i32, rh: i32, argb: u32) -> i32;
+    fn ccp_canvas_draw_line(w: i32, x0: i32, y0: i32, x1: i32, y1: i32, argb: u32, width: u32) -> i32;
+    fn ccp_canvas_flush(w: i32) -> i32;
+    fn ccp_data_subscribe(stream: *const u8, len: u32) -> i32;
+    fn ccp_request_tick(interval_ms: u32) -> i32;
+    fn ccp_time_unix() -> u64;
+}
+
+// (cos,sin)*64 at 15-degree steps
+static TRIG: [(i32, i32); 24] = [
+    (64, 0), (62, 17), (55, 32), (45, 45), (32, 55), (17, 62),
+    (0, 64), (-17, 62), (-32, 55), (-45, 45), (-55, 32), (-62, 17),
+    (-64, 0), (-62, -17), (-55, -32), (-45, -45), (-32, -55), (-17, -62),
+    (0, -64), (17, -62), (32, -55), (45, -45), (55, -32), (62, -17),
+];
+
+static mut W_SCENE: i32 = -1;
+static mut W_TIME: i32 = -1;
+static mut THEME: i32 = 1; // default: partly
+static mut FRAME: i32 = 0;
+static mut H_WX: i32 = -1;
+static mut LAST_MIN: i64 = -1;
+
+#[no_mangle]
+pub extern "C" fn ccp_on_init(abi_version: u32) -> i32 {
+    if abi_version != CCP_ABI_VERSION {
+        return CCP_ERR_INVAL;
+    }
+    unsafe {
+        W_SCENE = ccp_ui_get_widget(b"scene".as_ptr(), 5);
+        W_TIME = ccp_ui_get_widget(b"time".as_ptr(), 4);
+        H_WX = ccp_data_subscribe(b"weather.bangkok".as_ptr(), 15);
+        ccp_request_tick(120);
+        draw_scene();
+    }
+    CCP_OK
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_data(h: i32, ptr: u32, len: u32) {
+    unsafe {
+        if h != H_WX {
+            return;
+        }
+        let b = core::slice::from_raw_parts(ptr as *const u8, len as usize);
+        if let Some(t) = theme_of(b) {
+            THEME = t;
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_tick(_now_ms: u64) {
+    unsafe {
+        FRAME = FRAME.wrapping_add(1);
+        update_clock();
+        draw_scene();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_event(_w: i32, _e: u32, _p0: i32, _p1: i32) {}
+#[no_mangle]
+pub extern "C" fn ccp_on_destroy() {}
+
+unsafe fn update_clock() {
+    let utc = ccp_time_unix();
+    if utc == 0 {
+        return;
+    }
+    let local = utc as i64 + TZ_OFFSET_MIN * 60;
+    let minute = local / 60;
+    if minute == LAST_MIN {
+        return;
+    }
+    LAST_MIN = minute;
+    let sod = local.rem_euclid(86400) as u32;
+    let mut buf = [0u8; 5];
+    put2(&mut buf[0..2], sod / 3600);
+    buf[2] = b':';
+    put2(&mut buf[3..5], (sod / 60) % 60);
+    if W_TIME >= 0 {
+        ccp_ui_set_text(W_TIME, buf.as_ptr(), 5);
+    }
+}
+
+fn put2(out: &mut [u8], v: u32) {
+    out[0] = b'0' + (v / 10 % 10) as u8;
+    out[1] = b'0' + (v % 10) as u8;
+}
+
+/* ---- theme palette: (bg_top, bg_bottom, ink/icon accent) ---- */
+fn palette(theme: i32) -> (u32, u32, u32) {
+    match theme {
+        0 => (0x2B6FB0, 0xF6C36B, 0xFFD23F), // clear
+        1 => (0x4E83B4, 0xBCC7D6, 0xFFE08A), // partly
+        2 => (0x49566A, 0x9AA6B5, 0xD7DEE6), // cloudy
+        3 => (0x27384B, 0x4B6275, 0xBFE3FF), // rain
+        4 => (0x1C1736, 0x3C2F5E, 0xE6D6FF), // thunder
+        5 => (0x6E8CA8, 0xD9E4EE, 0xFFFFFF), // snow
+        _ => (0x646C78, 0xAEB6BE, 0xD0D5DB), // fog
+    }
+}
+
+fn lerp(a: u32, b: u32, num: i32, den: i32) -> u32 {
+    let mut out = 0u32;
+    let mut sh = 0;
+    while sh <= 16 {
+        let ca = ((a >> sh) & 0xff) as i32;
+        let cb = ((b >> sh) & 0xff) as i32;
+        let c = ca + (cb - ca) * num / den;
+        out |= (c as u32) << sh;
+        sh += 8;
+    }
+    out
+}
+
+unsafe fn draw_scene() {
+    let (top, bot, accent) = palette(THEME);
+    // gradient background in 32 bands
+    let bands = 32;
+    let bh = H / bands;
+    let mut i = 0;
+    while i < bands {
+        let col = lerp(top, bot, i, bands - 1);
+        ccp_canvas_fill_rect(W_SCENE, 0, i * bh, W, bh + 1, col);
+        i += 1;
+    }
+    match THEME {
+        0 => draw_sun(CX, CY, 40, accent, true),
+        1 => {
+            draw_sun(CX + 22, CY - 18, 26, accent, true);
+            draw_cloud(CX - 6, CY + 18, 0xEFF3F8);
+        }
+        2 => {
+            draw_cloud(CX - 18, CY - 6, 0xE3E8EF);
+            draw_cloud(CX + 18, CY + 16, 0xCfd7e0);
+        }
+        3 => {
+            draw_cloud(CX, CY - 18, 0xC7D0DA);
+            draw_rain(CX, CY + 6, accent);
+        }
+        4 => {
+            draw_cloud(CX, CY - 18, 0x9aa0b5);
+            draw_rain(CX, CY + 6, 0x9fb6d6);
+            draw_bolt(CX, CY + 4, accent);
+        }
+        5 => {
+            draw_cloud(CX, CY - 18, 0xDDE6EF);
+            draw_snow(CX, CY + 6, 0xFFFFFF);
+        }
+        _ => draw_fog(accent),
+    }
+    ccp_canvas_flush(W_SCENE);
+}
+
+fn isqrt(n: i32) -> i32 {
+    if n <= 0 {
+        return 0;
+    }
+    let mut x = n;
+    let mut y = (x + 1) / 2;
+    while y < x {
+        x = y;
+        y = (x + n / x) / 2;
+    }
+    x
+}
+
+unsafe fn fill_disc(cx: i32, cy: i32, r: i32, color: u32) {
+    let mut dy = -r;
+    while dy <= r {
+        let half = isqrt(r * r - dy * dy);
+        ccp_canvas_fill_rect(W_SCENE, cx - half, cy + dy, 2 * half + 1, 1, color);
+        dy += 1;
+    }
+}
+
+unsafe fn draw_sun(cx: i32, cy: i32, r: i32, color: u32, rays: bool) {
+    if rays {
+        let spin = (FRAME / 2) as usize;
+        let mut k = 0;
+        while k < 12 {
+            let (c, s) = TRIG[(spin + k * 2) % 24];
+            let x0 = cx + (c * (r + 8)) / 64;
+            let y0 = cy + (s * (r + 8)) / 64;
+            let x1 = cx + (c * (r + 22)) / 64;
+            let y1 = cy + (s * (r + 22)) / 64;
+            ccp_canvas_draw_line(W_SCENE, x0, y0, x1, y1, color, 3);
+            k += 1;
+        }
+    }
+    fill_disc(cx, cy, r, color);
+    fill_disc(cx, cy, r - 6, lighten(color));
+}
+
+fn lighten(c: u32) -> u32 {
+    lerp(c, 0xFFFFFF, 1, 4)
+}
+
+unsafe fn draw_cloud(cx: i32, cy: i32, color: u32) {
+    fill_disc(cx - 24, cy + 4, 18, color);
+    fill_disc(cx + 24, cy + 6, 16, color);
+    fill_disc(cx, cy - 10, 26, color);
+    ccp_canvas_fill_rect(W_SCENE, cx - 40, cy + 2, 80, 18, color);
+}
+
+unsafe fn draw_rain(cx: i32, cy: i32, color: u32) {
+    let mut k = 0;
+    while k < 7 {
+        let x = cx - 40 + k * 13;
+        let off = (FRAME * 7 + k * 19) % 60;
+        let y = cy + 18 + off;
+        ccp_canvas_draw_line(W_SCENE, x, y, x - 3, y + 12, color, 2);
+        k += 1;
+    }
+}
+
+unsafe fn draw_snow(cx: i32, cy: i32, color: u32) {
+    let mut k = 0;
+    while k < 8 {
+        let drift = ((FRAME / 4 + k * 3) % 7) - 3;
+        let x = cx - 40 + k * 11 + drift;
+        let y = cy + 18 + (FRAME * 3 + k * 17) % 70;
+        fill_disc(x, y, 3, color);
+        k += 1;
+    }
+}
+
+unsafe fn draw_bolt(cx: i32, cy: i32, color: u32) {
+    // flash for 4 frames every ~48
+    if FRAME % 48 < 4 {
+        ccp_canvas_fill_rect(W_SCENE, 0, 0, W, H, lerp(color, 0xFFFFFF, 1, 2));
+    }
+    ccp_canvas_draw_line(W_SCENE, cx, cy, cx - 10, cy + 22, 0xFFE873, 4);
+    ccp_canvas_draw_line(W_SCENE, cx - 10, cy + 22, cx + 4, cy + 22, 0xFFE873, 4);
+    ccp_canvas_draw_line(W_SCENE, cx + 4, cy + 22, cx - 6, cy + 46, 0xFFE873, 4);
+}
+
+unsafe fn draw_fog(color: u32) {
+    let mut k = 0;
+    while k < 5 {
+        let y = 70 + k * 34;
+        let off = ((FRAME * 2 + k * 40) % 120) - 60;
+        ccp_canvas_draw_line(W_SCENE, CX - 70 + off, y, CX + 70 + off, y, color, 6);
+        k += 1;
+    }
+}
+
+/* find "theme":"xxx" and map to index */
+fn theme_of(b: &[u8]) -> Option<i32> {
+    let key = b"\\"theme\\":\\"";
+    let p = find(b, key)?;
+    let rest = &b[p..];
+    if starts(rest, b"clear") {
+        Some(0)
+    } else if starts(rest, b"partly") {
+        Some(1)
+    } else if starts(rest, b"cloudy") {
+        Some(2)
+    } else if starts(rest, b"rain") {
+        Some(3)
+    } else if starts(rest, b"thunder") {
+        Some(4)
+    } else if starts(rest, b"snow") {
+        Some(5)
+    } else if starts(rest, b"fog") {
+        Some(6)
+    } else {
+        None
+    }
+}
+
+fn starts(hay: &[u8], pre: &[u8]) -> bool {
+    hay.len() >= pre.len() && &hay[..pre.len()] == pre
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.len() > hay.len() {
+        return None;
+    }
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        if &hay[i..i + needle.len()] == needle {
+            return Some(i + needle.len());
+        }
+        i += 1;
+    }
+    None
+}
+
+static mut ARENA: [u8; 8 * 1024] = [0; 8 * 1024];
+static mut ARENA_TOP: usize = 0;
+static mut ARENA_LAST: usize = 0;
+
+#[no_mangle]
+pub extern "C" fn ccp_malloc(size: u32) -> u32 {
+    let size = ((size as usize) + 7) & !7;
+    unsafe {
+        if ARENA_TOP + size > ARENA.len() {
+            return 0;
+        }
+        ARENA_LAST = ARENA_TOP;
+        let ptr = ARENA.as_mut_ptr().add(ARENA_TOP) as u32;
+        ARENA_TOP += size;
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_free(ptr: u32) {
+    unsafe {
+        let last_ptr = ARENA.as_mut_ptr().add(ARENA_LAST) as u32;
+        if ptr == last_ptr {
+            ARENA_TOP = ARENA_LAST;
+        }
+    }
+}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+`;
+
 export const UNAVAILABLE_LOGIC_SOURCE = `// Source for this published WASM was not saved by the older Builder.
 // You can still edit widget properties and Save / Publish; the server will carry
 // the previous wasm file forward. To change logic, paste the Rust source here
@@ -1057,9 +1404,11 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       key === "led_toggle" ? LED_TOGGLE_LOGIC_SOURCE :
       key === "clock" ? CLOCK_LOGIC_SOURCE :
       key === "crypto" ? CRYPTO_LOGIC_SOURCE :
+      key === "weather" ? WEATHER_LOGIC_SOURCE :
       NOOP_LOGIC_SOURCE;
-    const wasmModules = key === "led_toggle" || key === "clock" || key === "crypto"
-      ? [{ id: "logic", path: "wasm/page.wasm", memory_kb: key === "crypto" ? 256 : 128 }]
+    const hasLogic = key === "led_toggle" || key === "clock" || key === "crypto" || key === "weather";
+    const wasmModules = hasLogic
+      ? [{ id: "logic", path: "wasm/page.wasm", memory_kb: key === "crypto" || key === "weather" ? 256 : 128 }]
       : [];
     console.debug("[builder] loadTemplate", { key, widgets: t.widgets.length });
     set({
