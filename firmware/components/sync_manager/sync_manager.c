@@ -13,12 +13,33 @@
 #include "cJSON.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 
 #include "miniz.h"
 
 static const char *TAG = "sync";
 
-#define SYNC_TASK_STACK   (10 * 1024)
+/* miniz's inflate path needs an ~11KB tinfl_decompressor plus I/O buffers. The
+ * default allocator pulls from internal DRAM, which is often fragmented below
+ * that by the time a sync runs (gif decode, wasm, caches) → malloc fails mid
+ * extract and crashes. Route miniz's allocations to PSRAM instead. */
+static void *zip_alloc(void *opaque, size_t items, size_t size)
+{
+    (void)opaque;
+    return heap_caps_malloc(items * size, MALLOC_CAP_SPIRAM);
+}
+static void zip_free(void *opaque, void *p)
+{
+    (void)opaque;
+    heap_caps_free(p);
+}
+static void *zip_realloc(void *opaque, void *p, size_t items, size_t size)
+{
+    (void)opaque;
+    return heap_caps_realloc(p, items * size, MALLOC_CAP_SPIRAM);
+}
+
+#define SYNC_TASK_STACK   (16 * 1024)
 #define SYNC_TASK_PRIO    3
 #define SYNC_TASK_CORE    0
 #define MAX_BUNDLE_BYTES  (16 * 1024 * 1024)
@@ -38,6 +59,9 @@ static esp_err_t extract_zip(const char *zip_path, const char *dest_dir)
 {
     mz_zip_archive zip;
     memset(&zip, 0, sizeof(zip));
+    zip.m_pAlloc = zip_alloc;
+    zip.m_pFree = zip_free;
+    zip.m_pRealloc = zip_realloc;
     if (!mz_zip_reader_init_file(&zip, zip_path, 0)) {
         ESP_LOGE(TAG, "zip open failed: %s", zip_path);
         return ESP_FAIL;
