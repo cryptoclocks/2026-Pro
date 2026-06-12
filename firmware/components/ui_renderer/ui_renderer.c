@@ -457,6 +457,14 @@ static void apply_style(lv_obj_t *obj, const cJSON *style)
     if ((c = jstr(style, "font", NULL))) {
         lv_obj_set_style_text_font(obj, parse_font(c), 0);
     }
+    /* scale: multiplier on top of the font (1.0 = none). Lets a page go larger
+     * than montserrat_48 by transform-scaling, like the native clock. Pivot at
+     * top-left so the widget keeps its x/y anchor as it grows. */
+    if ((it = cJSON_GetObjectItem(style, "scale")) && cJSON_IsNumber(it) && it->valuedouble > 0) {
+        lv_obj_set_style_transform_scale(obj, (int)(it->valuedouble * 256.0 + 0.5), 0);
+        lv_obj_set_style_transform_pivot_x(obj, 0, 0);
+        lv_obj_set_style_transform_pivot_y(obj, 0, 0);
+    }
     if ((c = jstr(style, "align", NULL))) {
         lv_text_align_t a = LV_TEXT_ALIGN_LEFT;
         if (!strcmp(c, "center")) a = LV_TEXT_ALIGN_CENTER;

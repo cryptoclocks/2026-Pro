@@ -110,24 +110,25 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         bindings: [{ prop: "text", source: "weather", path: "city" }],
       },
       {
-        type: "label", id: "time", x: 16, y: 40, w: 300, h: 58,
+        // big clock: montserrat_48 scaled 1.7x (pivot top-left), driven by wasm
+        type: "label", id: "time", x: 18, y: 44, w: 320, h: 84,
         props: { text: "--:--" },
-        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_48", opa: 235 },
+        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_48", opa: 235, scale: 1.7 },
       },
       {
-        type: "label", id: "temp", x: 18, y: 116, w: 220, h: 40,
+        type: "label", id: "temp", x: 18, y: 146, w: 220, h: 40,
         props: { text: "31°C" },
         style: { text_color: "#FFFFFF", align: "left", font: "montserrat_28", opa: 235 },
         bindings: [{ prop: "text", source: "weather", path: "temp" }],
       },
       {
-        type: "label", id: "desc", x: 18, y: 160, w: 260, h: 22,
+        type: "label", id: "desc", x: 18, y: 190, w: 260, h: 22,
         props: { text: "Partly cloudy" },
         style: { text_color: "#EAF2FF", align: "left", font: "montserrat_20", opa: 210 },
         bindings: [{ prop: "text", source: "weather", path: "desc" }],
       },
       {
-        type: "label", id: "humidity", x: 18, y: 188, w: 260, h: 22,
+        type: "label", id: "humidity", x: 18, y: 216, w: 260, h: 22,
         props: { text: "Humidity 68%" },
         style: { text_color: "#EAF2FF", align: "left", font: "montserrat_20", opa: 210 },
         bindings: [{ prop: "text", source: "weather", path: "humidity", format: "Humidity %s" }],

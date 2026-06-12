@@ -194,9 +194,11 @@ function WidgetInner({
   switch (w.type) {
     case "label": {
       const txt = ov?.text ?? (p.text as string) ?? "Label";
-      // LVGL labels draw from the top of their box; size comes from the font only
+      // LVGL labels draw from the top of their box; size comes from the font, with
+      // an optional transform scale (device uses lv transform_scale → same effect)
+      const px = fontPx(w.style) * (Number(w.style?.scale) > 0 ? Number(w.style?.scale) : 1);
       return (
-        <span style={{ fontSize: fontPx(w.style), lineHeight: 1.2, width: "100%", alignSelf: "flex-start" }}>
+        <span style={{ fontSize: px, lineHeight: 1.2, width: "100%", alignSelf: "flex-start" }}>
           {txt}
         </span>
       );

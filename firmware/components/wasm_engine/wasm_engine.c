@@ -281,12 +281,18 @@ static void run_job(const wasm_job_t *job)
         }
         uint32_t argv[1] = { CCP_ABI_VERSION };
         guarded_call(m, m->fn_init, 1, argv, DEADLINE_INIT_MS);
-        if (!m->dead && m->desc.tick_ms > 0) {
+        /* Honor a tick interval from either the layout (desc.tick_ms) or one the
+         * module asked for via ccp_request_tick() inside ccp_on_init — that call
+         * lands before this timer exists, so request_tick_current only stored
+         * m->tick_ms and couldn't start anything. Without this, on_tick never
+         * fires for pages that self-schedule (clock, weather). */
+        uint32_t tms = m->tick_ms ? m->tick_ms : m->desc.tick_ms;
+        if (!m->dead && tms > 0) {
             const esp_timer_create_args_t targs = {
                 .callback = tick_timer_cb, .arg = m, .name = "wasm_tick",
             };
             if (esp_timer_create(&targs, &m->tick_timer) == ESP_OK) {
-                m->tick_ms = m->desc.tick_ms < 16 ? 16 : m->desc.tick_ms;
+                m->tick_ms = tms < 16 ? 16 : tms;
                 esp_timer_start_periodic(m->tick_timer, (uint64_t)m->tick_ms * 1000);
             }
         }

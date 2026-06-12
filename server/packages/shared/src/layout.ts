@@ -32,6 +32,7 @@ export const StyleSchema = z
     opa: z.number().int().min(0).max(255),
     shadow_width: z.number().int().min(0).max(64),
     shadow_color: color,
+    scale: z.number().min(0.1).max(8), // transform multiplier on top of the font
   })
   .partial();
 

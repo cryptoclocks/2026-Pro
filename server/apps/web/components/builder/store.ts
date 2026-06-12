@@ -871,7 +871,10 @@ pub extern "C" fn ccp_on_init(abi_version: u32) -> i32 {
         W_SCENE = ccp_ui_get_widget(b"scene".as_ptr(), 5);
         W_TIME = ccp_ui_get_widget(b"time".as_ptr(), 4);
         H_WX = ccp_data_subscribe(b"weather.bangkok".as_ptr(), 15);
-        ccp_request_tick(120);
+        // tick once a second is plenty for a clock; the heavy gradient is only
+        // repainted on theme change, never per-tick (keeps on_tick well under
+        // the call deadline so the clock always updates on-device)
+        ccp_request_tick(1000);
         draw_scene();
     }
     CCP_OK
@@ -885,7 +888,10 @@ pub extern "C" fn ccp_on_data(h: i32, ptr: u32, len: u32) {
         }
         let b = core::slice::from_raw_parts(ptr as *const u8, len as usize);
         if let Some(t) = theme_of(b) {
-            THEME = t;
+            if t != THEME {
+                THEME = t;
+                draw_scene(); // repaint the gradient for the new theme
+            }
         }
     }
 }
@@ -895,7 +901,16 @@ pub extern "C" fn ccp_on_tick(_now_ms: u64) {
     unsafe {
         FRAME = FRAME.wrapping_add(1);
         update_clock();
-        draw_scene();
+        // thunder: briefly flash the sky, then restore the gradient once
+        if THEME == 4 {
+            let f = FRAME % 6;
+            if f == 0 {
+                ccp_canvas_fill_rect(W_SCENE, 0, 0, W, H, 0xE8E8FF);
+                ccp_canvas_flush(W_SCENE);
+            } else if f == 1 {
+                draw_scene();
+            }
+        }
     }
 }
 
@@ -956,9 +971,11 @@ fn lerp(a: u32, b: u32, num: i32, den: i32) -> u32 {
     out
 }
 
+// Paint the themed gradient. The weather icon is an animated GIF widget layered
+// above this canvas, so the scene only needs the background. Called on init and
+// whenever the weather theme changes — never per tick.
 unsafe fn draw_scene() {
-    let (top, bot, accent) = palette(THEME);
-    // gradient background in 32 bands
+    let (top, bot, _accent) = palette(THEME);
     let bands = 32;
     let bh = H / bands;
     let mut i = 0;
@@ -966,12 +983,6 @@ unsafe fn draw_scene() {
         let col = lerp(top, bot, i, bands - 1);
         ccp_canvas_fill_rect(W_SCENE, 0, i * bh, W, bh + 1, col);
         i += 1;
-    }
-    // The weather icon is an animated GIF widget layered above this canvas, so
-    // the scene only paints the themed gradient. For thunder we briefly light up
-    // the whole sky (the GIF still renders on top of the flash).
-    if THEME == 4 && FRAME % 48 < 3 {
-        ccp_canvas_fill_rect(W_SCENE, 0, 0, W, H, lerp(accent, 0xFFFFFF, 1, 2));
     }
     ccp_canvas_flush(W_SCENE);
 }
