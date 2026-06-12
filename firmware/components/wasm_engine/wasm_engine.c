@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include "esp_pthread.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "esp_check.h"
@@ -73,6 +74,8 @@ static struct {
     wasm_engine_hooks_t hooks;
     uint8_t *pool;
     QueueHandle_t queue;
+    SemaphoreHandle_t exec_lock; /* held by the worker while inside a job, so
+                                    teardown can wait for an in-flight on_tick */
     TaskHandle_t task;
     esp_timer_handle_t supervisor;
     wasm_mod_t mods[UI_MAX_WASM];
@@ -357,7 +360,9 @@ static void *wasm_task(void *arg)
     wasm_job_t job;
     while (true) {
         if (xQueueReceive(s_eng.queue, &job, portMAX_DELAY) == pdTRUE) {
+            xSemaphoreTake(s_eng.exec_lock, portMAX_DELAY);
             run_job(&job);
+            xSemaphoreGive(s_eng.exec_lock);
             free(job.payload);
         }
     }
@@ -401,6 +406,8 @@ esp_err_t wasm_engine_init(const wasm_engine_hooks_t *hooks)
 
     s_eng.queue = xQueueCreate(16, sizeof(wasm_job_t));
     ESP_RETURN_ON_FALSE(s_eng.queue, ESP_ERR_NO_MEM, TAG, "queue");
+    s_eng.exec_lock = xSemaphoreCreateMutex();
+    ESP_RETURN_ON_FALSE(s_eng.exec_lock, ESP_ERR_NO_MEM, TAG, "exec_lock");
 
     esp_pthread_cfg_t tcfg = esp_pthread_get_default_config();
     tcfg.thread_name = "wasm_exec";
@@ -456,8 +463,17 @@ void wasm_engine_unload_all(void)
     while (xQueueReceive(s_eng.queue, &job, 0) == pdTRUE) {
         free(job.payload);
     }
+    /* wait for the worker to finish any job it's mid-execution (e.g. an on_tick
+     * that's inside a module we're about to deinstantiate) before tearing down,
+     * otherwise the runtime frees memory out from under the running call */
+    if (s_eng.exec_lock) {
+        xSemaphoreTake(s_eng.exec_lock, portMAX_DELAY);
+    }
     for (int i = 0; i < s_eng.mod_count; i++) {
         unload_module(&s_eng.mods[i]);
+    }
+    if (s_eng.exec_lock) {
+        xSemaphoreGive(s_eng.exec_lock);
     }
     memset(s_eng.subscribed, 0, sizeof(s_eng.subscribed));
     s_eng.mod_count = 0;

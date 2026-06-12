@@ -114,15 +114,15 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         bindings: [{ prop: "text", source: "weather", path: "city" }],
       },
       {
-        // big clock at the max standard font, driven by wasm (ccp_time_unix).
-        // NOTE: transform "scale" crashes LVGL when an animated GIF shares the
-        // screen, so the clock stays at montserrat_48 here.
-        type: "label", id: "time", x: 18, y: 44, w: 320, h: 60,
+        // big clock: custom montserrat_80 font (digits + colon baked into the
+        // firmware's ccp_fonts component), driven by wasm. A real larger font
+        // instead of transform-scale, which crashes LVGL alongside a GIF.
+        type: "label", id: "time", x: 18, y: 36, w: 320, h: 92,
         props: { text: "--:--" },
-        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_48", opa: 235 },
+        style: { text_color: "#FFFFFF", align: "left", font: "montserrat_80", opa: 235 },
       },
       {
-        type: "label", id: "temp", x: 18, y: 146, w: 220, h: 40,
+        type: "label", id: "temp", x: 18, y: 140, w: 220, h: 40,
         props: { text: "31°C" },
         style: { text_color: "#FFFFFF", align: "left", font: "montserrat_28", opa: 235 },
         bindings: [{ prop: "text", source: "weather", path: "temp" }],

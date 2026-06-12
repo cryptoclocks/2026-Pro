@@ -2,6 +2,7 @@
 #include "display_engine.h"
 #include "storage.h"
 #include "widgets/gif/lv_gif.h" /* lv_gif_class / lv_gif_set_src for runtime src binding */
+#include "ccp_fonts.h" /* lv_font_montserrat_80 (large clock font) */
 
 #include <stdio.h>
 #include <string.h>
@@ -116,6 +117,8 @@ static const lv_font_t *parse_font(const char *name)
 #if LV_FONT_MONTSERRAT_48
     if (!strcmp(name, "montserrat_48")) return &lv_font_montserrat_48;
 #endif
+    /* custom large clock font (digits + colon), from the ccp_fonts component */
+    if (!strcmp(name, "montserrat_80")) return &lv_font_montserrat_80;
     return LV_FONT_DEFAULT;
 }
 
