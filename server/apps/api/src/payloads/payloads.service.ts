@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 import { LayoutSchema, type Layout, type Manifest } from "@ccp/shared";
 import type { User } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
+import { MqttBridgeService } from "../mqtt/mqtt-bridge.service";
 
 const execFileAsync = promisify(execFile);
 const MAX_LOGIC_SOURCE_BYTES = 128 * 1024;
@@ -40,7 +41,10 @@ type BundleFile = {
 export class PayloadsService {
   private readonly logger = new Logger(PayloadsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly mqtt: MqttBridgeService,
+  ) {}
 
   validateLayout(layout: unknown): Layout {
     const parsed = LayoutSchema.safeParse(layout);
@@ -212,10 +216,21 @@ export class PayloadsService {
       title: opts.title || opts.layout.meta.name,
       description: opts.layout.meta.description,
     });
-    this.logger.debug(`publishCompiled:done package=${packageId} version=${version} pv=${payloadVersion.id} item=${marketplaceItem.slug} bundle=${bundle.length}`);
+    // Auto-update every CryptoClock that already owns this page: point it at the
+    // new version and push MQTT sync so admins don't re-grant after each edit.
+    const pushedTo = await this.propagateToEntitledDevices(
+      payloadVersion.payloadId,
+      payloadVersion.id,
+      packageId,
+      version,
+      bundleSha256,
+      bundle.length,
+    );
+    this.logger.debug(`publishCompiled:done package=${packageId} version=${version} pv=${payloadVersion.id} item=${marketplaceItem.slug} bundle=${bundle.length} pushedTo=${pushedTo}`);
 
     return {
       ok: true,
+      pushedToDevices: pushedTo,
       payloadVersionId: payloadVersion.id,
       packageId,
       version,
@@ -233,6 +248,46 @@ export class PayloadsService {
         currency: marketplaceItem.currency,
       },
     };
+  }
+
+  /**
+   * Push a freshly published version to every device already entitled to this
+   * page (Entitlement → MarketplaceItem.payloadId == this payload). Each device's
+   * activePayloadVersion is bumped and an MQTT cmd:sync is sent so the ESP32
+   * downloads the new bundle without a re-grant. Returns the device count.
+   */
+  private async propagateToEntitledDevices(
+    payloadId: string,
+    versionId: string,
+    packageId: string,
+    version: string,
+    bundleSha256: string,
+    sizeBytes: number,
+  ): Promise<number> {
+    const ents = await this.prisma.entitlement.findMany({
+      where: { item: { payloadId } },
+      select: { deviceId: true },
+    });
+    const hwIds = [...new Set(ents.map((e) => e.deviceId))];
+    const bundleUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/v1/packages/${packageId}/${version}/bundle.zip`;
+    let count = 0;
+    for (const hwId of hwIds) {
+      const device = await this.prisma.device.findUnique({ where: { deviceId: hwId } });
+      if (!device) continue;
+      await this.prisma.device.update({
+        where: { id: device.id },
+        data: { activePayloadVersionId: versionId },
+      });
+      this.mqtt.sendCommand(hwId, "sync", {
+        package_id: packageId,
+        version,
+        bundle_url: bundleUrl,
+        bundle_sha256: bundleSha256,
+        bundle_size: sizeBytes,
+      });
+      count += 1;
+    }
+    return count;
   }
 
   /** Create or bump a payload version from a validated layout + bundle hash. */

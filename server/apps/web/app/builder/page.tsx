@@ -202,6 +202,16 @@ export default function BuilderPage() {
     try {
       setBusy("publish");
       const layout = buildLayout();
+
+      // Auto-bump the patch version when re-publishing an existing page so every
+      // entitled CryptoClock sees a new version and re-downloads (the device
+      // caches by package@version and skips an identical one).
+      const existing = savedPages.find((p) => p.packageId === layout.meta.id);
+      if (me?.id && existing) {
+        const next = bumpPatch(existing.latest.version);
+        layout.meta.version = next;
+        b.setMeta({ version: next });
+      }
       console.debug("[builder] publish:start", { packageId: layout.meta.id, version: layout.meta.version });
 
       if (!me?.id) {
@@ -221,11 +231,20 @@ export default function BuilderPage() {
       const savedPackageExists = savedPages.some((page) => page.packageId === layout.meta.id);
       const hasWasm = (layout.wasm?.length ?? 0) > 0;
       const logicChanged = b.logicSource !== b.logicStarterSource;
-      if (hasWasm && !b.compiledWasm && !savedPackageExists) {
-        throw new Error("Compile Rust before the first Save / Publish for a page with WASM logic.");
-      }
-      if (hasWasm && logicChanged && !b.compiledWasm) {
-        throw new Error("Logic changed. Click Edit Logic → Compile Rust before Save / Publish.");
+      const compilable = b.logicSource !== UNAVAILABLE_LOGIC_SOURCE && b.logicSource !== NOOP_LOGIC_SOURCE;
+
+      // Auto-compile when needed so visual-only edits (e.g. moving a widget) just
+      // work. We only skip compiling when the logic is unchanged AND the page is
+      // already on the hub (the server carries the previous wasm forward).
+      let compiled = b.compiledWasm;
+      if (hasWasm && !compiled && (logicChanged || !savedPackageExists)) {
+        if (!compilable) {
+          throw new Error("This page's Rust source isn't available to compile. Open Edit Logic and paste the source, or Reset page logic.");
+        }
+        setMessage("Compiling page logic…");
+        compiled = await compileLogic(b.logicSource);
+        b.setCompiledWasm(compiled);
+        b.upsertWasmModule({ id: compiled.moduleId, path: compiled.path, memory_kb: 128 });
       }
 
       const res = await fetch(`${API}/api/v1/payloads/publish-compiled`, {
@@ -239,8 +258,8 @@ export default function BuilderPage() {
           title: layout.meta.name,
           version: layout.meta.version,
           layout,
-          wasmFiles: b.compiledWasm
-            ? [{ path: b.compiledWasm.path, wasmBase64: b.compiledWasm.wasmBase64 }]
+          wasmFiles: compiled
+            ? [{ path: compiled.path, wasmBase64: compiled.wasmBase64 }]
             : [],
         }),
       });
@@ -252,6 +271,7 @@ export default function BuilderPage() {
         bundleUrl: string;
         bundleSha256: string;
         sizeBytes: number;
+        pushedToDevices?: number;
         marketplaceItem?: { slug: string; title: string; published: boolean };
       };
       console.debug("[builder] publish:done", published);
@@ -263,7 +283,9 @@ export default function BuilderPage() {
           `Bundle: ${published.bundleUrl}\n` +
           `SHA256: ${published.bundleSha256}\n` +
           `Size: ${published.sizeBytes} bytes\n\n` +
-          "Next: assign this PayloadVersion to a device. The server will push MQTT cmd:sync and the ESP32 downloads this bundle without reflashing.",
+          (published.pushedToDevices
+            ? `✓ Auto-updated ${published.pushedToDevices} CryptoClock${published.pushedToDevices === 1 ? "" : "s"} already entitled to this page (MQTT sync sent — they re-download within seconds, no re-grant needed).`
+            : "No devices own this page yet. Grant it from Fleet → Rights and the device downloads this bundle without reflashing."),
       );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
@@ -723,6 +745,13 @@ function upsertWasmModuleList(list: WasmModuleConfig[], module: WasmModuleConfig
   return list.some((m) => m.id === module.id)
     ? list.map((m) => (m.id === module.id ? { ...m, ...module } : m))
     : [...list, module];
+}
+
+/** "1.2.3" -> "1.2.4"; falls back to appending .1 for non-semver strings. */
+function bumpPatch(version: string): string {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim());
+  if (!m) return `${version}.1`;
+  return `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
 }
 
 async function readApiError(res: Response) {
