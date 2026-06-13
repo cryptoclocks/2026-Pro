@@ -1,6 +1,6 @@
 # CryptoClock Pro — Project Progress
 
-_Last updated: 2026-06-11_
+_Last updated: 2026-06-13_
 
 Legend: ✅ done & verified · 🟡 partial / needs more · ⬜ not started
 
@@ -137,10 +137,19 @@ device telemetry in Postgres; APK installs & runs; web admin pages all 200.
 - ✅ **Crypto coin logo 64×64 auto-resize**: the native crypto page's coin logo widget now `lv_image_set_scale`s any source (ship 64×64) down to its 36px slot — no re-encode. (Dynamic fetch-on-coin-change still ⬜, see roadmap §2.)
 - 📋 **[roadmap-v3-parity.md](roadmap-v3-parity.md)**: the big remaining scope from the V3 reference + requested new pages — per-page settings_schema (wallets/socials/colors/coins/alerts/page-show), dynamic coin-logo fetch, new pages (crypto-big-number, alert, profile, pet, fortune×4, social), and follower/total-views feed. Prioritized, each item is its own session.
 
+## Per-page settings + memory recovery — VERIFIED on hardware (2026-06-13)
+- ✅ **Per-page `settings_schema` end-to-end on device** (commits 0f800a1, bb20989, 41147a1, 4ebc2f5). Admin declares a settings form in the Builder ("Settings form" panel + live preview) → publish persists `settings_schema` → Admin Fleet (or API) edits values → PUT `/settings` → MQTT → firmware `deliver_page_settings()` feeds `settings.<slug>` to the page → bindings update live. **Hardware-proven**: set `settings.profile.nickname` → the on-device `name` label changed `SATOSHI NAKAMOTO`→`HAL FINNEY`, `role`→`(SAT) CYPHERPUNK` (serial `widgets`), clock still ticking. Shared `<SchemaForm>` (`components/SchemaForm.tsx`) used by Builder + Fleet (and to mirror in Flutter).
+- ✅ **Profile page shipped** (`com.ccp.profile`) — first of the requested new pages: big montserrat_80 clock (wasm), "DON'T TRUST VERIFY", name/role from settings bindings. Installs + renders on device (4 widgets, 3 bindings).
+- ✅ **Binding JSONPath bug fixed**: `parse_bindings` now normalizes a plain path (`nickname`) to `$.nickname` — previously `jsonpath()` returned NULL so **on-device label bindings never updated** (Weather text was showing default props, not live feed). Fix makes Weather + settings bindings work on hardware.
+- ✅ **MQTT-OOM blocker fixed** (was the top blocker): boot reordered so the package UI loads *after* MQTT connects (`net_worker` → `load_active_or_recovery` post `start_online_services`; offline fallback kept). MQTT now connects every boot.
+- ✅ **No boot-loops**: `sys_monitor_start` / `dbg_console_start` are non-fatal (log + continue).
+- ✅ **Freed internal DRAM via PSRAM**: `SPIRAM_MALLOC_ALWAYSINTERNAL` 512→128 (pushes LVGL's small heap allocs to PSRAM — heap in PSRAM is safe) + `WASM_TASK_STACK` 24K→14K + miniz unzip allocator → PSRAM. Result: internal largest-free-block 2.3KB→8.7KB, serial console + telemetry start again.
+- ❌ **PSRAM task stacks are NOT usable** for net_worker/wasm (TLS/WiFi/WAMR) — they boot-loop (PSRAM stack faults when cache is disabled mid-op). Heap→PSRAM is fine; stacks must stay internal.
+
 ## Known gaps / bugs to finish (as of 2026-06-13)
-- ⬜ Per-page settings → User App (settings_schema) — only planned.
-- ⬜ Dynamic coin-logo fetch to SD when a new coin is selected.
-- ⬜ New pages: crypto-big-number, alert, profile, pet, fortune×4, social.
+- ⬜ Flutter app: mirror `<SchemaForm>` so users edit page settings in the app.
+- ⬜ Dynamic coin-logo fetch to SD when a new coin is selected (firmware 64×64 auto-resize done; background fetch pending — roadmap §2).
+- ⬜ Remaining new pages: crypto-big-number, alert, pet, fortune×4, social.
 - ⬜ Follower/subscriber + total-views feed (`social.stats`).
-- ⚠️ Live-OTA push of a Weather update can briefly crash+reboot if that page (GIF reading SD) is foreground during unzip — self-recovers; proper fix = quiesce display before extract.
-- ⚠️ Internal DRAM is tight (`heap` shows largest-block ~2–13KB) — watch for OOM as pages grow; move big buffers to PSRAM.
+- ⚠️ Internal DRAM still tight (`heap` largest ~4–9KB). Works now (console+MQTT+telemetry+package coexist), but heavy new pages may need more freed — lower `SPIRAM_MALLOC_ALWAYSINTERNAL` further, shrink stacks, or move more heap to PSRAM. Measure with the serial `heap` command.
+- ⚠️ Live-OTA push of a *GIF-heavy* page (e.g. Weather) while it's foreground can briefly crash+reboot during unzip (SD contention); self-recovers. No-GIF pages (profile) push cleanly. Proper fix = quiesce the GIF/display before `sync_manager` extracts.
