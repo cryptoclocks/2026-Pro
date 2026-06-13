@@ -1,6 +1,6 @@
 import type { WidgetNode } from "@ccp/shared";
 
-export type TemplateKey = "blank" | "clock" | "crypto" | "weather" | "welcome" | "led_toggle";
+export type TemplateKey = "blank" | "clock" | "crypto" | "crypto_big" | "weather" | "welcome" | "led_toggle";
 
 /** Starter layouts — the "old pages" a designer can load and tweak. */
 export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[] }> = {
@@ -81,6 +81,42 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         type: "label", id: "updated", x: 280, y: 286, w: 184, h: 18,
         props: { text: "connecting..." },
         style: { text_color: "#848E9C", align: "right" },
+      },
+    ],
+  },
+
+  /* "Big number" crypto page (non-chart): just the pair, a huge live price and
+     the 24h change. Bindings-only (no wasm) — price/change come straight from
+     the market.<sym>.ticker stream (priceFmt / change are top-level so the
+     device's jsonpath and the browser sim both resolve them). */
+  crypto_big: {
+    name: "Crypto Big",
+    widgets: [
+      {
+        type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320,
+        props: { text: "" }, style: { bg_color: "#0B0E11" },
+      },
+      {
+        type: "label", id: "pair", x: 40, y: 44, w: 400, h: 34,
+        props: { text: "BTC / USDT" },
+        style: { text_color: "#848E9C", align: "center", font: "montserrat_28" },
+      },
+      {
+        type: "label", id: "price", x: 20, y: 112, w: 440, h: 64,
+        props: { text: "$--" },
+        style: { text_color: "#EAECEF", align: "center", font: "montserrat_48" },
+        bindings: [{ prop: "text", source: "btc", path: "priceFmt", format: "$%s" }],
+      },
+      {
+        type: "label", id: "change", x: 20, y: 190, w: 440, h: 40,
+        props: { text: "--" },
+        style: { text_color: "#0ECB81", align: "center", font: "montserrat_28" },
+        bindings: [{ prop: "text", source: "btc", path: "change" }],
+      },
+      {
+        type: "label", id: "caption", x: 20, y: 236, w: 440, h: 24,
+        props: { text: "24h change" },
+        style: { text_color: "#848E9C", align: "center", font: "montserrat_20" },
       },
     ],
   },

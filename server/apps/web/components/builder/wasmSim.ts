@@ -594,6 +594,7 @@ export class SimSession {
         price,
         changePct,
         change,
+        priceFmt: pretty, // top-level formatted price for bindings-only pages
         [`${symbol}.price`]: pretty,
         [`${symbol}.change`]: change,
         [`${symbol}.klines`]: this.klines[symbol] ?? [],

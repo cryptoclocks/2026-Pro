@@ -121,7 +121,11 @@ export class FeedsService implements OnModuleInit, OnModuleDestroy {
     const changePct = Number(j.priceChangePercent);
     const change = `${changePct >= 0 ? "+" : ""}${changePct.toFixed(2)}%`;
     const pretty = price.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    return { symbol, price, changePct, change, [`${symbol}.price`]: pretty, [`${symbol}.change`]: change };
+    // priceFmt is a top-level formatted price so a bindings-only page (no wasm)
+    // can show "64,231.50" via path "priceFmt" — the "<sym>.price" key is dotted
+    // and unreachable by jsonpath()/lookupPath which split on ".".
+    return { symbol, price, changePct, change, priceFmt: pretty,
+             [`${symbol}.price`]: pretty, [`${symbol}.change`]: change };
   }
 
   private async fetchKlines(symbol: string, interval: string) {

@@ -381,6 +381,7 @@ export default function BuilderPage() {
             <option value="">Starter template…</option>
             <option value="clock">Clock</option>
             <option value="crypto">Crypto</option>
+            <option value="crypto_big">Crypto Big</option>
             <option value="weather">Weather</option>
             <option value="welcome">Welcome</option>
             <option value="led_toggle">LED Toggle</option>

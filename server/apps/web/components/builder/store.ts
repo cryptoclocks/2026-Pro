@@ -1240,11 +1240,14 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         key === "led_toggle" ? "com.ccp.led-toggle" :
         key === "clock" ? "com.ccp.clock-custom" :
         key === "crypto" ? "com.ccp.crypto-custom" :
+        key === "crypto_big" ? "com.ccp.crypto-big" :
         key === "weather" ? "com.ccp.weather" :
         key === "welcome" ? "com.ccp.welcome-custom" :
         get().packageId,
       dataSources: key === "weather"
         ? [{ id: "weather", stream: "weather.bangkok", format: "json" as const, sample_hint_ms: 60000 }]
+        : key === "crypto_big"
+        ? [{ id: "btc", stream: "market.BTCUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 }]
         : key === "crypto"
         ? [
             { id: "btc", stream: "market.BTCUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 },
