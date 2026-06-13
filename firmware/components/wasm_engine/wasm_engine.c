@@ -23,7 +23,9 @@
 static const char *TAG = "wasm";
 
 #define WASM_POOL_BYTES      (2 * 1024 * 1024)
-#define WASM_TASK_STACK      (24 * 1024)
+#define WASM_TASK_STACK      (14 * 1024)  /* trimmed from 24K to free internal DRAM
+                                             for late tasks (telemetry, console);
+                                             enough for the small page modules */
 #define WASM_TASK_PRIO       5
 #define WASM_TASK_CORE       1
 #define WASM_EXEC_STACK      (32 * 1024)   /* guest exec stack inside WAMR */

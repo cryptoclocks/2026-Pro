@@ -156,6 +156,11 @@ void dbg_console_start(void)
     cat_args.end = arg_end(1);
     reg("cat", "print an SD file", cmd_cat, &cat_args);
 
-    ESP_ERROR_CHECK(esp_console_start_repl(repl));
+    /* non-fatal: a console that can't start (e.g. low memory) must never abort
+     * the device into a boot loop */
+    if (esp_console_start_repl(repl) != ESP_OK) {
+        ESP_LOGW(TAG, "repl start failed (continuing without console)");
+        return;
+    }
     ESP_LOGI(TAG, "serial debug console up — try 'help'");
 }

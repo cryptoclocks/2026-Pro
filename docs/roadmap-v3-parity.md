@@ -165,3 +165,35 @@ push). This is why a freshly granted page won't install.
 The settings_schema firmware code (binding-path `$.` fix + `deliver_page_settings`
 + boot-time delivery) is committed and builds; it just can't be exercised until
 the device can receive a push again.
+
+## Update 2026-06-13 (later) — MQTT recovered; internal DRAM still caps late tasks
+
+Worked the blocker harness-style (plan → flash → test → fix):
+- ✅ **MQTT OOM fixed** by reordering boot: the package UI now loads *after* MQTT
+  connects (`net_worker` calls `load_active_or_recovery()` post-`start_online_services`;
+  app_main keeps an offline fallback). Verified on-device: `MQTT connected,
+  subscribed .../cmd` every boot, `boot=1, Guru=0`. The device receives
+  grants/sync/settings again — profile page installs (7KB bundle, no GIF, no SD
+  crash) and loads (4 widgets, 3 bindings).
+- ✅ **No more boot-loop**: `sys_monitor_start` and `dbg_console_start` are now
+  non-fatal (log + continue instead of `ESP_ERROR_CHECK` abort).
+- ✅ **Binding JSONPath fix** + boot-time `settings.<slug>` delivery + locked
+  `ui_renderer_debug_widgets` (was racing LVGL → crash) all flashed.
+- ❌ **PSRAM task stacks don't work for TLS/WiFi/WAMR tasks** — moving net_worker
+  + wasm pthread stacks to PSRAM (`stack_alloc_caps`/`xTaskCreateWithCaps`)
+  boot-looped (PSRAM stack faults when cache is disabled during network/flash
+  ops). Reverted. Trimming `WASM_TASK_STACK` 24→14KB freed some internal but not
+  enough.
+- ❌ **Still OOM after the package loads**: `sys_monitor` (telemetry) and the
+  serial console (`repl init failed`) can't get internal DRAM once LVGL + the
+  package + MQTT are up. The console being down blocks on-device verification of
+  the settings binding live-update (no other observability).
+
+**Next (do first, still the gate):** free internal DRAM so the console + telemetry
+fit alongside a loaded package. Safe options to try (measure with `heap` once the
+console is back): lower `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` (push more LVGL/heap
+to PSRAM — heap allocs are safe in PSRAM, unlike task stacks); move only the
+*non-network, non-WAMR* task stacks (sys_monitor/health) to PSRAM; or shrink
+other internal buffers. Once the console starts, finish verifying:
+`goto profile` → `widgets` shows the bound `nickname`; change it via settings →
+the label updates; and Weather text now shows live feed values (binding fix).

@@ -14,6 +14,8 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h" /* xTaskCreatePinnedToCoreWithCaps (PSRAM stacks) */
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "cJSON.h"
 
@@ -46,6 +48,12 @@ static const char *TAG = "main";
 static void deliver_page_settings(const cJSON *config);
 static const char *device_json_path(void);
 
+/* The package UI is loaded once, AFTER MQTT connects, so the MQTT task can claim
+ * its stack while internal DRAM is still free (loading the package + wasm + GIF
+ * first starved it → "Error create mqtt task"). Guarded so the boot fallback and
+ * the net_worker path don't double-load. */
+static volatile bool s_ui_loaded = false;
+
 static void publish_status(void)
 {
     char ip[16] = "";
@@ -74,6 +82,10 @@ static void subscribe_layout_streams(void)
 
 static void load_active_or_recovery(void)
 {
+    if (s_ui_loaded) {
+        return;
+    }
+    s_ui_loaded = true;
     if (device_security_locked()) {
         ui_renderer_show_lock_screen();
         return;
@@ -513,6 +525,9 @@ static void net_worker_task(void *arg)
             settings_sync_from_server(); /* initial check: local vs server config */
             seed_slideshow_if_empty();
             start_online_services();
+            /* load the package UI now that MQTT owns its task — internal DRAM was
+             * still free when connectivity_start ran above */
+            load_active_or_recovery();
         }
     }
 }
@@ -577,16 +592,29 @@ void app_main(void)
     ESP_ERROR_CHECK(sync_manager_init(on_package_activated));
 
     s_net_events = xEventGroupCreate();
+    /* net_worker stack stays in internal DRAM — it runs TLS/WiFi which fault on a
+     * PSRAM stack (cache gets disabled during some ops → stack unreachable) */
     xTaskCreatePinnedToCore(net_worker_task, "net_worker", 8192, NULL, 4, NULL, 0);
     ESP_ERROR_CHECK(net_manager_start(on_net_event));
 
-    /* let the welcome splash breathe, then enter the home/package UI
-     * (unless the captive portal took over the screen) */
-    vTaskDelay(pdMS_TO_TICKS(1800));
-    if (net_manager_state() != NET_STATE_PROVISIONING) {
-        load_active_or_recovery();
+    /* net_worker loads the package UI right after MQTT connects (keeps internal
+     * DRAM free for the MQTT task). Offline fallback: if we haven't connected
+     * within ~8s (and aren't in the captive portal), load it anyway so the
+     * device still shows its page without live data. */
+    for (int i = 0; i < 16 && !s_ui_loaded; i++) {
+        if (net_manager_state() == NET_STATE_PROVISIONING) {
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(500));
     }
-    ESP_ERROR_CHECK(sys_monitor_start(on_telemetry, 30));
+    if (net_manager_state() != NET_STATE_PROVISIONING) {
+        load_active_or_recovery(); /* idempotent — no-op if net_worker already did it */
+    }
+    /* telemetry is non-critical — a startup failure (e.g. transient OOM) must not
+     * abort the whole device and trigger a boot loop; log and carry on */
+    if (sys_monitor_start(on_telemetry, 30) != ESP_OK) {
+        ESP_LOGW(TAG, "sys_monitor failed to start (continuing without telemetry)");
+    }
 
     xTaskCreatePinnedToCore(health_gate_task, "health", 4096, NULL, 6, NULL, 0);
 

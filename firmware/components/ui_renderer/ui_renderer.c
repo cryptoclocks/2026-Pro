@@ -1008,9 +1008,16 @@ const char *ui_renderer_widget_id(int idx)
     return s_ui.widgets[idx].id;
 }
 
-/* serial debug: dump the loaded package's widgets (id/type/geom + label text) */
+/* serial debug: dump the loaded package's widgets (id/type/geom + label text).
+ * Reads LVGL objects, so it MUST hold the display lock — the console runs on its
+ * own task and would otherwise race the render/wasm tasks mutating the same
+ * objects (e.g. the clock label) and crash. */
 int ui_renderer_debug_widgets(char *buf, size_t len)
 {
+    if (!display_engine_lock(300)) {
+        snprintf(buf, len, "busy (display locked)\n");
+        return s_ui.widget_count;
+    }
     int n = snprintf(buf, len, "widgets(%d) base=%s:\n", s_ui.widget_count, s_ui.base_dir);
     for (int i = 0; i < s_ui.widget_count && n < (int)len; i++) {
         widget_ent_t *w = &s_ui.widgets[i];
@@ -1025,6 +1032,7 @@ int ui_renderer_debug_widgets(char *buf, size_t len)
         }
         n += snprintf(buf + n, len - n, "\n");
     }
+    display_engine_unlock();
     return s_ui.widget_count;
 }
 
