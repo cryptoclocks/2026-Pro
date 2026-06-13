@@ -1,5 +1,5 @@
 import { LayoutSchema, type Layout, type WidgetNode } from "@ccp/shared";
-import type { AssetEntry, DataSourceConfig, WasmModuleConfig } from "./store";
+import type { AssetEntry, DataSourceConfig, SettingsField, WasmModuleConfig } from "./store";
 
 /**
  * Convert builder state into a device-ready layout.json (validated against
@@ -14,10 +14,12 @@ export function exportLayout(opts: {
   dataSources: DataSourceConfig[];
   wasmModules: WasmModuleConfig[];
   assets?: AssetEntry[];
+  settingsSchema?: SettingsField[];
   logicSource: string;
   widgets: WidgetNode[];
 }): Layout {
   const assets = (opts.assets ?? []).filter((a) => a.id && a.path);
+  const settingsSchema = (opts.settingsSchema ?? []).filter((f) => f.key && f.label);
   const candidate = {
     schema_version: "1.0" as const,
     meta: {
@@ -28,6 +30,19 @@ export function exportLayout(opts: {
     display: { orientation: opts.orientation },
     assets: assets.length
       ? assets.map((a) => ({ id: a.id, type: a.type, path: a.path }))
+      : undefined,
+    settings_schema: settingsSchema.length
+      ? settingsSchema.map((f) => ({
+          key: f.key,
+          label: f.label,
+          type: f.type,
+          group: f.group || undefined,
+          default: f.default,
+          options: f.options?.length ? f.options : undefined,
+          min: f.min,
+          max: f.max,
+          placeholder: f.placeholder || undefined,
+        }))
       : undefined,
     data_sources: opts.dataSources.filter((d) => d.id && d.stream),
     wasm: opts.wasmModules

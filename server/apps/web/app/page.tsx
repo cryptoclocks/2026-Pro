@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AdminGate } from "@/components/AdminGate";
 import { api, useAuth } from "@/lib/auth";
+import { SchemaForm, withDefaults, type SettingsField, type SettingsValues } from "@/components/SchemaForm";
 
 interface Ent { slug: string; title: string; kind: string; source: string }
 interface Device {
@@ -20,6 +21,19 @@ interface Device {
   settingsVersion: number;
   owner?: { email: string; name: string | null } | null;
   entitlements?: Ent[];
+  activePayloadVersion?: {
+    layout?: { meta?: { id?: string; name?: string }; settings_schema?: SettingsField[] };
+  } | null;
+}
+
+/** Active package's settings form, if it declares one. slug = id after last dot
+    (com.ccp.weather → weather), matching settings.pages / settings.<slug>. */
+function activePageSettings(d: Device): { slug: string; name: string; schema: SettingsField[] } | null {
+  const layout = d.activePayloadVersion?.layout;
+  const schema = layout?.settings_schema;
+  const id = layout?.meta?.id;
+  if (!schema?.length || !id) return null;
+  return { slug: id.split(".").pop() || id, name: layout?.meta?.name || id, schema };
 }
 interface CatalogItem { slug: string; title: string; kind: string; priceCents: number; currency: string; published?: boolean }
 
@@ -240,12 +254,19 @@ function SettingsModal({ device, token, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
   const togglePage = (p: string) => setPages((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]));
 
+  // admin-declared per-page settings form (from the active package's settings_schema)
+  const pageSettings = activePageSettings(device);
+  const [pageVals, setPageVals] = useState<SettingsValues>(
+    pageSettings ? withDefaults(pageSettings.schema, (s[pageSettings.slug] as SettingsValues) ?? {}) : {},
+  );
+
   const save = async () => {
     setBusy(true);
-    const config = {
+    const config: Record<string, unknown> = {
       ...s, pages, clock: { ...clock, theme },
       crypto: { ...crypto, symbols: symbols.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean), currency, fetch_interval_s: fetchS },
     };
+    if (pageSettings) config[pageSettings.slug] = pageVals; // settings.<slug> for the page
     await api(`/api/v1/devices/${device.deviceId}/settings`, token, { method: "PUT", body: JSON.stringify({ config }) });
     setBusy(false);
     onSaved();
@@ -281,6 +302,12 @@ function SettingsModal({ device, token, onClose, onSaved }: {
           </select>
         </Field>
       </div>
+      {pageSettings && (
+        <div className="mt-5 border-t border-[var(--ccp-border)] pt-4">
+          <div className="text-xs uppercase tracking-wide text-[var(--ccp-muted)] mb-3">{pageSettings.name} settings</div>
+          <SchemaForm schema={pageSettings.schema} values={pageVals} onChange={(k, v) => setPageVals((p) => ({ ...p, [k]: v }))} />
+        </div>
+      )}
       <div className="flex gap-2 mt-5">
         <button className="btn btn-primary flex-1" disabled={busy} onClick={save}>{busy ? "Saving…" : "Push to display"}</button>
         <button className="btn" onClick={onClose}>Cancel</button>

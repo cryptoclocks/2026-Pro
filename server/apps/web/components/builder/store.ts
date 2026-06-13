@@ -28,6 +28,18 @@ export type AssetEntry = {
   src: string; // URL or data: URL the Builder renders/uploads from
   sizeBytes?: number;
 };
+export type SettingsFieldType = "text" | "number" | "color" | "select" | "toggle";
+export type SettingsField = {
+  key: string;
+  label: string;
+  type: SettingsFieldType;
+  group?: string;
+  default?: string | number | boolean;
+  options?: string[];
+  min?: number;
+  max?: number;
+  placeholder?: string;
+};
 
 /** Built-in weather GIFs (Lottie→GIF), served from web/public, one per theme. */
 export const WEATHER_ASSETS: AssetEntry[] = (
@@ -56,6 +68,7 @@ interface BuilderState {
   dataSources: DataSourceConfig[];
   wasmModules: WasmModuleConfig[];
   assets: AssetEntry[];
+  settingsSchema: SettingsField[];
   logicSource: string;
   logicStarterSource: string;
   compiledWasm: CompiledWasm | null;
@@ -67,6 +80,9 @@ interface BuilderState {
   setOrientation: (o: Orientation) => void;
   addAsset: (asset: AssetEntry) => void;
   removeAsset: (id: string) => void;
+  addSettingsField: () => void;
+  updateSettingsField: (index: number, patch: Partial<SettingsField>) => void;
+  removeSettingsField: (index: number) => void;
   setMeta: (m: Partial<Pick<BuilderState, "packageId" | "name" | "version">>) => void;
   updateDataSource: (index: number, patch: Partial<DataSourceConfig>) => void;
   addDataSource: () => void;
@@ -1065,6 +1081,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   dataSources: [],
   wasmModules: [],
   assets: [],
+  settingsSchema: [],
   logicSource: NOOP_LOGIC_SOURCE,
   logicStarterSource: NOOP_LOGIC_SOURCE,
   compiledWasm: null,
@@ -1077,6 +1094,19 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   addAsset: (asset) =>
     set((s) => ({ assets: [...s.assets.filter((a) => a.id !== asset.id), asset] })),
   removeAsset: (id) => set((s) => ({ assets: s.assets.filter((a) => a.id !== id) })),
+  addSettingsField: () =>
+    set((s) => ({
+      settingsSchema: [
+        ...s.settingsSchema,
+        { key: `field_${s.settingsSchema.length + 1}`, label: "New field", type: "text" as const },
+      ],
+    })),
+  updateSettingsField: (index, patch) =>
+    set((s) => ({
+      settingsSchema: s.settingsSchema.map((f, i) => (i === index ? { ...f, ...patch } : f)),
+    })),
+  removeSettingsField: (index) =>
+    set((s) => ({ settingsSchema: s.settingsSchema.filter((_, i) => i !== index) })),
   setMeta: (m) => set(m),
   updateDataSource: (index, patch) =>
     set({
@@ -1219,6 +1249,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         : [],
       wasmModules,
       assets: key === "weather" ? WEATHER_ASSETS.map((a) => ({ ...a })) : [],
+      settingsSchema: [],
       logicSource,
       logicStarterSource: logicSource,
       compiledWasm: null,
@@ -1254,6 +1285,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
           src: builtin?.src ?? `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000"}/api/v1/packages/${layout.meta.id}/${layout.meta.version}/${a.path}`,
         };
       }),
+      settingsSchema: (layout.settings_schema ?? []) as SettingsField[],
       logicSource,
       logicStarterSource: logicSource,
       compiledWasm: null,

@@ -15,8 +15,27 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 The V3 `settings.html` exposes 4 tabs of settings. We want the **same controls**,
 but driven by a per-page `settings_schema` so the User App + Admin web render the
 form automatically (no app rebuild). Design is in
-[settings-and-assets-plan.md](settings-and-assets-plan.md). **Status: ⬜ not built**
-(layout schema has no `settings_schema` yet).
+[settings-and-assets-plan.md](settings-and-assets-plan.md).
+
+**Status: 🟡 web/server slice DONE (2026-06-13), firmware delivery remaining.**
+- ✅ `settings_schema` in the layout (Zod), persists through publish (verified).
+- ✅ Builder "Settings form" panel: admins declare fields (text/number/color/
+  select/toggle, group, default, options) with a **live preview** — this is the
+  "how does an admin create it" answer.
+- ✅ Shared `<SchemaForm>` renderer (`components/SchemaForm.tsx`).
+- ✅ Admin Fleet device modal renders the active package's `settings_schema`,
+  edits values, saves under `settings.<slug>`, pushes via the existing PUT
+  `/settings` → MQTT. (slug = package id after the last dot.)
+- ⬜ **Firmware delivery (the last link)**: in `apply_server_settings`
+  (app_main), after writing device.json, push `config[<slug>]` to the loaded
+  package as the reserved stream `settings.<slug>` via
+  `ui_renderer_handle_data("settings.<slug>", json)` so the page's bindings/wasm
+  pick up the values live. Small hook + reflash; then a binding like
+  `{prop:"text", source:"settings", path:"nickname"}` works on-device.
+- ⬜ Flutter app: mirror `<SchemaForm>` (same JSON) on the page's settings screen.
+
+A `com.ccp.profile` starter (nickname/name_color/currency/show) is published as a
+reference for the schema.
 
 ### Settings catalog to port (from the V3 reference)
 

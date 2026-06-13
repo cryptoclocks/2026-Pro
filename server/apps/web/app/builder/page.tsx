@@ -9,6 +9,7 @@ import { BuilderCanvas } from "@/components/builder/BuilderCanvas";
 import { Inspector } from "@/components/builder/Inspector";
 import { exportLayout, downloadLayout } from "@/components/builder/exportLayout";
 import { SimSession, base64ToBytes, getSimSession, useSim } from "@/components/builder/wasmSim";
+import { SchemaForm, withDefaults, type SettingsValues } from "@/components/SchemaForm";
 import { API, useAuth } from "@/lib/auth";
 
 type CompileWasmResponse = {
@@ -155,6 +156,7 @@ export default function BuilderPage() {
       dataSources: b.dataSources,
       wasmModules: wasmModulesForExport(),
       assets: b.assets,
+      settingsSchema: b.settingsSchema,
       logicSource: b.logicSource,
       widgets: b.widgets,
     });
@@ -699,6 +701,62 @@ function LayersPanel() {
   );
 }
 
+/** Declare the page's user-facing settings form (settings_schema). Admins build
+    it here; the App + Admin Fleet render the same form and write values to
+    settings.<page-slug>, pushed to the device. Includes a live preview. */
+function SettingsSchemaPanel() {
+  const schema = useBuilder((s) => s.settingsSchema);
+  const add = useBuilder((s) => s.addSettingsField);
+  const update = useBuilder((s) => s.updateSettingsField);
+  const remove = useBuilder((s) => s.removeSettingsField);
+  const [preview, setPreview] = useState<SettingsValues>({});
+
+  return (
+    <section className="border border-[var(--ccp-border)] rounded-lg p-3 min-w-0">
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="uppercase tracking-wide text-[var(--ccp-muted)]">Settings form</h2>
+        <button className="btn py-1 px-2 text-xs" onClick={add}>Add field</button>
+      </div>
+      {schema.length === 0 && (
+        <div className="text-[var(--ccp-muted)] mb-2">
+          declare fields users can edit in the app (name, color, coin, toggle…). They render as a form and save to <code>settings.&lt;page&gt;</code>.
+        </div>
+      )}
+      <div className="space-y-2">
+        {schema.map((f, i) => (
+          <div key={i} className="grid gap-1 border-t border-[var(--ccp-border)]/60 pt-2 first:border-t-0 first:pt-0">
+            <div className="grid grid-cols-[1fr_84px_auto] gap-1">
+              <input className="input text-xs px-2 py-1 min-w-0" value={f.key} placeholder="key" onChange={(e) => update(i, { key: e.target.value })} />
+              <select className="select text-xs px-1 py-1" value={f.type} onChange={(e) => update(i, { type: e.target.value as typeof f.type })}>
+                <option value="text">text</option>
+                <option value="number">number</option>
+                <option value="color">color</option>
+                <option value="select">select</option>
+                <option value="toggle">toggle</option>
+              </select>
+              <button className="btn py-1 px-2 text-xs" onClick={() => remove(i)}>×</button>
+            </div>
+            <input className="input text-xs px-2 py-1 w-full" value={f.label} placeholder="label" onChange={(e) => update(i, { label: e.target.value })} />
+            <div className="grid grid-cols-2 gap-1">
+              <input className="input text-xs px-2 py-1 min-w-0" value={f.group ?? ""} placeholder="group (tab)" onChange={(e) => update(i, { group: e.target.value || undefined })} />
+              <input className="input text-xs px-2 py-1 min-w-0" value={f.default === undefined ? "" : String(f.default)} placeholder="default" onChange={(e) => update(i, { default: e.target.value || undefined })} />
+            </div>
+            {f.type === "select" && (
+              <input className="input text-xs px-2 py-1 w-full" value={(f.options ?? []).join(",")} placeholder="options (comma-separated)" onChange={(e) => update(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
+            )}
+          </div>
+        ))}
+      </div>
+      {schema.length > 0 && (
+        <div className="mt-3 border-t border-[var(--ccp-border)]/60 pt-2">
+          <div className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)] mb-2">Preview (what users see)</div>
+          <SchemaForm schema={schema} values={withDefaults(schema, preview)} onChange={(k, v) => setPreview((p) => ({ ...p, [k]: v }))} />
+        </div>
+      )}
+    </section>
+  );
+}
+
 const MAX_ASSET_BYTES = 4 * 1024 * 1024;
 
 /** slug a filename base for use as an asset id: "My Logo.png" -> "my_logo" */
@@ -781,6 +839,7 @@ function LayoutDataPanel() {
 
   return (
     <div className="space-y-4 text-xs">
+      <SettingsSchemaPanel />
       <AssetsPanel />
       <section className="border border-[var(--ccp-border)] rounded-lg p-3 min-w-0">
         <div className="flex items-center justify-between mb-2">

@@ -126,6 +126,25 @@ export const LayoutSchema = z.object({
       }),
     )
     .optional(),
+  /* Admin-declared per-page settings form. The User App + Admin web render a
+     form from this (no app rebuild); values are stored under settings.<slug>
+     and pushed to the device, where they're exposed to the page as the
+     reserved stream "settings.<slug>". */
+  settings_schema: z
+    .array(
+      z.object({
+        key: ident,
+        label: z.string().max(48),
+        type: z.enum(["text", "number", "color", "select", "toggle"]),
+        group: z.string().max(32).optional(),
+        default: z.union([z.string(), z.number(), z.boolean()]).optional(),
+        options: z.array(z.string().max(32)).optional(), // for select
+        min: z.number().optional(),
+        max: z.number().optional(),
+        placeholder: z.string().max(48).optional(),
+      }),
+    )
+    .optional(),
   data_sources: z
     .array(
       z.object({
