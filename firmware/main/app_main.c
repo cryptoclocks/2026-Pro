@@ -43,6 +43,9 @@ static const char *TAG = "main";
 
 /* ------------------------------------------------------------ helpers */
 
+static void deliver_page_settings(const cJSON *config);
+static const char *device_json_path(void);
+
 static void publish_status(void)
 {
     char ip[16] = "";
@@ -90,6 +93,17 @@ static void load_active_or_recovery(void)
         /* page list was enumerated before the package existed — rebuild so
          * the purchased page joins the rotation */
         home_ui_reload();
+        /* feed the page its saved settings now (settings.<slug>) so bindings
+         * show stored values immediately, not just after the next change */
+        char *cfg = storage_read_file(device_json_path(), NULL);
+        if (cfg) {
+            cJSON *root = cJSON_Parse(cfg);
+            if (root) {
+                deliver_page_settings(root);
+                cJSON_Delete(root);
+            }
+            free(cfg);
+        }
     }
 }
 

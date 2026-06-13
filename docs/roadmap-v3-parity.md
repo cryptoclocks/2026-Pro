@@ -139,3 +139,29 @@ a new widget. None need a firmware reflash unless a new native widget is require
 > Reality check: this is multi-session work. This session delivered the docs +
 > the coin-logo auto-resize; the rest is specced above so any contributor can
 > pick up a numbered item.
+
+## ⚠️ BLOCKER found 2026-06-13 — MQTT task OOM (internal DRAM)
+
+Verifying the settings loop on-device surfaced a critical bug: after boot the
+device logs `E mqtt_client: Error create mqtt task` then
+`Publish: Losing qos0 data when client not connected` — **the MQTT client never
+starts**, so the device receives **no remote commands** (grants, sync, settings
+push). This is why a freshly granted page won't install.
+
+- `heap_init` shows only ~206 KiB internal RAM at start; by ~6 s
+  `load_active_or_recovery` has loaded the active package (ui_renderer widgets +
+  wasm + GIF) right as the MQTT task tries to spawn → not enough contiguous
+  internal DRAM for its ~6 KB stack → task create fails.
+- MQTT worked earlier this session (weather installs); cumulative additions
+  (LV_USE_GIF decode path, 16 KB sync stack, wasm pthread, etc.) + the active
+  package loading before MQTT connects pushed internal DRAM over the edge.
+- **Next harness task (do first):** recover internal DRAM / fix ordering —
+  options: start MQTT before the heavy package load in app_main; move display
+  bounce buffers or other internal buffers to PSRAM; shrink task stacks; set
+  esp-mqtt to use a smaller/PSRAM-capable task. Use the serial `heap` command to
+  measure before/after. Until this is fixed, OTA push + per-device settings
+  can't be verified on hardware.
+
+The settings_schema firmware code (binding-path `$.` fix + `deliver_page_settings`
++ boot-time delivery) is committed and builds; it just can't be exercised until
+the device can receive a push again.

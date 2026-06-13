@@ -736,7 +736,15 @@ static void parse_bindings(const cJSON *node, int widget_idx)
         bd->widget_idx = widget_idx;
         bd->source_idx = src_idx;
         bd->scale = (float)jnum(b, "scale", 1.0);
-        strlcpy(bd->path, jstr(b, "path", "$"), sizeof(bd->path));
+        /* normalize the binding path to JSONPath: jsonpath() requires a leading
+         * '$', so a plain key like "city" or "nickname" must become "$.city".
+         * (Without this, bindings silently resolve to NULL on-device.) */
+        const char *raw_path = jstr(b, "path", "$");
+        if (raw_path[0] == '$') {
+            strlcpy(bd->path, raw_path, sizeof(bd->path));
+        } else {
+            snprintf(bd->path, sizeof(bd->path), "$.%s", raw_path);
+        }
         strlcpy(bd->format, jstr(b, "format", ""), sizeof(bd->format));
         const cJSON *map = cJSON_GetObjectItem(b, "map");
         bd->map = map ? cJSON_Duplicate(map, 1) : NULL;
