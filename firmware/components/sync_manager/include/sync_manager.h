@@ -30,7 +30,18 @@ typedef struct {
 typedef void (*sync_activated_cb_t)(const char *package_id, const char *version,
                                     const char *package_dir);
 
+/** Handler for a lazy page-package swap, run on the sync worker (off the LVGL
+ *  task). dir="" means "unload, show no package". */
+typedef void (*sync_nav_cb_t)(const char *dir, const char *slug);
+
 esp_err_t sync_manager_init(sync_activated_cb_t cb);
+
+/** Register the page-swap handler invoked for sync_manager_request_nav(). */
+void sync_manager_set_nav_handler(sync_nav_cb_t cb);
+
+/** Queue a lazy page-package swap onto the sync worker (reuses its stack so no
+ *  extra internal DRAM is spent). The handler runs off the LVGL task. */
+esp_err_t sync_manager_request_nav(const char *dir, const char *slug);
 
 /**
  * Queue a sync. Runs on the sync worker task (core 0, low prio).
@@ -43,6 +54,16 @@ esp_err_t sync_manager_request(const sync_request_t *req);
 void sync_manager_active_dir(char *buf, size_t len);
 void sync_manager_active_id(char *buf, size_t len);
 void sync_manager_active_version(char *buf, size_t len);
+
+/**
+ * Resolve a page slug to the dir of its installed package, regardless of which
+ * package is the "active" one. Scans /sd/packages for an id ending in
+ * ".<slug>" (e.g. slug "weather" -> "com.ccp.weather"), reads its current.txt
+ * and returns "/sd/packages/<id>/<version>" if layout.json exists there.
+ * Returns true and fills buf on success; false (buf="") otherwise.
+ * Used by home_ui to keep every installed page in the swipe rotation.
+ */
+bool sync_manager_installed_dir_for_slug(const char *slug, char *buf, size_t len);
 
 /** Mark the currently active package healthy (called after 60s uptime). */
 esp_err_t sync_manager_mark_last_good(void);

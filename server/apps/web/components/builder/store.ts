@@ -69,6 +69,10 @@ interface BuilderState {
   wasmModules: WasmModuleConfig[];
   assets: AssetEntry[];
   settingsSchema: SettingsField[];
+  /** Live values for the settings_schema preview/simulate. The simulator feeds
+   *  these to the page's `settings.<slug>` stream so the Sim matches the device,
+   *  which receives the same values from its saved config on boot. */
+  settingsPreview: Record<string, string | number | boolean>;
   logicSource: string;
   logicStarterSource: string;
   compiledWasm: CompiledWasm | null;
@@ -83,6 +87,7 @@ interface BuilderState {
   addSettingsField: () => void;
   updateSettingsField: (index: number, patch: Partial<SettingsField>) => void;
   removeSettingsField: (index: number) => void;
+  setSettingsPreview: (key: string, value: string | number | boolean) => void;
   setMeta: (m: Partial<Pick<BuilderState, "packageId" | "name" | "version">>) => void;
   updateDataSource: (index: number, patch: Partial<DataSourceConfig>) => void;
   addDataSource: () => void;
@@ -1082,6 +1087,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   wasmModules: [],
   assets: [],
   settingsSchema: [],
+  settingsPreview: {},
   logicSource: NOOP_LOGIC_SOURCE,
   logicStarterSource: NOOP_LOGIC_SOURCE,
   compiledWasm: null,
@@ -1107,6 +1113,8 @@ export const useBuilder = create<BuilderState>((set, get) => ({
     })),
   removeSettingsField: (index) =>
     set((s) => ({ settingsSchema: s.settingsSchema.filter((_, i) => i !== index) })),
+  setSettingsPreview: (key, value) =>
+    set((s) => ({ settingsPreview: { ...s.settingsPreview, [key]: value } })),
   setMeta: (m) => set(m),
   updateDataSource: (index, patch) =>
     set({
@@ -1250,6 +1258,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       wasmModules,
       assets: key === "weather" ? WEATHER_ASSETS.map((a) => ({ ...a })) : [],
       settingsSchema: [],
+      settingsPreview: {},
       logicSource,
       logicStarterSource: logicSource,
       compiledWasm: null,
@@ -1286,6 +1295,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         };
       }),
       settingsSchema: (layout.settings_schema ?? []) as SettingsField[],
+      settingsPreview: {},
       logicSource,
       logicStarterSource: logicSource,
       compiledWasm: null,

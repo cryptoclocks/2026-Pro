@@ -42,6 +42,19 @@ void home_ui_network_changed(bool connected, const char *ip);
 /** Re-read config files and rebuild pages (called by LAN API / server). */
 esp_err_t home_ui_reload(void);
 
+/**
+ * Register the callback home_ui uses to (de)activate a package page lazily on
+ * swipe. `fn(dir, slug)` must load <dir> into the renderer off the LVGL task
+ * (dir="" means "unload, no package") and, when done, call
+ * home_ui_package_loaded(slug, ok). Returns false if the request can't be
+ * queued. Set by app_main, which owns ui_renderer + wasm_engine.
+ */
+void home_ui_set_package_activator(bool (*fn)(const char *dir, const char *slug));
+
+/** Called by the activator worker when a package (un)load finishes; adopts the
+ *  fresh renderer screen for the pending page and completes the swipe. */
+void home_ui_package_loaded(const char *slug, bool ok);
+
 /** True when the slideshow page is enabled but has zero images. */
 bool home_ui_slideshow_needs_content(void);
 

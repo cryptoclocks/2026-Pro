@@ -46,6 +46,8 @@ static const char *TAG = "main";
 /* ------------------------------------------------------------ helpers */
 
 static void deliver_page_settings(const cJSON *config);
+static void deliver_saved_page_settings(void);
+static void schedule_saved_page_settings_replay(void);
 static const char *device_json_path(void);
 
 /* The package UI is loaded once, AFTER MQTT connects, so the MQTT task can claim
@@ -107,15 +109,7 @@ static void load_active_or_recovery(void)
         home_ui_reload();
         /* feed the page its saved settings now (settings.<slug>) so bindings
          * show stored values immediately, not just after the next change */
-        char *cfg = storage_read_file(device_json_path(), NULL);
-        if (cfg) {
-            cJSON *root = cJSON_Parse(cfg);
-            if (root) {
-                deliver_page_settings(root);
-                cJSON_Delete(root);
-            }
-            free(cfg);
-        }
+        schedule_saved_page_settings_replay();
     }
 }
 
@@ -148,6 +142,7 @@ static esp_err_t apply_server_settings(int version, const cJSON *config)
         storage_kv_set_str("settings", "ver", ver);
         home_ui_reload();
         deliver_page_settings(config);
+        schedule_saved_page_settings_replay();
         ESP_LOGI(TAG, "server settings v%d applied", version);
     }
     return err;
@@ -157,13 +152,9 @@ static esp_err_t apply_server_settings(int version, const cJSON *config)
  * the last dot) to its page as the reserved stream "settings.<slug>", so a
  * binding like {source:"settings", path:"nickname"} or wasm on_data picks up
  * admin/app changes live. No-op when no package or no matching settings object. */
-static void deliver_page_settings(const cJSON *config)
+static void deliver_page_settings_for_slug(const cJSON *config, const char *slug)
 {
-    char pkg[64] = "";
-    sync_manager_active_id(pkg, sizeof(pkg));
-    const char *dot = strrchr(pkg, '.');
-    const char *slug = dot ? dot + 1 : pkg;
-    if (!slug[0]) {
+    if (!slug || !slug[0]) {
         return;
     }
     const cJSON *obj = cJSON_GetObjectItem(config, slug);
@@ -178,6 +169,59 @@ static void deliver_page_settings(const cJSON *config)
     snprintf(stream, sizeof(stream), "settings.%s", slug);
     ui_renderer_handle_data(stream, json, strlen(json));
     free(json);
+}
+
+static void deliver_page_settings(const cJSON *config)
+{
+    char pkg[64] = "";
+    sync_manager_active_id(pkg, sizeof(pkg));
+    const char *dot = strrchr(pkg, '.');
+    deliver_page_settings_for_slug(config, dot ? dot + 1 : pkg);
+}
+
+/* Deliver settings for one specific page slug (used after a lazy swap, where the
+ * loaded package is not necessarily sync_manager's "active" one). */
+static void deliver_saved_settings_for_slug(const char *slug)
+{
+    char *cfg = storage_read_file(device_json_path(), NULL);
+    if (!cfg) {
+        return;
+    }
+    cJSON *root = cJSON_Parse(cfg);
+    if (root) {
+        deliver_page_settings_for_slug(root, slug);
+        cJSON_Delete(root);
+    }
+    free(cfg);
+}
+
+static void deliver_saved_page_settings(void)
+{
+    char *cfg = storage_read_file(device_json_path(), NULL);
+    if (!cfg) {
+        return;
+    }
+    cJSON *root = cJSON_Parse(cfg);
+    if (root) {
+        deliver_page_settings(root);
+        cJSON_Delete(root);
+    }
+    free(cfg);
+}
+
+static void settings_replay_task(void *arg)
+{
+    (void)arg;
+    /* Wait for home_ui to finish adopting the renderer-owned screen before
+     * pushing settings into the freshly rebuilt widget tree. */
+    vTaskDelay(pdMS_TO_TICKS(750));
+    deliver_saved_page_settings();
+    vTaskDelete(NULL);
+}
+
+static void schedule_saved_page_settings_replay(void)
+{
+    xTaskCreate(settings_replay_task, "settings_replay", 4096, NULL, 2, NULL);
 }
 
 /*
@@ -287,7 +331,40 @@ static void on_package_activated(const char *pkg, const char *ver, const char *d
         wasm_engine_load_modules();
     }
     home_ui_reload(); /* re-adopt the fresh package screen into the rotation */
+    schedule_saved_page_settings_replay();
     publish_status();
+}
+
+/* ------------------------------------------------ lazy page-package swap
+ * home_ui keeps every installed page in the swipe rotation but only one package
+ * is loaded at a time. When the user swipes to a package that isn't loaded,
+ * home_ui parks the display and asks us (via the registered activator) to swap.
+ * The heavy work (SD read + widget build + wasm (re)load) must run off the LVGL
+ * task — it would otherwise block rendering and risk the task WDT — so it runs
+ * on the existing sync worker (no extra task stack). dir="" = unload only. */
+static void do_page_swap(const char *dir, const char *slug)
+{
+    ESP_LOGI(TAG, "page swap: slug='%s' dir='%s'", slug ? slug : "", dir ? dir : "");
+    bool ok;
+    wasm_engine_unload_all(); /* stop the outgoing package's logic */
+    if (dir && dir[0]) {
+        ok = (ui_renderer_load_dir(dir) == ESP_OK);
+        if (ok) {
+            subscribe_layout_streams();
+            wasm_engine_load_modules();
+            /* widgets exist now — push saved settings before home_ui adopts */
+            deliver_saved_settings_for_slug(slug);
+        }
+    } else {
+        ok = true; /* pure unload (swiped to a native page) */
+    }
+    home_ui_package_loaded(slug, ok);
+}
+
+/* activator registered with home_ui: queue a swap onto the sync worker */
+static bool request_package_page(const char *dir, const char *slug)
+{
+    return sync_manager_request_nav(dir, slug) == ESP_OK;
 }
 
 /* ------------------------------------------------------------ commands */
@@ -591,6 +668,15 @@ void app_main(void)
     ESP_ERROR_CHECK(wasm_engine_init(&wasm_hooks));
     ESP_ERROR_CHECK(sync_manager_init(on_package_activated));
 
+    /* lazy page-package swap: home_ui drives swaps on swipe; the work runs on
+     * the sync worker (reuses its stack — no extra internal DRAM) */
+    sync_manager_set_nav_handler(do_page_swap);
+    home_ui_set_package_activator(request_package_page);
+
+    /* Reserve the USB serial debug REPL before packages/images fragment
+     * internal RAM; the console is non-fatal if USB setup is unavailable. */
+    dbg_console_start();
+
     s_net_events = xEventGroupCreate();
     /* net_worker stack stays in internal DRAM — it runs TLS/WiFi which fault on a
      * PSRAM stack (cache gets disabled during some ops → stack unreachable) */
@@ -618,6 +704,4 @@ void app_main(void)
 
     xTaskCreatePinnedToCore(health_gate_task, "health", 4096, NULL, 6, NULL, 0);
 
-    /* serial debug console (USB-Serial-JTAG): pages/goto/widgets/ls/cat/heap/ver */
-    dbg_console_start();
 }

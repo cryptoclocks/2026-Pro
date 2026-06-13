@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/unistd.h>
 
@@ -46,6 +47,17 @@ static void *zip_realloc(void *opaque, void *p, size_t items, size_t size)
 
 static QueueHandle_t s_queue;
 static sync_activated_cb_t s_cb;
+static sync_nav_cb_t s_nav_cb;
+
+/* one queue, two jobs: a download/activate (sync_request_t) or a lazy page-swap
+ * (dir+slug). Reusing the 16KB sync worker for swaps keeps them off the LVGL
+ * task without spending scarce internal DRAM on a second task stack. */
+typedef struct {
+    bool is_nav;
+    sync_request_t sync;       /* when !is_nav */
+    char nav_dir[208];         /* when is_nav */
+    char nav_slug[16];
+} worker_msg_t;
 
 /* --------------------------------------------------------------- helpers */
 
@@ -235,13 +247,20 @@ static esp_err_t do_sync(const sync_request_t *req)
 
 static void sync_task(void *arg)
 {
-    sync_request_t req;
+    worker_msg_t msg;
     while (true) {
-        if (xQueueReceive(s_queue, &req, portMAX_DELAY) == pdTRUE) {
-            esp_err_t err = do_sync(&req);
+        if (xQueueReceive(s_queue, &msg, portMAX_DELAY) != pdTRUE) {
+            continue;
+        }
+        if (msg.is_nav) {
+            if (s_nav_cb) {
+                s_nav_cb(msg.nav_dir, msg.nav_slug);
+            }
+        } else {
+            esp_err_t err = do_sync(&msg.sync);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "sync %s@%s failed: %s",
-                         req.package_id, req.version, esp_err_to_name(err));
+                         msg.sync.package_id, msg.sync.version, esp_err_to_name(err));
             }
         }
     }
@@ -252,16 +271,30 @@ static void sync_task(void *arg)
 esp_err_t sync_manager_init(sync_activated_cb_t cb)
 {
     s_cb = cb;
-    s_queue = xQueueCreate(4, sizeof(sync_request_t));
+    s_queue = xQueueCreate(4, sizeof(worker_msg_t));
     ESP_RETURN_ON_FALSE(s_queue, ESP_ERR_NO_MEM, TAG, "queue");
     BaseType_t ok = xTaskCreatePinnedToCore(sync_task, "sync_worker", SYNC_TASK_STACK,
                                             NULL, SYNC_TASK_PRIO, NULL, SYNC_TASK_CORE);
     return ok == pdPASS ? ESP_OK : ESP_FAIL;
 }
 
+void sync_manager_set_nav_handler(sync_nav_cb_t cb)
+{
+    s_nav_cb = cb;
+}
+
 esp_err_t sync_manager_request(const sync_request_t *req)
 {
-    return xQueueSend(s_queue, req, 0) == pdTRUE ? ESP_OK : ESP_ERR_NO_MEM;
+    worker_msg_t msg = { .is_nav = false, .sync = *req };
+    return xQueueSend(s_queue, &msg, 0) == pdTRUE ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+esp_err_t sync_manager_request_nav(const char *dir, const char *slug)
+{
+    worker_msg_t msg = { .is_nav = true };
+    strlcpy(msg.nav_dir, dir ? dir : "", sizeof(msg.nav_dir));
+    strlcpy(msg.nav_slug, slug ? slug : "", sizeof(msg.nav_slug));
+    return xQueueSend(s_queue, &msg, 0) == pdTRUE ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 void sync_manager_active_id(char *buf, size_t len)
@@ -291,6 +324,56 @@ void sync_manager_active_dir(char *buf, size_t len)
         }
     }
     buf[0] = '\0';
+}
+
+bool sync_manager_installed_dir_for_slug(const char *slug, char *buf, size_t len)
+{
+    buf[0] = '\0';
+    if (!slug || !slug[0] || !storage_sd_mounted()) {
+        return false;
+    }
+    DIR *d = opendir(STORAGE_PACKAGES_DIR);
+    if (!d) {
+        return false;
+    }
+    const size_t sl = strlen(slug);
+    bool found = false;
+    struct dirent *e;
+    while (!found && (e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') {
+            continue; /* skip . / .. */
+        }
+        /* match a package id whose suffix is ".<slug>" (com.ccp.weather <-> weather) */
+        const size_t il = strlen(e->d_name);
+        if (il <= sl + 1 || e->d_name[il - sl - 1] != '.' ||
+            strcmp(e->d_name + il - sl, slug) != 0) {
+            continue;
+        }
+        char cur[300];
+        snprintf(cur, sizeof(cur), "%s/%s/current.txt", STORAGE_PACKAGES_DIR, e->d_name);
+        size_t vlen = 0;
+        char *ver = storage_read_file(cur, &vlen);
+        if (!ver) {
+            continue;
+        }
+        while (vlen > 0 && (ver[vlen - 1] == '\n' || ver[vlen - 1] == '\r' ||
+                            ver[vlen - 1] == ' ')) {
+            ver[--vlen] = '\0';
+        }
+        if (vlen > 0) {
+            char cand[300];
+            snprintf(cand, sizeof(cand), "%s/%s/%s/layout.json",
+                     STORAGE_PACKAGES_DIR, e->d_name, ver);
+            struct stat st;
+            if (stat(cand, &st) == 0) {
+                snprintf(buf, len, "%s/%s/%s", STORAGE_PACKAGES_DIR, e->d_name, ver);
+                found = true;
+            }
+        }
+        free(ver);
+    }
+    closedir(d);
+    return found;
 }
 
 esp_err_t sync_manager_mark_last_good(void)

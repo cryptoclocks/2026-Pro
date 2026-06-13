@@ -9,7 +9,7 @@ import { BuilderCanvas } from "@/components/builder/BuilderCanvas";
 import { Inspector } from "@/components/builder/Inspector";
 import { exportLayout, downloadLayout } from "@/components/builder/exportLayout";
 import { SimSession, base64ToBytes, getSimSession, useSim } from "@/components/builder/wasmSim";
-import { SchemaForm, withDefaults, type SettingsValues } from "@/components/SchemaForm";
+import { SchemaForm, withDefaults } from "@/components/SchemaForm";
 import { API, useAuth } from "@/lib/auth";
 
 type CompileWasmResponse = {
@@ -74,6 +74,10 @@ export default function BuilderPage() {
       const session = await SimSession.start({
         widgets: state.widgets,
         dataSources: state.dataSources,
+        // seed the page's settings.<slug> stream with the same values the device
+        // gets from its saved config — so Profile/Settings pages match the device
+        // instead of showing widget default props
+        settingsValues: withDefaults(state.settingsSchema, state.settingsPreview),
         wasmBytes: compiled && wantsWasm ? base64ToBytes(compiled.wasmBase64) : null,
         defaultTickMs: state.wasmModules[0]?.tick_ms,
       });
@@ -564,6 +568,7 @@ function SimulateInspector({ onRestart }: { onRestart: () => void }) {
     binance: "live Binance",
     mock: "mock once",
     manual: "manual",
+    settings: "page settings",
   };
 
   return (
@@ -709,7 +714,9 @@ function SettingsSchemaPanel() {
   const add = useBuilder((s) => s.addSettingsField);
   const update = useBuilder((s) => s.updateSettingsField);
   const remove = useBuilder((s) => s.removeSettingsField);
-  const [preview, setPreview] = useState<SettingsValues>({});
+  // preview values live in the store so Simulate can seed the settings.<slug> stream
+  const preview = useBuilder((s) => s.settingsPreview);
+  const setPreview = useBuilder((s) => s.setSettingsPreview);
 
   return (
     <section className="border border-[var(--ccp-border)] rounded-lg p-3 min-w-0">
@@ -750,7 +757,7 @@ function SettingsSchemaPanel() {
       {schema.length > 0 && (
         <div className="mt-3 border-t border-[var(--ccp-border)]/60 pt-2">
           <div className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)] mb-2">Preview (what users see)</div>
-          <SchemaForm schema={schema} values={withDefaults(schema, preview)} onChange={(k, v) => setPreview((p) => ({ ...p, [k]: v }))} />
+          <SchemaForm schema={schema} values={withDefaults(schema, preview)} onChange={(k, v) => setPreview(k, v)} />
         </div>
       )}
     </section>

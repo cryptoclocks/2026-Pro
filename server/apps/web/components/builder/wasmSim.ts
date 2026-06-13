@@ -35,7 +35,7 @@ export type SimLog = { at: string; level: "err" | "warn" | "info" | "dbg" | "sys
 export type SimStreamInfo = {
   source: string;
   stream: string;
-  mode: "time" | "binance" | "mock" | "manual";
+  mode: "time" | "binance" | "mock" | "manual" | "settings";
   lastAt?: string;
   lastPayload?: string;
 };
@@ -134,10 +134,13 @@ export class SimSession {
   private audioCtx: AudioContext | null = null;
   private stopped = false;
   private binancePrice: Record<string, number> = {};
+  /** values the user set in the settings_schema form; seeded to settings.<slug> */
+  private settingsValues: Record<string, unknown> = {};
 
   static async start(opts: {
     widgets: WidgetNode[];
     dataSources: DataSourceConfig[];
+    settingsValues?: Record<string, unknown>;
     wasmBytes: Uint8Array | null;
     defaultTickMs?: number;
   }): Promise<SimSession> {
@@ -145,6 +148,7 @@ export class SimSession {
     s.widgets = opts.widgets;
     s.widgetIds = opts.widgets.map((w) => w.id);
     for (const w of opts.widgets) s.widgetTypes[w.id] = w.type;
+    s.settingsValues = opts.settingsValues ?? {};
 
     s.startFeeders(opts.dataSources);
 
@@ -502,9 +506,17 @@ export class SimSession {
     const klines = /^market\.([A-Z0-9]{5,12})\.klines\.(\d+[mhdw])$/.exec(stream);
     const fx = /^fx\.([A-Z]{6})$/.exec(stream);
     const weather = /^weather\.([a-z-]+)$/.exec(stream);
+    const settings = /^settings(\.|$)/.test(stream);
 
     let info: SimStreamInfo;
-    if (src === "clock" || stream === "clock" || stream.startsWith("time.")) {
+    let seedAfterRegister: string | null = null;
+    if (settings) {
+      // the page's own user settings — feed the same values the device receives
+      // from its saved config (settings_schema defaults + form edits). Deliver
+      // after the stream is registered below, so markStream can record it.
+      info = { source: src, stream, mode: "settings" };
+      seedAfterRegister = JSON.stringify(this.settingsValues);
+    } else if (src === "clock" || stream === "clock" || stream.startsWith("time.")) {
       info = { source: src, stream, mode: "time" };
       const feed = () => this.deliver(stream, JSON.stringify(clockData()));
       feed();
@@ -537,6 +549,7 @@ export class SimSession {
       info = { source: src, stream, mode: "manual" };
     }
     useSim.getState().setStreams([...useSim.getState().streams, info]);
+    if (seedAfterRegister !== null && !this.stopped) this.deliver(stream, seedAfterRegister);
   }
 
   private klines: Record<string, number[]> = {};

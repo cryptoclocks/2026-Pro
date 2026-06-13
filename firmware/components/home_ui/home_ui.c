@@ -43,12 +43,14 @@ static const char *TAG = "home_ui";
 #define MAX_PAGES        6
 #define MAX_SLIDES       8
 #define SPARK_POINTS     60
+#define CRYPTO_POLL_STACK 4096
 
 typedef enum { PAGE_CLOCK, PAGE_CRYPTO, PAGE_SLIDESHOW, PAGE_PACKAGE } page_kind_t;
 
 typedef struct {
     page_kind_t kind;
     char id[16];
+    char dir[200];   /* installed package dir for PAGE_PACKAGE; "" for native */
     lv_obj_t *screen;
     bool external;   /* screen owned by ui_renderer (purchased page) */
 } page_t;
@@ -147,6 +149,15 @@ static struct {
 
     /* menu */
     lv_obj_t *menu;
+
+    /* lazy package swap: only one package is loaded in the renderer at a time;
+     * swiping to a different package page asks app_main to swap it in. */
+    bool (*pkg_activator)(const char *dir, const char *slug);
+    char loaded_pkg_slug[16];   /* slug currently loaded in ui_renderer; "" if none */
+    lv_obj_t *loading_screen;   /* shown while a swap is in flight */
+    int pending_idx;            /* target page index awaiting a swap */
+    bool pending_anim_left;
+    bool swap_pending;          /* a swap is in flight; ignore further nav */
 } s;
 
 /* ================================================================ config */
@@ -585,6 +596,8 @@ static void crypto_apply_quote(double last, double chg_pct)
     s.last_usd_price = last;
     s.last_chg_pct = chg_pct;
     crypto_render();
+    ESP_LOGI(TAG, "quote %s: %.2f (%+.2f%%)",
+             s.cfg.symbols[s.cur_symbol], last, chg_pct);
     /* live tick updates the most recent (forming) candle's close/high/low */
     if (s.candle_canvas && s.candle_count > 0) {
         float p = (float)last;
@@ -639,6 +652,37 @@ static int http_get_text(const char *url, char *buf, size_t buf_len)
     return total;
 }
 
+static int fetch_klines_text(const char *symbol, const char *interval, char *body, size_t body_len)
+{
+    char url[256];
+    snprintf(url, sizeof(url), "%s/api/v1/market/%s/klines/%s?limit=%d",
+             CCP_CFG_SERVER_BASE_URL, symbol, interval, SPARK_POINTS);
+    int n = http_get_text(url, body, body_len);
+    if (n > 0) {
+        return n;
+    }
+
+    snprintf(url, sizeof(url),
+             "https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d",
+             symbol, interval, SPARK_POINTS);
+    return http_get_text(url, body, body_len);
+}
+
+static int fetch_ticker24h_text(const char *symbol, char *body, size_t body_len)
+{
+    char url[256];
+    snprintf(url, sizeof(url), "%s/api/v1/market/%s/ticker24h",
+             CCP_CFG_SERVER_BASE_URL, symbol);
+    int n = http_get_text(url, body, body_len);
+    if (n > 0) {
+        return n;
+    }
+
+    snprintf(url, sizeof(url),
+             "https://api.binance.com/api/v3/ticker/24hr?symbol=%s", symbol);
+    return http_get_text(url, body, body_len);
+}
+
 static void fetch_thb_rate(char *body, size_t body_len)
 {
     /* free, no API key: https://open.er-api.com/v6/latest/USD */
@@ -664,6 +708,24 @@ static void fetch_thb_rate(char *body, size_t body_len)
 #define CANDLE_W 444
 #define CANDLE_H 130
 
+static void candle_fill_rect(int x0, int y0, int x1, int y1, lv_color_t col)
+{
+    if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
+    if (y0 > y1) { int t = y0; y0 = y1; y1 = t; }
+    if (x1 < 0 || y1 < 0 || x0 >= CANDLE_W || y0 >= CANDLE_H) {
+        return;
+    }
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= CANDLE_W) x1 = CANDLE_W - 1;
+    if (y1 >= CANDLE_H) y1 = CANDLE_H - 1;
+    for (int y = y0; y <= y1; y++) {
+        for (int x = x0; x <= x1; x++) {
+            lv_canvas_set_px(s.candle_canvas, x, y, col, LV_OPA_COVER);
+        }
+    }
+}
+
 /* draw all candles green/red onto the canvas (TradingView-style) */
 static void candle_render(void)
 {
@@ -684,13 +746,9 @@ static void candle_render(void)
     lo -= pad; hi += pad;
     float range = hi - lo;
 
+    lv_display_t *disp = lv_obj_get_display(s.candle_canvas);
+    lv_display_enable_invalidation(disp, false);
     lv_canvas_fill_bg(s.candle_canvas, lv_color_hex(COL_PANEL), LV_OPA_COVER);
-
-    lv_layer_t layer;
-    lv_canvas_init_layer(s.candle_canvas, &layer);
-    lv_draw_rect_dsc_t rd;
-    lv_draw_rect_dsc_init(&rd);
-    rd.bg_opa = LV_OPA_COVER;
 
     int slot = CANDLE_W / n;
     if (slot < 1) slot = 1;
@@ -712,26 +770,20 @@ static void candle_render(void)
         int body_bot = y_o < y_c ? y_c : y_o;
         if (body_bot - body_top < 1) body_bot = body_top + 1; /* doji */
 
-        rd.bg_color = col;
         /* wick: 1px line at center, high->low */
-        lv_area_t wick = { cx, y_h, cx, y_l };
-        lv_draw_rect(&layer, &rd, &wick);
+        candle_fill_rect(cx, y_h, cx, y_l, col);
         /* body: filled rect open<->close */
-        lv_area_t body = { cx - body_w / 2, body_top, cx - body_w / 2 + body_w, body_bot };
-        lv_draw_rect(&layer, &rd, &body);
+        candle_fill_rect(cx - body_w / 2, body_top, cx - body_w / 2 + body_w, body_bot, col);
     }
-    lv_canvas_finish_layer(s.candle_canvas, &layer);
+    lv_display_enable_invalidation(disp, true);
+    lv_obj_invalidate(s.candle_canvas);
     display_engine_unlock();
 }
 
 /* Binance klines = OHLC history; fields [openTime,open,high,low,close,...] */
 static void fetch_klines(char *body, size_t body_len)
 {
-    char url[160];
-    snprintf(url, sizeof(url),
-             "https://api.binance.com/api/v3/klines?symbol=%s&interval=%s&limit=%d",
-             s.cfg.symbols[s.cur_symbol], s.cfg.timeframe, SPARK_POINTS);
-    int n = http_get_text(url, body, body_len);
+    int n = fetch_klines_text(s.cfg.symbols[s.cur_symbol], s.cfg.timeframe, body, body_len);
     if (n <= 0) {
         return;
     }
@@ -785,16 +837,12 @@ static void check_alerts(char *body, size_t body_len)
         if (!strcmp(cached_sym, s.cfg.alerts[i].symbol)) {
             price = cached_price;
         } else {
-            char url[128];
-            snprintf(url, sizeof(url),
-                     "https://api.binance.com/api/v3/ticker/price?symbol=%s",
-                     s.cfg.alerts[i].symbol);
-            int n = http_get_text(url, body, body_len);
+            int n = fetch_ticker24h_text(s.cfg.alerts[i].symbol, body, body_len);
             if (n <= 0) {
                 continue;
             }
             cJSON *root = cJSON_ParseWithLength(body, n);
-            const cJSON *p = root ? cJSON_GetObjectItem(root, "price") : NULL;
+            const cJSON *p = root ? cJSON_GetObjectItem(root, "lastPrice") : NULL;
             price = cJSON_IsString(p) ? atof(p->valuestring) : 0;
             cJSON_Delete(root);
             if (price <= 0) {
@@ -820,10 +868,13 @@ static void crypto_poll_task(void *arg)
     /* PSRAM scratch keeps this task's stack small despite TLS work */
     char *body = heap_caps_malloc(POLL_BODY_LEN, MALLOC_CAP_SPIRAM);
     if (!body) {
+        ESP_LOGE(TAG, "crypto poll scratch alloc failed");
         s.poll_task = NULL;
         vTaskDelete(NULL);
         return;
     }
+    ESP_LOGI(TAG, "crypto poll task started (net=%d, symbol=%s, tf=%s)",
+             s.net_connected, s.cfg.symbols[s.cur_symbol], s.cfg.timeframe);
 
     while (s.poll_run) {
         if (!s.net_connected) {
@@ -844,11 +895,7 @@ static void crypto_poll_task(void *arg)
             fetch_klines(body, POLL_BODY_LEN);
         }
 
-        char url[128];
-        snprintf(url, sizeof(url),
-                 "https://api.binance.com/api/v3/ticker/24hr?symbol=%s",
-                 s.cfg.symbols[s.cur_symbol]);
-        int n = http_get_text(url, body, POLL_BODY_LEN);
+        int n = fetch_ticker24h_text(s.cfg.symbols[s.cur_symbol], body, POLL_BODY_LEN);
         if (n > 0) {
             cJSON *root = cJSON_Parse(body);
             if (root) {
@@ -880,6 +927,25 @@ static void crypto_poll_task(void *arg)
     vTaskDelete(NULL);
 }
 
+static void crypto_start_poll_task(void)
+{
+    if (s.poll_task) {
+        s.poll_run = true;
+        return;
+    }
+    s.poll_run = true;
+    BaseType_t ok = xTaskCreatePinnedToCore(crypto_poll_task, "crypto_poll",
+                                            CRYPTO_POLL_STACK, NULL, 3,
+                                            &s.poll_task, 0);
+    if (ok != pdPASS) {
+        ESP_LOGE(TAG, "crypto poll task start failed (largest internal=%u, psram=%u)",
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+        s.poll_run = false;
+        s.poll_task = NULL;
+    }
+}
+
 static void crypto_update_header(void)
 {
     char base[12], disp[24];
@@ -901,10 +967,9 @@ static void crypto_update_header(void)
             char lv_path[104];
             snprintf(lv_path, sizeof(lv_path), "A:%s", path);
             lv_image_set_src(s.coin_logo, lv_path);
-            /* coin icons ship at 64x64; LVGL scales them down to the 36px slot
-             * (256 = 1x), so any source size auto-fits without re-encoding */
+            /* Bundled coin icons are 32x32 PNGs, centered inside the 36px slot. */
             lv_image_set_inner_align(s.coin_logo, LV_IMAGE_ALIGN_CENTER);
-            lv_image_set_scale(s.coin_logo, (36 * 256) / 64);
+            lv_image_set_scale(s.coin_logo, 256);
             lv_obj_remove_flag(s.coin_logo, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s.coin_logo, LV_OBJ_FLAG_HIDDEN);
@@ -1073,11 +1138,7 @@ static void build_crypto_page(page_t *page)
     }
     s.need_history = true;
 
-    if (!s.poll_task) {
-        s.poll_run = true;
-        xTaskCreatePinnedToCore(crypto_poll_task, "crypto_poll", 10240, NULL, 3,
-                                &s.poll_task, 0);
-    }
+    crypto_start_poll_task();
 }
 
 /* ============================================================== alerts */
@@ -1465,16 +1526,18 @@ static void build_page(int idx)
         return;
     }
     if (p->kind == PAGE_PACKAGE) {
-        lv_obj_t *pkg_scr = ui_renderer_main_screen();
-        if (pkg_scr) {
-            /* adopt the renderer-owned screen: swipe nav only, no home chrome
-             * (kept pristine so renderer reloads stay consistent) */
-            p->screen = pkg_scr;
-            p->external = true;
-            lv_obj_add_event_cb(p->screen, gesture_cb, LV_EVENT_GESTURE, NULL);
-            return;
+        /* adopt the renderer-owned screen only when THIS page's package is the
+         * one currently loaded; an unloaded package page stays unbuilt and is
+         * brought in lazily via the swap in goto_page() */
+        if (!strcmp(p->id, s.loaded_pkg_slug)) {
+            lv_obj_t *pkg_scr = ui_renderer_main_screen();
+            if (pkg_scr) {
+                p->screen = pkg_scr;       /* swipe nav only, no home chrome */
+                p->external = true;
+                lv_obj_add_event_cb(p->screen, gesture_cb, LV_EVENT_GESTURE, NULL);
+            }
         }
-        /* package vanished since setup: fall through to an empty base screen */
+        return;
     }
     p->screen = screen_base();
     switch (p->kind) {
@@ -1488,10 +1551,60 @@ static void build_page(int idx)
     lv_obj_add_event_cb(p->screen, gesture_cb, LV_EVENT_GESTURE, NULL);
 }
 
+/* per-page lifecycle: only the page on screen does background work, so swiping
+ * to Crypto starts its Binance poll and swiping away stops it (and likewise the
+ * slideshow timer). Package logic is gated by the lazy load/unload swap. */
+static void page_leave(int idx)
+{
+    if (idx < 0 || idx >= s.page_count) {
+        return;
+    }
+    switch (s.pages[idx].kind) {
+    case PAGE_CRYPTO:    s.poll_run = false; break;
+    case PAGE_SLIDESHOW: if (s.slide_timer) lv_timer_pause(s.slide_timer); break;
+    default: break;
+    }
+}
+
+static void page_enter(int idx)
+{
+    switch (s.pages[idx].kind) {
+    case PAGE_CRYPTO:
+        s.last_usd_price = 0;     /* show "loading" until the refetch lands */
+        crypto_render();
+        s.need_history = true;
+        s.force_fetch = true;
+        crypto_start_poll_task(); /* idempotent: re-arms an existing task */
+        break;
+    case PAGE_SLIDESHOW:
+        if (s.slide_timer) lv_timer_resume(s.slide_timer);
+        break;
+    default: break;
+    }
+}
+
+/* park on a spinner screen so the renderer can free the outgoing package's
+ * screens during a swap without LVGL rendering a deleted screen */
+static void show_loading_screen(void)
+{
+    if (!s.loading_screen) {
+        s.loading_screen = screen_base();
+        lv_obj_t *sp = lv_spinner_create(s.loading_screen);
+        lv_obj_set_size(sp, 48, 48);
+        lv_obj_center(sp);
+        lv_obj_set_style_arc_color(sp, lv_color_hex(COL_ACCENT), LV_PART_INDICATOR);
+        lv_obj_set_style_arc_color(sp, lv_color_hex(COL_BORDER), LV_PART_MAIN);
+        lv_obj_set_style_arc_width(sp, 4, LV_PART_INDICATOR);
+        lv_obj_set_style_arc_width(sp, 4, LV_PART_MAIN);
+    }
+    lv_screen_load(s.loading_screen);
+    s.owns_screen = true;
+}
+
 /* dynamic mode: auto-advance pages; the slideshow page drives its own exit */
 static void advance_tick(lv_timer_t *t)
 {
-    if (s.menu || s.page_count < 2) {
+    if (s.menu || s.page_count < 2 || s.swap_pending) {
         return;
     }
     if (s.pages[s.current].kind == PAGE_SLIDESHOW) {
@@ -1502,12 +1615,41 @@ static void advance_tick(lv_timer_t *t)
 
 static void goto_page(int idx, bool anim_left)
 {
-    if (idx < 0 || idx >= s.page_count) {
-        return;
+    if (idx < 0 || idx >= s.page_count || s.swap_pending) {
+        return; /* ignore navigation while a package swap is in flight */
     }
+    page_t *p = &s.pages[idx];
+
+    page_leave(s.current);
+
+    /* a package page that isn't the one currently in the renderer must be
+     * swapped in first (off the LVGL task) — only one package is ever loaded */
+    if (p->kind == PAGE_PACKAGE && strcmp(p->id, s.loaded_pkg_slug) && s.pkg_activator) {
+        /* the swap frees the loaded package's screens — drop our adopted refs */
+        for (int i = 0; i < s.page_count; i++) {
+            if (s.pages[i].external) {
+                lv_obj_remove_event_cb(s.pages[i].screen, gesture_cb);
+                s.pages[i].screen = NULL;
+                s.pages[i].external = false;
+            }
+        }
+        show_loading_screen();
+        s.pending_idx = idx;
+        s.pending_anim_left = anim_left;
+        s.swap_pending = true;
+        if (s.pkg_activator(p->dir, p->id)) {
+            return; /* finishes in home_ui_package_loaded() */
+        }
+        s.swap_pending = false; /* queue full — best effort, fall through */
+    }
+
     build_page(idx);
+    if (!s.pages[idx].screen) {
+        return; /* package not loaded yet and no swap available */
+    }
     s.current = idx;
     s.owns_screen = true;
+    page_enter(idx);
     lv_screen_load_anim(s.pages[idx].screen,
                         anim_left ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_MOVE_RIGHT,
                         240, 0, false);
@@ -1675,33 +1817,31 @@ static void destroy_pages(void)
     }
     s.candle_count = 0;
     s.slide_img = NULL;
+    if (s.loading_screen) { lv_obj_delete(s.loading_screen); s.loading_screen = NULL; }
+    s.swap_pending = false;
 }
 
-/* A purchased page is shown when the installed package id matches the page
- * slug from settings.pages: "com.ccp.weather" <-> "weather". */
-static bool package_page_available(const char *page_id)
-{
-    char pkg[64] = "";
-    sync_manager_active_id(pkg, sizeof(pkg));
-    size_t pl = strlen(pkg), il = strlen(page_id);
-    if (!pl || pl <= il || !ui_renderer_main_screen()) {
-        return false;
-    }
-    return pkg[pl - il - 1] == '.' && !strcmp(pkg + pl - il, page_id);
-}
+/* Max pages in the swipe rotation. The app curates settings.pages to <=5; we
+ * cap here too so a stale/over-long list can never exhaust the page array. */
+#define ROTATION_MAX 5
 
 static void setup_pages_from_cfg(void)
 {
+    /* every installed package page joins the rotation (not just the active one);
+     * the matching package is loaded lazily when the user swipes to it */
     s.page_count = 0;
-    for (int i = 0; i < s.cfg.page_count && s.page_count < MAX_PAGES; i++) {
+    for (int i = 0; i < s.cfg.page_count && s.page_count < ROTATION_MAX; i++) {
         page_t *p = &s.pages[s.page_count];
         memset(p, 0, sizeof(*p));
         strlcpy(p->id, s.cfg.pages[i], sizeof(p->id));
         if (!strcmp(p->id, "clock")) p->kind = PAGE_CLOCK;
         else if (!strcmp(p->id, "crypto")) p->kind = PAGE_CRYPTO;
         else if (!strcmp(p->id, "slideshow")) p->kind = PAGE_SLIDESHOW;
-        else if (package_page_available(p->id)) p->kind = PAGE_PACKAGE;
-        else continue; /* page id without an installed package -> skip */
+        else if (sync_manager_installed_dir_for_slug(p->id, p->dir, sizeof(p->dir))) {
+            p->kind = PAGE_PACKAGE;
+        } else {
+            continue; /* page id without an installed package -> skip */
+        }
         s.page_count++;
     }
     if (s.page_count == 0) {
@@ -1709,12 +1849,21 @@ static void setup_pages_from_cfg(void)
         s.pages[0].kind = PAGE_CLOCK;
         s.page_count = 1;
     }
+    /* whatever package app_main loaded at boot (the sync "active" one) is the one
+     * currently in the renderer; record its slug so we only swap when needed */
+    char pkg[64] = "";
+    sync_manager_active_id(pkg, sizeof(pkg));
+    const char *dot = strrchr(pkg, '.');
+    strlcpy(s.loaded_pkg_slug, (dot && ui_renderer_main_screen()) ? dot + 1 : "",
+            sizeof(s.loaded_pkg_slug));
+
     char list[96] = "";
     for (int i = 0; i < s.page_count; i++) {
         strlcat(list, s.pages[i].id, sizeof(list));
         if (i < s.page_count - 1) strlcat(list, ",", sizeof(list));
     }
-    ESP_LOGI(TAG, "pages in rotation: %s", list);
+    ESP_LOGI(TAG, "pages in rotation: %s (loaded pkg=%s)",
+             list, s.loaded_pkg_slug[0] ? s.loaded_pkg_slug : "-");
 }
 
 esp_err_t home_ui_init(void)
@@ -1739,14 +1888,64 @@ void home_ui_show_home(void)
 
 bool home_ui_owns_screen(void) { return s.owns_screen; }
 
+void home_ui_set_package_activator(bool (*fn)(const char *dir, const char *slug))
+{
+    s.pkg_activator = fn;
+}
+
+void home_ui_package_loaded(const char *slug, bool ok)
+{
+    /* runs on the sync worker (off the LVGL task). Wait for the lock like
+     * home_ui_reload() does — a short timeout could lose to the loading-screen
+     * spinner + the freshly-started package wasm and strand the swap. */
+    if (!display_engine_lock(0)) {
+        return;
+    }
+    const int idx = s.pending_idx;
+    s.swap_pending = false;
+    strlcpy(s.loaded_pkg_slug, (ok && slug) ? slug : "", sizeof(s.loaded_pkg_slug));
+
+    if (idx >= 0 && idx < s.page_count) {
+        build_page(idx); /* adopts the freshly loaded package screen */
+    }
+    if (idx >= 0 && idx < s.page_count && s.pages[idx].screen) {
+        s.current = idx;
+        s.owns_screen = true;
+        page_enter(idx);
+        lv_screen_load(s.pages[idx].screen); /* immediate (loading screen deleted next) */
+    } else {
+        /* swap failed: drop back to the first page (clock) */
+        s.loaded_pkg_slug[0] = '\0';
+        build_page(0);
+        if (s.pages[0].screen) {
+            s.current = 0;
+            s.owns_screen = true;
+            lv_screen_load(s.pages[0].screen);
+        }
+    }
+    if (s.loading_screen) {
+        lv_obj_delete(s.loading_screen);
+        s.loading_screen = NULL;
+    }
+    if (s.advance_timer) {
+        lv_timer_reset(s.advance_timer);
+    }
+    display_engine_unlock();
+}
+
 /* ---- serial debug helpers ---- */
 int home_ui_debug_pages(char *buf, size_t len)
 {
-    int n = snprintf(buf, len, "pages(%d) current=%d:\n", s.page_count, s.current);
+    int n = snprintf(buf, len, "pages(%d) current=%d loaded_pkg=%s%s:\n",
+                     s.page_count, s.current,
+                     s.loaded_pkg_slug[0] ? s.loaded_pkg_slug : "-",
+                     s.swap_pending ? " [swapping]" : "");
     for (int i = 0; i < s.page_count && n < (int)len; i++) {
-        n += snprintf(buf + n, len - n, "  [%d]%s %s%s\n", i, s.pages[i].id,
+        n += snprintf(buf + n, len - n, "  [%d]%s %s%s%s%s\n", i, s.pages[i].id,
                       i == s.current ? "*" : "",
-                      s.pages[i].kind == PAGE_PACKAGE ? "(pkg)" : "");
+                      s.pages[i].kind == PAGE_PACKAGE ? "(pkg)" : "",
+                      s.pages[i].kind == PAGE_PACKAGE ? " dir=" : "",
+                      s.pages[i].kind == PAGE_PACKAGE ? s.pages[i].dir : "");
     }
     return s.page_count;
 }
@@ -1805,16 +2004,23 @@ esp_err_t home_ui_reload(void)
     setup_pages_from_cfg();
     ccp_board_set_brightness(s.cfg.brightness);
     if (s.owns_screen) {
-        build_page(0);
         s.current = 0;
-        /* immediate load (no anim) so parking can be deleted right away */
-        lv_screen_load(s.pages[0].screen);
+        build_page(0);
+        if (s.pages[0].screen) {
+            /* immediate load (no anim) so parking can be deleted right away */
+            lv_screen_load(s.pages[0].screen);
+        } else {
+            /* page 0 is a package not currently loaded — pull it in via the
+             * normal lazy swap (parks on a loading screen, finishes async) */
+            goto_page(0, true);
+        }
         if (s.cfg.dynamic_mode && !s.advance_timer) {
             s.advance_timer = lv_timer_create(advance_tick,
                                               (uint32_t)s.cfg.page_delay_s * 1000, NULL);
         }
     }
-    if (parking) {
+    /* never delete the parking screen while it is still the active one */
+    if (parking && lv_screen_active() != parking) {
         lv_obj_delete(parking);
     }
     if (s.park_screen) {
