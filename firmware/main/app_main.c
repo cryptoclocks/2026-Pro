@@ -101,6 +101,8 @@ static const char *device_json_path(void)
                                 : STORAGE_LFS_BASE "/config/device.json";
 }
 
+static void deliver_page_settings(const cJSON *config);
+
 /** Persist a server-provided config (JSON object) and hot-reload the UI. */
 static esp_err_t apply_server_settings(int version, const cJSON *config)
 {
@@ -119,9 +121,37 @@ static esp_err_t apply_server_settings(int version, const cJSON *config)
         snprintf(ver, sizeof(ver), "%d", version);
         storage_kv_set_str("settings", "ver", ver);
         home_ui_reload();
+        deliver_page_settings(config);
         ESP_LOGI(TAG, "server settings v%d applied", version);
     }
     return err;
+}
+
+/* Deliver the active package's settings (config[<slug>], slug = package id after
+ * the last dot) to its page as the reserved stream "settings.<slug>", so a
+ * binding like {source:"settings", path:"nickname"} or wasm on_data picks up
+ * admin/app changes live. No-op when no package or no matching settings object. */
+static void deliver_page_settings(const cJSON *config)
+{
+    char pkg[64] = "";
+    sync_manager_active_id(pkg, sizeof(pkg));
+    const char *dot = strrchr(pkg, '.');
+    const char *slug = dot ? dot + 1 : pkg;
+    if (!slug[0]) {
+        return;
+    }
+    const cJSON *obj = cJSON_GetObjectItem(config, slug);
+    if (!cJSON_IsObject(obj)) {
+        return;
+    }
+    char *json = cJSON_PrintUnformatted(obj);
+    if (!json) {
+        return;
+    }
+    char stream[80];
+    snprintf(stream, sizeof(stream), "settings.%s", slug);
+    ui_renderer_handle_data(stream, json, strlen(json));
+    free(json);
 }
 
 /*

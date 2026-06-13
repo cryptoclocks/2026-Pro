@@ -26,12 +26,15 @@ form automatically (no app rebuild). Design is in
 - ✅ Admin Fleet device modal renders the active package's `settings_schema`,
   edits values, saves under `settings.<slug>`, pushes via the existing PUT
   `/settings` → MQTT. (slug = package id after the last dot.)
-- ⬜ **Firmware delivery (the last link)**: in `apply_server_settings`
-  (app_main), after writing device.json, push `config[<slug>]` to the loaded
+- 🟡 **Firmware delivery (the last link)**: implemented in `apply_server_settings`
+  (app_main) — `deliver_page_settings()` pushes `config[<slug>]` to the loaded
   package as the reserved stream `settings.<slug>` via
-  `ui_renderer_handle_data("settings.<slug>", json)` so the page's bindings/wasm
-  pick up the values live. Small hook + reflash; then a binding like
-  `{prop:"text", source:"settings", path:"nickname"}` works on-device.
+  `ui_renderer_handle_data`, so a binding `{source:"settings", path:"nickname"}`
+  or wasm `on_data` picks up changes live. Builds clean; **not yet
+  hardware-verified** (needs a settings_schema page published + assigned; blocked
+  on the live-push SD crash). Also TODO: deliver once at boot (parse local
+  device.json in `load_active_or_recovery`) so values show before the first
+  settings change.
 - ⬜ Flutter app: mirror `<SchemaForm>` (same JSON) on the page's settings screen.
 
 A `com.ccp.profile` starter (nickname/name_color/currency/show) is published as a
