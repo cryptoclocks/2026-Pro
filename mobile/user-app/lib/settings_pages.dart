@@ -87,23 +87,71 @@ class _SystemSettingsState extends State<SystemSettings> {
         title: 'System',
         onSave: c.save,
         children: [
-          settingCard('Pages shown', [
-            ...DeviceController.allPages.map((p) {
-              final on = c.enabledPages.contains(p);
-              final lastOne = on && c.enabledPages.length == 1;
-              return CheckboxListTile(
+          settingCard(
+              'Pages shown  (${c.enabledPages.length}/${DeviceController.maxPages})', [
+            const Padding(
+              padding: EdgeInsets.only(bottom: 6),
+              child: Text('Drag to set the swipe order. Up to 5 pages — the '
+                  'display shows one at a time.',
+                  style: TextStyle(color: ccpMuted, fontSize: 12)),
+            ),
+            // enabled pages — reorderable; list order == on-device swipe order
+            ReorderableListView(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              buildDefaultDragHandles: false,
+              onReorder: (o, n) => setState(() => c.reorderPages(o, n)),
+              children: [
+                for (final e in c.enabledPages.asMap().entries)
+                  ListTile(
+                    key: ValueKey('pg_${e.value}'),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: ReorderableDragStartListener(
+                      index: e.key,
+                      child: const Icon(Icons.drag_handle, color: ccpMuted),
+                    ),
+                    title: Text(c.pageTitle(e.value)),
+                    trailing: c.enabledPages.length > 1
+                        ? IconButton(
+                            icon: const Icon(Icons.remove_circle_outline,
+                                color: ccpMuted),
+                            onPressed: () =>
+                                setState(() => c.setPageEnabled(e.value, false)),
+                          )
+                        : null,
+                  ),
+              ],
+            ),
+            // entitled pages not yet enabled — tap to add (blocked when full)
+            ...c.availablePages
+                .where((p) => !c.enabledPages.contains(p))
+                .map((p) {
+              final full = c.pagesFull;
+              return ListTile(
                 dense: true,
                 contentPadding: EdgeInsets.zero,
-                title: Text({
-                  'clock': 'Clock',
-                  'crypto': 'Crypto',
-                  'slideshow': 'Photo slideshow'
-                }[p]!),
-                value: on,
-                activeColor: ccpAccent,
-                onChanged: lastOne ? null : (v) => c.setPageEnabled(p, v ?? false),
+                enabled: !full,
+                leading: Icon(Icons.add_circle_outline,
+                    color: full ? ccpMuted.withValues(alpha: 0.4) : ccpAccent),
+                title: Text(c.pageTitle(p),
+                    style: TextStyle(color: full ? ccpMuted : null)),
+                onTap: full
+                    ? null
+                    : () {
+                        if (!c.setPageEnabled(p, true)) {
+                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                              content: Text('Rotation full (5) — remove a page first')));
+                        }
+                      },
               );
             }),
+            if (c.pagesFull)
+              const Padding(
+                padding: EdgeInsets.only(top: 4),
+                child: Text('Rotation full (5). Remove a page to add another.',
+                    style: TextStyle(color: ccpMuted, fontSize: 11)),
+              ),
           ]),
           settingCard('Behaviour', [
             settingRow<String>('Display mode', dynamicMode ? 'dynamic' : 'static',
@@ -175,8 +223,16 @@ class ProfileSettings extends StatefulWidget {
 }
 
 class _ProfileSettingsState extends State<ProfileSettings> {
-  late final TextEditingController _name = TextEditingController(
-      text: (widget.c.section('profile')['name'] as String?) ?? '');
+  late final _p = widget.c.section('profile');
+  late final TextEditingController _name =
+      TextEditingController(text: (_p['name'] as String?) ?? '');
+  late final TextEditingController _nickname =
+      TextEditingController(text: (_p['nickname'] as String?) ?? '');
+  late final TextEditingController _role =
+      TextEditingController(text: (_p['role'] as String?) ?? '');
+  late final TextEditingController _nameColor =
+      TextEditingController(text: (_p['name_color'] as String?) ?? '#F0B90B');
+  late bool _show = (_p['show'] as bool?) ?? true;
 
   @override
   Widget build(BuildContext context) {
@@ -187,6 +243,12 @@ class _ProfileSettingsState extends State<ProfileSettings> {
         title: 'Profile',
         onSave: () async {
           c.patch('profile', 'name', _name.text.trim());
+          // Builder Profile page (settings.profile.*) — what the on-device
+          // package page binds to (nickname / role / name colour / visibility)
+          c.patch('profile', 'nickname', _nickname.text.trim());
+          c.patch('profile', 'role', _role.text.trim());
+          c.patch('profile', 'name_color', _nameColor.text.trim());
+          c.patch('profile', 'show', _show);
           await c.save();
         },
         children: [
@@ -197,6 +259,37 @@ class _ProfileSettingsState extends State<ProfileSettings> {
                   labelText: 'Profile name (shown on clock)',
                   border: OutlineInputBorder(),
                   isDense: true),
+            ),
+          ]),
+          settingCard('Profile page', [
+            const Text('Shown on the "Don\'t trust, verify" profile page.',
+                style: TextStyle(color: ccpMuted, fontSize: 12)),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _nickname,
+              decoration: const InputDecoration(
+                  labelText: 'Nickname', border: OutlineInputBorder(), isDense: true),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _role,
+              decoration: const InputDecoration(
+                  labelText: 'Role / subtitle', border: OutlineInputBorder(), isDense: true),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _nameColor,
+              decoration: const InputDecoration(
+                  labelText: 'Name colour (hex, e.g. #F0B90B)',
+                  border: OutlineInputBorder(), isDense: true),
+            ),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              activeColor: ccpAccent,
+              title: const Text('Show this page'),
+              value: _show,
+              onChanged: (v) => setState(() => _show = v),
             ),
           ]),
           settingCard('Account', [

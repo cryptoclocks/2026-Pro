@@ -21,6 +21,15 @@ class DeviceController extends ChangeNotifier {
 
   static const allPages = ['clock', 'crypto', 'slideshow'];
   static const maxAlerts = 8;
+  /// The display shows pages one-at-a-time (lazy-swap on swipe); the rotation is
+  /// capped so a long list can't exhaust the device's page array.
+  static const maxPages = 5;
+
+  static const _nativeTitles = {
+    'clock': 'Clock',
+    'crypto': 'Crypto',
+    'slideshow': 'Photo slideshow',
+  };
 
   String get deviceId => (info['device_id'] as String?) ?? 'device';
 
@@ -52,6 +61,35 @@ class DeviceController extends ChangeNotifier {
   List<String> get enabledPages =>
       ((config['pages'] as List?)?.cast<String>()) ?? List.of(allPages);
 
+  /// Pages the user can put in the rotation: the 3 native pages + any PAGE-kind
+  /// item this device is entitled to (weather, profile, …) + anything already
+  /// enabled. Order: native first, then the rest.
+  List<String> get availablePages {
+    final pages = <String>[...allPages];
+    for (final c in catalog) {
+      final slug = c['slug'] as String?;
+      if (c['kind'] == 'PAGE' && slug != null &&
+          entitlements.contains(slug) && !pages.contains(slug)) {
+        pages.add(slug);
+      }
+    }
+    for (final p in enabledPages) {
+      if (!pages.contains(p)) pages.add(p);
+    }
+    return pages;
+  }
+
+  /// Human label for a page slug (native names, else the catalog title, else
+  /// a capitalised slug).
+  String pageTitle(String slug) {
+    if (_nativeTitles.containsKey(slug)) return _nativeTitles[slug]!;
+    final title = catalogItem(slug)?['title'] as String?;
+    if (title != null && title.isNotEmpty) return title;
+    return slug.isEmpty ? slug : slug[0].toUpperCase() + slug.substring(1);
+  }
+
+  bool get pagesFull => enabledPages.length >= maxPages;
+
   List<String> get symbols =>
       ((section('crypto')['symbols'] as List?)?.cast<String>()) ??
       ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'DOGEUSDT'];
@@ -77,11 +115,30 @@ class DeviceController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void setPageEnabled(String page, bool on) {
-    final pages = enabledPages;
-    if (on && !pages.contains(page)) pages.add(page);
-    if (!on && pages.contains(page)) pages.remove(page);
-    if (pages.isEmpty) return; // at least one page must stay
+  /// Enable/disable a page. Returns false (no change) when trying to enable a
+  /// page past the [maxPages] cap, so the UI can explain why.
+  bool setPageEnabled(String page, bool on) {
+    final pages = List<String>.from(enabledPages);
+    if (on) {
+      if (pages.contains(page)) return true;
+      if (pages.length >= maxPages) return false; // rotation full
+      pages.add(page);
+    } else {
+      if (pages.length <= 1) return true; // at least one page must stay
+      pages.remove(page);
+    }
+    config['pages'] = pages;
+    notifyListeners();
+    return true;
+  }
+
+  /// Reorder the enabled pages — the list order is the on-device swipe order.
+  void reorderPages(int oldIndex, int newIndex) {
+    final pages = List<String>.from(enabledPages);
+    if (oldIndex < 0 || oldIndex >= pages.length) return;
+    if (newIndex > oldIndex) newIndex -= 1;
+    newIndex = newIndex.clamp(0, pages.length - 1);
+    pages.insert(newIndex, pages.removeAt(oldIndex));
     config['pages'] = pages;
     notifyListeners();
   }
