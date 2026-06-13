@@ -130,3 +130,17 @@ device telemetry in Postgres; APK installs & runs; web admin pages all 200.
 
 ## OTA install crash fixed — big clock now lands on device (2026-06-13)
 - ✅ **Root cause of "device clock stays small after publish"**: every live OTA push of the Weather page crashed during zip extraction, so the new bundle never installed and the device kept the old (montserrat_48) layout. The crash was a **stack overflow in the sync task** (10KB) while miniz inflated the 7-GIF bundle — `SYNC_TASK_STACK` raised to 16KB. Also routed miniz's allocations to PSRAM (`zip.m_pAlloc/m_pFree/m_pRealloc` → `heap_caps_malloc(..., MALLOC_CAP_SPIRAM)`) so the ~11KB tinfl decompressor no longer competes with fragmented internal DRAM. Hardware-verified: `cmd sync → downloaded → activating com.ccp.weather@1.4.6 → font montserrat_80 resolved → layout loaded`, 0 crashes, stable on reboot. The 80pt clock now renders on the device.
+
+## Admin asset upload + serial console + coin logo (2026-06-13)
+- ✅ **Builder asset upload UI** (commit 2594c59): "Assets" panel uploads PNG/GIF/WAV/TTF from disk (4MB cap, rejects JPEG), Inspector image/gif `src` dropdown picks an uploaded asset, Publish bundles them → device SD `/assets/`. Verified in-browser. Completes the asset pipeline (backend shipped earlier).
+- ✅ **Serial debug console** (commit de846d7): USB-Serial-JTAG REPL — `pages`/`goto`/`widgets`/`ls`/`cat`/`heap`/`ver`. Lets us inspect the running device (confirmed the 80pt clock with `widgets` → `lh=58`, surfaced internal-DRAM `largest=2304B`). See [serial-debug-console.md](serial-debug-console.md).
+- ✅ **Crypto coin logo 64×64 auto-resize**: the native crypto page's coin logo widget now `lv_image_set_scale`s any source (ship 64×64) down to its 36px slot — no re-encode. (Dynamic fetch-on-coin-change still ⬜, see roadmap §2.)
+- 📋 **[roadmap-v3-parity.md](roadmap-v3-parity.md)**: the big remaining scope from the V3 reference + requested new pages — per-page settings_schema (wallets/socials/colors/coins/alerts/page-show), dynamic coin-logo fetch, new pages (crypto-big-number, alert, profile, pet, fortune×4, social), and follower/total-views feed. Prioritized, each item is its own session.
+
+## Known gaps / bugs to finish (as of 2026-06-13)
+- ⬜ Per-page settings → User App (settings_schema) — only planned.
+- ⬜ Dynamic coin-logo fetch to SD when a new coin is selected.
+- ⬜ New pages: crypto-big-number, alert, profile, pet, fortune×4, social.
+- ⬜ Follower/subscriber + total-views feed (`social.stats`).
+- ⚠️ Live-OTA push of a Weather update can briefly crash+reboot if that page (GIF reading SD) is foreground during unzip — self-recovers; proper fix = quiesce display before extract.
+- ⚠️ Internal DRAM is tight (`heap` shows largest-block ~2–13KB) — watch for OOM as pages grow; move big buffers to PSRAM.

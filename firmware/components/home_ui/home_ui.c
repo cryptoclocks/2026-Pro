@@ -901,6 +901,10 @@ static void crypto_update_header(void)
             char lv_path[104];
             snprintf(lv_path, sizeof(lv_path), "A:%s", path);
             lv_image_set_src(s.coin_logo, lv_path);
+            /* coin icons ship at 64x64; LVGL scales them down to the 36px slot
+             * (256 = 1x), so any source size auto-fits without re-encoding */
+            lv_image_set_inner_align(s.coin_logo, LV_IMAGE_ALIGN_CENTER);
+            lv_image_set_scale(s.coin_logo, (36 * 256) / 64);
             lv_obj_remove_flag(s.coin_logo, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s.coin_logo, LV_OBJ_FLAG_HIDDEN);
@@ -951,8 +955,8 @@ static void build_crypto_page(page_t *page)
 
     /* top-left: coin logo + symbol cycle button */
     s.coin_logo = lv_image_create(scr);
-    lv_obj_set_size(s.coin_logo, 32, 32);
-    lv_obj_align(s.coin_logo, LV_ALIGN_TOP_LEFT, 12, 10);
+    lv_obj_set_size(s.coin_logo, 36, 36);
+    lv_obj_align(s.coin_logo, LV_ALIGN_TOP_LEFT, 10, 8);
 
     lv_obj_t *sym_btn = lv_button_create(scr);
     lv_obj_set_size(sym_btn, 150, 36);
