@@ -17,7 +17,10 @@ but driven by a per-page `settings_schema` so the User App + Admin web render th
 form automatically (no app rebuild). Design is in
 [settings-and-assets-plan.md](settings-and-assets-plan.md).
 
-**Status: 🟡 web/server slice DONE (2026-06-13), firmware delivery remaining.**
+**Status: ✅ VERIFIED END-TO-END ON HARDWARE (2026-06-13).** Set a device's
+`settings.profile.nickname` via the API → MQTT push → the on-device `name` label
+changed `SATOSHI NAKAMOTO`→`HAL FINNEY` and `role`→`(SAT) CYPHERPUNK` live
+(serial `widgets` confirmed), clock still ticking. The full chain works:
 - ✅ `settings_schema` in the layout (Zod), persists through publish (verified).
 - ✅ Builder "Settings form" panel: admins declare fields (text/number/color/
   select/toggle, group, default, options) with a **live preview** — this is the
