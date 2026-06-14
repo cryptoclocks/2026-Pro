@@ -3,7 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'device_controller.dart';
 import 'hub_api.dart';
 import 'ui_helpers.dart';
-import 'main.dart' show ccpAccent, ccpMuted, ccpPanel;
+import 'main.dart' show ccpAccent, ccpMuted, ccpPanel, AuthGate;
 import 'auth.dart';
 import 'login_screen.dart';
 import 'symbol_picker.dart';
@@ -428,6 +428,13 @@ class _ProfileSettingsState extends State<ProfileSettings> {
                   onPressed: () async {
                     await AuthService.signOut();
                     c.setLogin(null);
+                    if (context.mounted) {
+                      // back to the welcome/login gate — login is required to use the app
+                      Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (_) => const AuthGate()),
+                        (route) => false,
+                      );
+                    }
                   },
                   child: const Text('Logout'),
                 ),

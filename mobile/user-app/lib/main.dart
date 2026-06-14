@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'device_api.dart';
 import 'discovery.dart';
 import 'device_screen.dart';
+import 'auth.dart';
+import 'login_screen.dart';
 
 void main() => runApp(const CcpUserApp());
 
@@ -25,7 +27,102 @@ class CcpUserApp extends StatelessWidget {
           surface: ccpPanel,
         ),
       ),
-      home: const DiscoveryScreen(),
+      home: const AuthGate(),
+    );
+  }
+}
+
+/// Login gate: on launch, show the discovery screen if already signed in,
+/// otherwise the welcome screen (sign in required before using the app).
+class AuthGate extends StatefulWidget {
+  const AuthGate({super.key});
+  @override
+  State<AuthGate> createState() => _AuthGateState();
+}
+
+class _AuthGateState extends State<AuthGate> {
+  bool? _authed; // null = still checking
+
+  @override
+  void initState() {
+    super.initState();
+    _check();
+  }
+
+  Future<void> _check() async {
+    final email = await AuthService.savedEmail();
+    if (mounted) setState(() => _authed = email != null);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_authed == null) {
+      return const Scaffold(
+        backgroundColor: ccpBg,
+        body: Center(child: CircularProgressIndicator(color: ccpAccent)),
+      );
+    }
+    if (_authed!) return const DiscoveryScreen();
+    return WelcomeScreen(onSignedIn: () => setState(() => _authed = true));
+  }
+}
+
+/// First-run welcome: branding + a single "Sign in" CTA. The app is unusable
+/// until the user authenticates (email OTP or Google).
+class WelcomeScreen extends StatelessWidget {
+  final VoidCallback onSignedIn;
+  const WelcomeScreen({super.key, required this.onSignedIn});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: ccpBg,
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+              Center(
+                child: Container(
+                  width: 104,
+                  height: 104,
+                  decoration: BoxDecoration(
+                    color: ccpPanel,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: ccpAccent, width: 2),
+                  ),
+                  child: const Icon(Icons.watch, size: 52, color: ccpAccent),
+                ),
+              ),
+              const SizedBox(height: 28),
+              const Text('CryptoClock Pro',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: ccpAccent, fontSize: 30, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              const Text(
+                'Set up and control your crypto display.\nSign in to manage your CryptoClock.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: ccpMuted, fontSize: 15, height: 1.4),
+              ),
+              const Spacer(),
+              FilledButton(
+                style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+                onPressed: () async {
+                  final email = await Navigator.push<String>(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  );
+                  if (email != null) onSignedIn();
+                },
+                child: const Text('Sign in to get started', style: TextStyle(fontSize: 16)),
+              ),
+              const SizedBox(height: 20),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
