@@ -155,6 +155,14 @@ device telemetry in Postgres; APK installs & runs; web admin pages all 200.
 - ⚠️ Phantom touch input (board's i2c pull-up warning) occasionally triggers an unintended swipe→swap; benign (the swap works), but it's a touch-calibration issue to chase separately.
 - ⬜ **Next chunk (app side)**: UserApp UI to curate which pages are enabled + enforce the ≤5 cap (firmware already caps defensively).
 
+## Follow-on chunks after multi-page (2026-06-14)
+- ✅ **App page curation + Builder Profile fields** (commit 59c84ca) — see report #1/#5.
+- ✅ **"Crypto Big" Builder page** (commit 680feac) — bindings-only big-number price; added top-level `priceFmt` to the market feed + sim.
+- ✅ **Touch-gesture debounce** (commit 603d2df) — 600ms guard so stray touches can't thrash the rotation.
+- ❌ **sys_monitor OOM — left as accepted non-fatal.** Tried moving sysmon+health task creation before the package load to dodge late-fragmentation OOM; it **hung the device on "Starting…"** (early 8KB starved boot). Reverted. See [[firmware-internal-dram-tight]].
+- 🚧 **Coin-logo dynamic fetch (report #2 / §2)** — server URL is now correct (`192.168.1.39:4000`) so a server icon endpoint is reachable, but the firmware HTTP-fetch-to-SD half is memory-risky on this device; not started.
+- 🚧 **social.stats feeder + Social page (§4)** — blocked: no YouTube/social API keys in env. Feeder+page scaffold is buildable with mock data only until keys are provided.
+
 ## Known gaps / bugs to finish (as of 2026-06-14)
 - ⬜ Flutter app: page-curation UI (≤5) + mirror `<SchemaForm>` so users edit page settings in the app.
 - ⬜ Dynamic coin-logo fetch to SD when a new coin is selected (firmware 64×64 auto-resize done; background fetch pending — roadmap §2).
