@@ -19,7 +19,7 @@ static const char *TAG = "ui";
 
 typedef enum {
     BIND_TEXT, BIND_VALUE, BIND_SERIES, BIND_VISIBLE, BIND_SRC,
-    BIND_STYLE_TEXT_COLOR, BIND_STYLE_BG_COLOR,
+    BIND_DATA, BIND_STYLE_TEXT_COLOR, BIND_STYLE_BG_COLOR,
 } bind_prop_t;
 
 typedef struct {
@@ -154,6 +154,32 @@ static const asset_ent_t *find_asset(const char *id)
 static void asset_lv_path(const asset_ent_t *a, char *out, size_t len)
 {
     snprintf(out, len, "A:%s", a->abs_path);
+}
+
+static bool rel_page_path_safe(const char *p)
+{
+    return p && strncmp(p, "pages/", 6) == 0 && !strstr(p, "..") && !strchr(p, '\\');
+}
+
+static bool src_lv_path(const char *src, char *out, size_t len)
+{
+    if (!src || !src[0]) {
+        return false;
+    }
+    const asset_ent_t *a = find_asset(src);
+    if (a) {
+        asset_lv_path(a, out, len);
+        return true;
+    }
+    if (rel_page_path_safe(src)) {
+        snprintf(out, len, "A:%s/%s", STORAGE_SD_BASE, src);
+        return true;
+    }
+    if (!strncmp(src, "A:", 2)) {
+        strlcpy(out, src, len);
+        return true;
+    }
+    return false;
 }
 
 /* ------------------------------------------------------- mini JSONPath */
@@ -326,10 +352,8 @@ static void run_action(const ui_action_t *a, widget_ent_t *w)
             } else if (!strcmp(a->key, "style.bg_color")) {
                 lv_obj_set_style_bg_color(obj, parse_color(a->value, lv_color_black()), 0);
             } else if (!strcmp(a->key, "src")) {
-                const asset_ent_t *asset = find_asset(a->value);
-                if (asset) {
-                    char path[220];
-                    asset_lv_path(asset, path, sizeof(path));
+                char path[220];
+                if (src_lv_path(a->value, path, sizeof(path))) {
                     lv_image_set_src(obj, path);
                 }
             }
@@ -434,6 +458,12 @@ static void apply_style(lv_obj_t *obj, const cJSON *style)
     if ((c = jstr(style, "bg_color", NULL))) {
         lv_obj_set_style_bg_color(obj, parse_color(c, lv_color_black()), 0);
         lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, 0);
+        const char *g = jstr(style, "bg_grad_color", NULL);
+        if (g) { /* 2-colour linear gradient bg_color -> bg_grad_color */
+            lv_obj_set_style_bg_grad_color(obj, parse_color(g, lv_color_black()), 0);
+            lv_obj_set_style_bg_grad_dir(obj,
+                !strcmp(jstr(style, "bg_grad_dir", "ver"), "hor") ? LV_GRAD_DIR_HOR : LV_GRAD_DIR_VER, 0);
+        }
     }
     if ((c = jstr(style, "text_color", NULL))) {
         lv_obj_set_style_text_color(obj, parse_color(c, lv_color_white()), 0);
@@ -511,10 +541,8 @@ static lv_obj_t *create_widget(lv_obj_t *parent, const cJSON *node, widget_ent_t
             obj = lv_image_create(parent);
         }
         const char *src_id = jstr(props, "src", NULL);
-        const asset_ent_t *a = src_id ? find_asset(src_id) : NULL;
-        if (a) {
-            char path[220];
-            asset_lv_path(a, path, sizeof(path));
+        char path[220];
+        if (src_lv_path(src_id, path, sizeof(path))) {
 #if LV_USE_GIF
             if (!strcmp(type, "gif")) {
                 lv_gif_set_src(obj, path);
@@ -657,7 +685,7 @@ static lv_obj_t *create_widget(lv_obj_t *parent, const cJSON *node, widget_ent_t
         lv_qrcode_set_size(obj, sz);
         lv_qrcode_set_dark_color(obj, parse_color(jstr(props, "dark", "#000000"), lv_color_black()));
         lv_qrcode_set_light_color(obj, parse_color(jstr(props, "light", "#FFFFFF"), lv_color_white()));
-        const char *txt = jstr(props, "text", "");
+        const char *txt = jstr(props, "data", jstr(props, "text", ""));
         lv_qrcode_update(obj, txt, strlen(txt));
 #else
         obj = lv_label_create(parent);
@@ -750,6 +778,7 @@ static void parse_bindings(const cJSON *node, int widget_idx)
         bd->map = map ? cJSON_Duplicate(map, 1) : NULL;
 
         if (!strcmp(prop, "text")) bd->prop = BIND_TEXT;
+        else if (!strcmp(prop, "data")) bd->prop = BIND_DATA;
         else if (!strcmp(prop, "value")) bd->prop = BIND_VALUE;
         else if (!strcmp(prop, "visible")) bd->prop = BIND_VISIBLE;
         else if (!strcmp(prop, "src")) bd->prop = BIND_SRC;
@@ -1112,6 +1141,20 @@ static void apply_binding(const binding_t *b, const cJSON *value)
         }
         break;
     }
+    case BIND_DATA: {
+        char text[160];
+        format_value(text, sizeof(text), b->format, num, str);
+        const widget_ent_t *w = &s_ui.widgets[b->widget_idx];
+#if LV_USE_QRCODE
+        if (!strcmp(w->type, "qrcode")) {
+            lv_qrcode_update(obj, text, strlen(text));
+        } else
+#endif
+        {
+            lv_label_set_text(obj, text);
+        }
+        break;
+    }
     case BIND_VISIBLE:
         if ((cJSON_IsBool(value) && cJSON_IsTrue(value)) || num != 0) {
             lv_obj_remove_flag(obj, LV_OBJ_FLAG_HIDDEN);
@@ -1130,10 +1173,8 @@ static void apply_binding(const binding_t *b, const cJSON *value)
         }
         break;
     case BIND_SRC: {
-        const asset_ent_t *asset = str ? find_asset(str) : NULL;
-        if (asset) {
-            char path[220];
-            asset_lv_path(asset, path, sizeof(path));
+        char path[220];
+        if (src_lv_path(str, path, sizeof(path))) {
             /* gif needs its own setter to (re)start animation; image otherwise */
             if (lv_obj_check_type(obj, &lv_gif_class)) {
                 lv_gif_set_src(obj, path);

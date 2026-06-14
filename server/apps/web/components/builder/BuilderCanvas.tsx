@@ -129,7 +129,9 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
         top: widget.y,
         width: widget.w,
         height: widget.h,
-        background: bg,
+        background: widget.style?.bg_grad_color
+          ? `linear-gradient(${widget.style?.bg_grad_dir === "hor" ? "to right" : "to bottom"}, ${bg}, ${widget.style.bg_grad_color})`
+          : bg,
         color: ov?.textColor ?? widget.style?.text_color ?? "#EAECEF",
         textAlign: (widget.style?.align as "left" | "center" | "right") ?? "center",
         borderRadius: widget.style?.radius ?? 4,
@@ -307,14 +309,17 @@ function WidgetInner({
           />
         );
       }
-    case "qrcode":
+    case "qrcode": {
+      const data = ov?.data ?? (p.data as string) ?? (p.text as string) ?? "";
+      const seed = Array.from(data).reduce((sum, ch) => (sum * 31 + ch.charCodeAt(0)) >>> 0, 17);
       return (
         <div className="grid" style={{ gridTemplateColumns: "repeat(7,1fr)", width: Math.min(w.w, w.h) - 6, height: Math.min(w.w, w.h) - 6, background: "#fff", padding: 2 }}>
           {Array.from({ length: 49 }).map((_, i) => (
-            <div key={i} style={{ background: (i * 7 + ((i / 7) | 0)) % 3 ? "#000" : "#fff" }} />
+            <div key={i} style={{ background: ((i * 7 + ((i / 7) | 0) + seed) % 3) ? "#000" : "#fff" }} />
           ))}
         </div>
       );
+    }
     case "spinner":
       return <div className="rounded-full animate-spin" style={{ width: Math.min(w.w, w.h) - 6, height: Math.min(w.w, w.h) - 6, border: `4px solid #2b3139`, borderTopColor: accent }} />;
     case "dropdown":

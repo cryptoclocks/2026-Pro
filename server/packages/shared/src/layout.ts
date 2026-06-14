@@ -21,6 +21,8 @@ const semver = z.string().regex(/^\d+\.\d+\.\d+$/);
 export const StyleSchema = z
   .object({
     bg_color: color,
+    bg_grad_color: color, // 2nd colour → vertical linear gradient bg_color→bg_grad_color
+    bg_grad_dir: z.enum(["ver", "hor"]),
     bg_opa: z.number().int().min(0).max(255),
     text_color: color,
     border_color: color,

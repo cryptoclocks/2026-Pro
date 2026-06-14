@@ -21,10 +21,10 @@ export const SLIDESHOW_ASSETS = [
 ] as const;
 
 const SOCIAL_PAGE_THEMES = {
-  fb: { bg: "#3B6FD6", accent: "#1877F2", text: "#0B1F33", muted: "#35506A", card: "#FFFFFF", border: "#B7D6FF" },
-  yt: { bg: "#A8ADB4", accent: "#FF0000", text: "#241010", muted: "#6B3940", card: "#FFFFFF", border: "#FFD0D0" },
-  tt: { bg: "#101216", accent: "#22D3EE", text: "#FFFFFF", muted: "#81A9AF", card: "#111418", border: "#26464D" },
-  ig: { bg: "#C13584", accent: "#C13584", text: "#2A1020", muted: "#70405B", card: "#FFFFFF", border: "#F4C0D8" },
+  fb: { bg: "#3B6FD6", bgGrad: "#2952A8", accent: "#1877F2", text: "#0B1F33", muted: "#35506A", card: "#FFFFFF", border: "#B7D6FF" },
+  yt: { bg: "#C9CDD3", bgGrad: "#9AA0A6", accent: "#FF0000", text: "#241010", muted: "#6B3940", card: "#FFFFFF", border: "#FFD0D0" },
+  tt: { bg: "#0C2228", bgGrad: "#1E0A12", accent: "#22D3EE", text: "#FFFFFF", muted: "#81A9AF", card: "#111418", border: "#26464D" },
+  ig: { bg: "#C13584", bgGrad: "#F58529", accent: "#C13584", text: "#2A1020", muted: "#70405B", card: "#FFFFFF", border: "#F4C0D8" },
 } as const;
 
 /** A bottom-right social button (image) on the main profile page that navigates
@@ -52,7 +52,7 @@ function socialPage(
     id: `social_${id}`,
     name: label,
     widgets: [
-      { type: "label", id: `${id}_bg`, x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: theme.bg } },
+      { type: "label", id: `${id}_bg`, x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: theme.bg, bg_grad_color: theme.bgGrad } },
       {
         type: "button", id: `${id}_back`, x: 12, y: 12, w: 104, h: 40, props: { text: "< Back" },
         style: { bg_color: theme.card, text_color: theme.accent, radius: 10, border_width: 1, border_color: theme.border, font: "montserrat_20" },
