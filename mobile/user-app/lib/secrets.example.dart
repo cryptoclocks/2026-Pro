@@ -3,5 +3,5 @@
 const supabaseUrl = 'https://YOUR-PROJECT-REF.supabase.co';
 const supabaseAnonKey = 'YOUR-ANON-KEY';
 
-/// CryptoClock Pro Hub base URL (server).
-const hubBaseUrl = 'http://192.168.1.139:4000';
+/// CryptoClock Pro Hub base URL (server) — your Mac's LAN IP for local dev.
+const hubBaseUrl = 'http://192.168.1.39:4000';
