@@ -1,6 +1,10 @@
 # CryptoClock Pro — Project Progress
 
-_Last updated: 2026-06-14_
+_Last updated: 2026-06-15_
+
+> **➡️ New contributor / AI handoff: read [`docs/HANDOFF.md`](HANDOFF.md) first** — current state, file map, and detailed specs for the pending work (widget image picker + static/dynamic + resize-on-publish, avatar-from-mobile, the clock font/position mismatch).
+
+**Session 2026-06-15:** multi-page Builder + multi-page Profile; Inspector click-select fix (drag activation constraint); profile avatar + 4 social buttons are image widgets + firmware makes action-bearing widgets clickable; per-part colours editable from the app (settings-bound style colours); app WelcomeScreen + login gate (verified on device); native Google Sign-In in the app; fixed the local Hub not starting (express direct dep + `pnpm install --force` + prisma generate). All pushed to `origin/main`.
 
 Legend: ✅ done & verified · 🟡 partial / needs more · ⬜ not started
 
