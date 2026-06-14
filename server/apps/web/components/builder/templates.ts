@@ -1,15 +1,39 @@
 import type { WidgetNode } from "@ccp/shared";
 
-export type TemplateKey = "blank" | "clock" | "crypto" | "crypto_big" | "weather" | "profile" | "welcome" | "led_toggle";
+export type TemplateKey = "blank" | "clock" | "crypto" | "crypto_big" | "slideshow" | "weather" | "profile" | "welcome" | "led_toggle";
+
+export const PROFILE_SOCIAL_ASSETS = [
+  { id: "profile_avatar", type: "image" as const, path: "assets/profile/avatar.png", src: "/profile-social/avatar.png" },
+  { id: "profile_fb", type: "image" as const, path: "assets/profile/fb.png", src: "/profile-social/fb.png" },
+  { id: "profile_yt", type: "image" as const, path: "assets/profile/yt.png", src: "/profile-social/yt.png" },
+  { id: "profile_tt", type: "image" as const, path: "assets/profile/tt.png", src: "/profile-social/tt.png" },
+  { id: "profile_ig", type: "image" as const, path: "assets/profile/ig.png", src: "/profile-social/ig.png" },
+  { id: "profile_qr_fb", type: "image" as const, path: "assets/profile/qr-fb.png", src: "/profile-social/qr-fb.png" },
+  { id: "profile_qr_yt", type: "image" as const, path: "assets/profile/qr-yt.png", src: "/profile-social/qr-yt.png" },
+  { id: "profile_qr_tt", type: "image" as const, path: "assets/profile/qr-tt.png", src: "/profile-social/qr-tt.png" },
+  { id: "profile_qr_ig", type: "image" as const, path: "assets/profile/qr-ig.png", src: "/profile-social/qr-ig.png" },
+] as const;
+
+export const SLIDESHOW_ASSETS = [
+  { id: "slideshow_sample1", type: "image" as const, path: "assets/slideshow/sample1.png", src: "/slideshow-samples/sample1.png" },
+  { id: "slideshow_sample2", type: "image" as const, path: "assets/slideshow/sample2.png", src: "/slideshow-samples/sample2.png" },
+  { id: "slideshow_sample3", type: "image" as const, path: "assets/slideshow/sample3.png", src: "/slideshow-samples/sample3.png" },
+] as const;
+
+const SOCIAL_PAGE_THEMES = {
+  fb: { bg: "#3B6FD6", accent: "#1877F2", text: "#0B1F33", muted: "#35506A", card: "#FFFFFF", border: "#B7D6FF" },
+  yt: { bg: "#A8ADB4", accent: "#FF0000", text: "#241010", muted: "#6B3940", card: "#FFFFFF", border: "#FFD0D0" },
+  tt: { bg: "#101216", accent: "#22D3EE", text: "#FFFFFF", muted: "#81A9AF", card: "#111418", border: "#26464D" },
+  ig: { bg: "#C13584", accent: "#C13584", text: "#2A1020", muted: "#70405B", card: "#FFFFFF", border: "#F4C0D8" },
+} as const;
 
 /** A bottom-right social button (image) on the main profile page that navigates
- *  to that platform's detail page. It's an image widget so the admin can set a
- *  logo PNG as its `src` (upload via the Assets panel); until then it shows a
- *  coloured circle. Default `src` left empty. */
+ *  to that platform's detail page. It uses a built-in PNG asset by default so
+ *  the template previews and the published bundle both show the logo. */
 function socialNavButton(id: string, x: number, bg: string): WidgetNode {
   return {
     type: "image", id: `btn_${id}`, x, y: 262, w: 48, h: 48,
-    props: { src: "" },
+    props: { src: `profile_${id}` },
     style: { bg_color: bg, radius: 24 },
     actions: [{ on: "clicked", do: "page.show", target: `social_${id}` }],
   };
@@ -19,24 +43,46 @@ function socialNavButton(id: string, x: number, bg: string): WidgetNode {
  *  and a Back button to the main profile page. Widget ids are platform-prefixed
  *  so they stay unique across pages. */
 function socialPage(
-  id: string, bg: string, label: string, followers: string, likes: string, url: string,
+  id: keyof typeof SOCIAL_PAGE_THEMES, bg: string, label: string, followers: string, likes: string, url: string,
 ): { id: string; name: string; widgets: WidgetNode[] } {
+  const qrSize = 140;
+  const logoSize = 34;
+  const theme = SOCIAL_PAGE_THEMES[id];
   return {
     id: `social_${id}`,
     name: label,
     widgets: [
-      { type: "label", id: `${id}_bg`, x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: "#0B0E11" } },
+      { type: "label", id: `${id}_bg`, x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: theme.bg } },
       {
         type: "button", id: `${id}_back`, x: 12, y: 12, w: 104, h: 40, props: { text: "< Back" },
-        style: { bg_color: "#161B22", text_color: "#EAECEF", radius: 10, border_width: 1, border_color: "#2B3139", font: "montserrat_20" },
+        style: { bg_color: theme.card, text_color: theme.accent, radius: 10, border_width: 1, border_color: theme.border, font: "montserrat_20" },
         actions: [{ on: "clicked", do: "page.show", target: "main" }],
       },
-      { type: "label", id: `${id}_title`, x: 20, y: 66, w: 300, h: 40, props: { text: label }, style: { text_color: bg, align: "left", font: "montserrat_28" } },
-      { type: "label", id: `${id}_fl`, x: 20, y: 126, w: 240, h: 22, props: { text: "Followers" }, style: { text_color: "#848E9C", align: "left", font: "montserrat_20" } },
-      { type: "label", id: `${id}_fv`, x: 20, y: 150, w: 260, h: 40, props: { text: followers }, style: { text_color: "#EAECEF", align: "left", font: "montserrat_28" } },
-      { type: "label", id: `${id}_ll`, x: 20, y: 202, w: 240, h: 22, props: { text: "Likes" }, style: { text_color: "#848E9C", align: "left", font: "montserrat_20" } },
-      { type: "label", id: `${id}_lv`, x: 20, y: 226, w: 260, h: 40, props: { text: likes }, style: { text_color: "#EAECEF", align: "left", font: "montserrat_28" } },
-      { type: "qrcode", id: `${id}_qr`, x: 322, y: 92, w: 140, h: 140, props: { data: url, size: 140 }, style: {} },
+      { type: "label", id: `${id}_title`, x: 20, y: 66, w: 300, h: 40, props: { text: label }, style: { text_color: theme.accent, align: "left", font: "montserrat_28" } },
+      { type: "label", id: `${id}_fl`, x: 20, y: 126, w: 240, h: 22, props: { text: "Followers" }, style: { text_color: theme.muted, align: "left", font: "montserrat_20" } },
+      {
+        type: "label", id: `${id}_fv`, x: 20, y: 150, w: 260, h: 40, props: { text: followers }, style: { text_color: theme.text, align: "left", font: "montserrat_28" },
+        bindings: [{ prop: "text", source: "settings", path: `${id}_followers` }],
+      },
+      {
+        type: "label", id: `${id}_ll`, x: 20, y: 202, w: 240, h: 22, props: { text: "Following" }, style: { text_color: theme.muted, align: "left", font: "montserrat_20" },
+        bindings: [{ prop: "text", source: "settings", path: `${id}_secondary_label` }],
+      },
+      {
+        type: "label", id: `${id}_lv`, x: 20, y: 226, w: 260, h: 40, props: { text: likes }, style: { text_color: theme.text, align: "left", font: "montserrat_28" },
+        bindings: [{ prop: "text", source: "settings", path: `${id}_following` }],
+      },
+      {
+        type: "qrcode", id: `${id}_qr`, x: 322, y: 92, w: qrSize, h: qrSize,
+        props: { data: url, size: qrSize },
+        style: {},
+        bindings: [{ prop: "data", source: "settings", path: `${id}_url` }],
+      },
+      {
+        type: "image", id: `${id}_qr_logo`, x: 322 + (qrSize - logoSize) / 2, y: 92 + (qrSize - logoSize) / 2, w: logoSize, h: logoSize,
+        props: { src: `profile_qr_${id}` },
+        style: { bg_color: bg, radius: 8, pad: 3 },
+      },
     ],
   };
 }
@@ -48,18 +94,26 @@ const PROFILE_SOCIAL_BTNS: WidgetNode[] = [
   socialNavButton("ig", 424, "#C13584"),
 ];
 
-/** Main profile page widgets (avatar, big clock, name/role/company + social nav). */
+/** Main profile page widgets (avatar, big clock, motto, name/role/company + social nav). */
 const PROFILE_MAIN_WIDGETS: WidgetNode[] = [
   {
     type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320, props: { text: "" },
     style: { bg_color: "#0B0E11" },
     bindings: [{ prop: "style.bg_color", source: "settings", path: "bg_color" }],
   },
-  { type: "image", id: "avatar", x: 24, y: 30, w: 132, h: 132, props: { src: "" }, style: { bg_color: "#161B22", radius: 66, border_width: 2, border_color: "#F0B90B" } },
   {
-    type: "label", id: "verify", x: 172, y: 28, w: 286, h: 22, props: { text: "DON'T TRUST  VERIFY" },
+    type: "image", id: "avatar", x: 24, y: 30, w: 132, h: 132,
+    props: { src: "profile_avatar" },
+    style: { bg_color: "#161B22", radius: 66, border_width: 2, border_color: "#F0B90B" },
+    bindings: [{ prop: "src", source: "settings", path: "avatar" }],
+  },
+  {
+    type: "label", id: "motto", x: 172, y: 28, w: 286, h: 22, props: { text: "DON'T TRUST  VERIFY" },
     style: { text_color: "#F0B90B", align: "right", font: "montserrat_20" },
-    bindings: [{ prop: "style.text_color", source: "settings", path: "verify_color" }],
+    bindings: [
+      { prop: "text", source: "settings", path: "motto" },
+      { prop: "style.text_color", source: "settings", path: "verify_color" },
+    ],
   },
   { type: "label", id: "time", x: 172, y: 52, w: 286, h: 92, props: { text: "00:00" }, style: { text_color: "#EAECEF", align: "right", font: "montserrat_80" } },
   {
@@ -275,7 +329,7 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     ],
   },
 
-  /* "Don't trust, verify" profile: a main page (avatar, big clock, name/role/
+  /* "Don't trust, verify" profile: a main page (avatar, big clock, motto, name/role/
      company from settings.profile) with 4 social buttons bottom-right; each
      navigates (page.show) to that platform's own detail page (followers/likes
      mock + QR + Back). Multi-page — designed one page at a time in the Builder. */
@@ -283,6 +337,18 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     name: "Profile",
     widgets: PROFILE_MAIN_WIDGETS,
     pages: PROFILE_PAGES,
+  },
+
+  /* Native-style slideshow starter: a full-screen photo slot backed by the
+     same asset pipeline as the mobile app's slideshow manager. */
+  slideshow: {
+    name: "Slideshow",
+    widgets: [
+      {
+        type: "image", id: "photo", x: 0, y: 0, w: 480, h: 320,
+        props: { src: "slideshow_sample1" }, style: {},
+      },
+    ],
   },
 
   welcome: {
@@ -345,4 +411,3 @@ export const MOCK: Record<string, Record<string, unknown>> = {
   weather: { temp: "31°C", city: "Bangkok", desc: "Partly cloudy" },
   device: { name: "Lobby display", battery: "92%" },
 };
-
