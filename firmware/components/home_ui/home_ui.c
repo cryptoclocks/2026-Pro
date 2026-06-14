@@ -418,10 +418,20 @@ static void gesture_cb(lv_event_t *e)
     if (!indev) {
         return;
     }
+    /* Debounce: the touch panel (flaky i2c pull-ups) occasionally emits stray
+     * gestures. Ignore swipes that arrive too soon after the last accepted one
+     * so a burst can't thrash the page rotation (each package swipe reloads). */
+    static uint32_t last_ms;
+    uint32_t now = lv_tick_get();
+    if (now - last_ms < 600) {
+        return;
+    }
     lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (dir == LV_DIR_LEFT) {
+        last_ms = now;
         goto_page((s.current + 1) % s.page_count, true);
     } else if (dir == LV_DIR_RIGHT) {
+        last_ms = now;
         goto_page((s.current - 1 + s.page_count) % s.page_count, false);
     }
 }

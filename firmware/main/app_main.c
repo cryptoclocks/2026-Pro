@@ -697,11 +697,11 @@ void app_main(void)
         load_active_or_recovery(); /* idempotent — no-op if net_worker already did it */
     }
     /* telemetry is non-critical — a startup failure (e.g. transient OOM) must not
-     * abort the whole device and trigger a boot loop; log and carry on */
+     * abort the whole device and trigger a boot loop; log and carry on.
+     * NB: kept AFTER the package load on purpose — starting these 4KB-stack
+     * tasks before it starves the boot and hangs the device on "Starting…". */
     if (sys_monitor_start(on_telemetry, 30) != ESP_OK) {
         ESP_LOGW(TAG, "sys_monitor failed to start (continuing without telemetry)");
     }
-
     xTaskCreatePinnedToCore(health_gate_task, "health", 4096, NULL, 6, NULL, 0);
-
 }
