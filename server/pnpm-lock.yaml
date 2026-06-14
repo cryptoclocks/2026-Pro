@@ -34,6 +34,9 @@ importers:
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
+      express:
+        specifier: ^4.21.0
+        version: 4.22.1
       mqtt:
         specifier: ^5.10.0
         version: 5.15.1
