@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { DndContext, DragOverlay, type DragEndEvent, type DragStartEvent } from "@dnd-kit/core";
+import {
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
 import type { Layout, WidgetType } from "@ccp/shared";
 import { NOOP_LOGIC_SOURCE, UNAVAILABLE_LOGIC_SOURCE, useBuilder, type CompiledWasm, type WasmModuleConfig } from "@/components/builder/store";
 import { WidgetPalette } from "@/components/builder/WidgetPalette";
@@ -38,6 +46,9 @@ export default function BuilderPage() {
   const { me, token } = useAuth();
   const [message, setMessage] = useState<string | null>(null);
   const [dragLabel, setDragLabel] = useState<string | null>(null);
+  // require a few px of movement before a drag starts, so a plain click on a
+  // widget fires onClick (selects it) instead of being swallowed as a 0-px drag
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [mounted, setMounted] = useState(false);
   const [logicOpen, setLogicOpen] = useState(false);
   const [busy, setBusy] = useState<"compile" | "publish" | "load" | null>(null);
@@ -462,7 +473,7 @@ export default function BuilderPage() {
         </pre>
       )}
 
-      <DndContext onDragStart={onDragStart} onDragCancel={() => setDragLabel(null)} onDragEnd={onDragEnd}>
+      <DndContext sensors={sensors} onDragStart={onDragStart} onDragCancel={() => setDragLabel(null)} onDragEnd={onDragEnd}>
         <div className="grid grid-cols-[280px_minmax(520px,1fr)_320px] gap-4 flex-1 min-h-0">
           <BuilderSidebar />
           <BuilderCanvas />
