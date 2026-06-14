@@ -837,6 +837,10 @@ static void build_widget_tree(lv_obj_t *parent, const cJSON *node)
     parse_actions(node, ent);
     if (ent->action_count > 0 || ent->wasm_module[0]) {
         lv_obj_add_event_cb(obj, widget_event_cb, LV_EVENT_ALL, ent);
+        /* buttons are clickable by default but images/labels are not — any
+         * widget that declares actions (e.g. an image used as a social button
+         * with a page.show) must receive touch events */
+        lv_obj_add_flag(obj, LV_OBJ_FLAG_CLICKABLE);
     }
 
     const cJSON *children = cJSON_GetObjectItem(node, "children");
