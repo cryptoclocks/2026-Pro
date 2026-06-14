@@ -3,7 +3,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'device_controller.dart';
 import 'hub_api.dart';
 import 'ui_helpers.dart';
-import 'main.dart' show ccpAccent, ccpMuted;
+import 'main.dart' show ccpAccent, ccpMuted, ccpPanel;
 import 'auth.dart';
 import 'login_screen.dart';
 import 'symbol_picker.dart';
@@ -232,9 +232,18 @@ class _ProfileSettingsState extends State<ProfileSettings> {
       TextEditingController(text: (_p['role'] as String?) ?? '');
   late final TextEditingController _company =
       TextEditingController(text: (_p['company'] as String?) ?? '');
-  late final TextEditingController _nameColor =
-      TextEditingController(text: (_p['name_color'] as String?) ?? '#F0B90B');
   late bool _show = (_p['show'] as bool?) ?? true;
+  // colour of each part (hex), bound to settings.profile.*_color on the device
+  late final TextEditingController _nameColor =
+      TextEditingController(text: (_p['name_color'] as String?) ?? '#EAECEF');
+  late final TextEditingController _roleColor =
+      TextEditingController(text: (_p['role_color'] as String?) ?? '#848E9C');
+  late final TextEditingController _companyColor =
+      TextEditingController(text: (_p['company_color'] as String?) ?? '#F0B90B');
+  late final TextEditingController _verifyColor =
+      TextEditingController(text: (_p['verify_color'] as String?) ?? '#F0B90B');
+  late final TextEditingController _bgColor =
+      TextEditingController(text: (_p['bg_color'] as String?) ?? '#0B0E11');
   // social links shown as QR codes on the profile page's social popups
   late final TextEditingController _fbUrl =
       TextEditingController(text: (_p['fb_url'] as String?) ?? '');
@@ -244,6 +253,42 @@ class _ProfileSettingsState extends State<ProfileSettings> {
       TextEditingController(text: (_p['tt_url'] as String?) ?? '');
   late final TextEditingController _igUrl =
       TextEditingController(text: (_p['ig_url'] as String?) ?? '');
+
+  /// Hex colour field with a live swatch preview.
+  Widget _colorField(String label, TextEditingController ctl) {
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: ctl,
+      builder: (context, val, _) {
+        Color? swatch;
+        final hex = val.text.trim().replaceFirst('#', '');
+        if (hex.length == 6) {
+          final v = int.tryParse('FF$hex', radix: 16);
+          if (v != null) swatch = Color(v);
+        }
+        return TextField(
+          controller: ctl,
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: '#RRGGBB',
+            border: const OutlineInputBorder(),
+            isDense: true,
+            prefixIcon: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: swatch ?? ccpPanel,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: ccpMuted),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -259,8 +304,12 @@ class _ProfileSettingsState extends State<ProfileSettings> {
           c.patch('profile', 'nickname', _nickname.text.trim());
           c.patch('profile', 'role', _role.text.trim());
           c.patch('profile', 'company', _company.text.trim());
-          c.patch('profile', 'name_color', _nameColor.text.trim());
           c.patch('profile', 'show', _show);
+          c.patch('profile', 'name_color', _nameColor.text.trim());
+          c.patch('profile', 'role_color', _roleColor.text.trim());
+          c.patch('profile', 'company_color', _companyColor.text.trim());
+          c.patch('profile', 'verify_color', _verifyColor.text.trim());
+          c.patch('profile', 'bg_color', _bgColor.text.trim());
           c.patch('profile', 'fb_url', _fbUrl.text.trim());
           c.patch('profile', 'yt_url', _ytUrl.text.trim());
           c.patch('profile', 'tt_url', _ttUrl.text.trim());
@@ -298,13 +347,6 @@ class _ProfileSettingsState extends State<ProfileSettings> {
               decoration: const InputDecoration(
                   labelText: 'Company', border: OutlineInputBorder(), isDense: true),
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _nameColor,
-              decoration: const InputDecoration(
-                  labelText: 'Name colour (hex, e.g. #F0B90B)',
-                  border: OutlineInputBorder(), isDense: true),
-            ),
             SwitchListTile(
               dense: true,
               contentPadding: EdgeInsets.zero,
@@ -313,6 +355,20 @@ class _ProfileSettingsState extends State<ProfileSettings> {
               value: _show,
               onChanged: (v) => setState(() => _show = v),
             ),
+          ]),
+          settingCard('Colours', [
+            const Text('Hex colour for each part of the profile page.',
+                style: TextStyle(color: ccpMuted, fontSize: 12)),
+            const SizedBox(height: 8),
+            _colorField('Background', _bgColor),
+            const SizedBox(height: 8),
+            _colorField('Name', _nameColor),
+            const SizedBox(height: 8),
+            _colorField('Role / subtitle', _roleColor),
+            const SizedBox(height: 8),
+            _colorField('Company', _companyColor),
+            const SizedBox(height: 8),
+            _colorField('"Verify" text', _verifyColor),
           ]),
           settingCard('Social links (QR on profile)', [
             const Text('Links shown as QR codes when you tap a social button.',

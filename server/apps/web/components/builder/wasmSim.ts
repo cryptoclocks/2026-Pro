@@ -478,6 +478,10 @@ export class SimSession {
         } else if (b.prop === "src") {
           // ui_renderer maps the value through find_asset; BuilderCanvas resolves it too
           useSim.getState().patchOverride(w.id, { src: String(raw) });
+        } else if (b.prop === "style.text_color") {
+          useSim.getState().patchOverride(w.id, { textColor: String(raw) });
+        } else if (b.prop === "style.bg_color") {
+          useSim.getState().patchOverride(w.id, { bg: String(raw) });
         }
       }
     }

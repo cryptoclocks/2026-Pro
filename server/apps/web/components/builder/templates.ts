@@ -50,24 +50,41 @@ const PROFILE_SOCIAL_BTNS: WidgetNode[] = [
 
 /** Main profile page widgets (avatar, big clock, name/role/company + social nav). */
 const PROFILE_MAIN_WIDGETS: WidgetNode[] = [
-  { type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: "#0B0E11" } },
+  {
+    type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320, props: { text: "" },
+    style: { bg_color: "#0B0E11" },
+    bindings: [{ prop: "style.bg_color", source: "settings", path: "bg_color" }],
+  },
   { type: "image", id: "avatar", x: 24, y: 30, w: 132, h: 132, props: { src: "" }, style: { bg_color: "#161B22", radius: 66, border_width: 2, border_color: "#F0B90B" } },
-  { type: "label", id: "verify", x: 172, y: 28, w: 286, h: 22, props: { text: "DON'T TRUST  VERIFY" }, style: { text_color: "#F0B90B", align: "right", font: "montserrat_20" } },
+  {
+    type: "label", id: "verify", x: 172, y: 28, w: 286, h: 22, props: { text: "DON'T TRUST  VERIFY" },
+    style: { text_color: "#F0B90B", align: "right", font: "montserrat_20" },
+    bindings: [{ prop: "style.text_color", source: "settings", path: "verify_color" }],
+  },
   { type: "label", id: "time", x: 172, y: 52, w: 286, h: 92, props: { text: "00:00" }, style: { text_color: "#EAECEF", align: "right", font: "montserrat_80" } },
   {
     type: "label", id: "name", x: 24, y: 176, w: 360, h: 36, props: { text: "SATOSHI NAKAMOTO" },
     style: { text_color: "#EAECEF", align: "left", font: "montserrat_28" },
-    bindings: [{ prop: "text", source: "settings", path: "nickname" }],
+    bindings: [
+      { prop: "text", source: "settings", path: "nickname" },
+      { prop: "style.text_color", source: "settings", path: "name_color" },
+    ],
   },
   {
     type: "label", id: "role", x: 24, y: 214, w: 360, h: 24, props: { text: "(SAT) CYPHERPUNK" },
     style: { text_color: "#848E9C", align: "left", font: "montserrat_20" },
-    bindings: [{ prop: "text", source: "settings", path: "role" }],
+    bindings: [
+      { prop: "text", source: "settings", path: "role" },
+      { prop: "style.text_color", source: "settings", path: "role_color" },
+    ],
   },
   {
     type: "label", id: "company", x: 24, y: 240, w: 220, h: 22, props: { text: "Acme Capital" },
     style: { text_color: "#F0B90B", align: "left", font: "montserrat_20" },
-    bindings: [{ prop: "text", source: "settings", path: "company" }],
+    bindings: [
+      { prop: "text", source: "settings", path: "company" },
+      { prop: "style.text_color", source: "settings", path: "company_color" },
+    ],
   },
   ...PROFILE_SOCIAL_BTNS,
 ];
