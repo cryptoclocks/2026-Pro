@@ -16,7 +16,7 @@ export function exportLayout(opts: {
   assets?: AssetEntry[];
   settingsSchema?: SettingsField[];
   logicSource: string;
-  widgets: WidgetNode[];
+  pages: { id: string; widgets: WidgetNode[] }[];
 }): Layout {
   const assets = (opts.assets ?? []).filter((a) => a.id && a.path);
   const settingsSchema = (opts.settingsSchema ?? []).filter((f) => f.key && f.label);
@@ -52,13 +52,11 @@ export function exportLayout(opts: {
         tick_ms: m.tick_ms && m.tick_ms >= 16 ? m.tick_ms : undefined,
       })),
     builder: opts.logicSource ? { logic_source: opts.logicSource } : undefined,
-    pages: [
-      {
-        id: "main",
-        bg: "#0B0E11",
-        widgets: sanitizeWidgets(opts.widgets),
-      },
-    ],
+    pages: (opts.pages.length ? opts.pages : [{ id: "main", widgets: [] }]).map((p) => ({
+      id: p.id,
+      bg: "#0B0E11",
+      widgets: sanitizeWidgets(p.widgets),
+    })),
   };
 
   const parsed = LayoutSchema.safeParse(candidate);

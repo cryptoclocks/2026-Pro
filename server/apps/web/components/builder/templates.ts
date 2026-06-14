@@ -2,54 +2,86 @@ import type { WidgetNode } from "@ccp/shared";
 
 export type TemplateKey = "blank" | "clock" | "crypto" | "crypto_big" | "weather" | "profile" | "welcome" | "led_toggle";
 
-/** One social button (bottom-right) + its info card + QR, all toggled by
- *  widget.set visibility. Followers/likes are mock for now; the QR data is the
- *  link the User App will set per platform. */
-function socialButton(
-  id: string, x: number, bg: string, glyph: string,
-  label: string, followers: string, likes: string, url: string,
-): WidgetNode[] {
-  const others = ["fb", "yt", "tt", "ig"].filter((p) => p !== id);
-  const hideOthers = others.flatMap((p) => [
-    { on: "clicked" as const, do: "widget.set" as const, target: `pop_${p}_card`, key: "visible", value: "0" },
-    { on: "clicked" as const, do: "widget.set" as const, target: `pop_${p}_qr`, key: "visible", value: "0" },
-  ]);
-  return [
-    {
-      type: "button", id: `btn_${id}`, x, y: 262, w: 48, h: 48,
-      props: { text: glyph },
-      style: { bg_color: bg, text_color: "#FFFFFF", radius: 24, font: "montserrat_20", border_width: 0 },
-      actions: [
-        { on: "clicked", do: "widget.set", target: `pop_${id}_card`, key: "visible", value: "1" },
-        { on: "clicked", do: "widget.set", target: `pop_${id}_qr`, key: "visible", value: "1" },
-        { on: "clicked", do: "widget.set", target: "pop_close", key: "visible", value: "1" },
-        ...hideOthers,
-      ],
-    },
-    {
-      // info card: title + followers + likes (mock) baked into one label
-      type: "label", id: `pop_${id}_card`, x: 40, y: 60, w: 250, h: 196,
-      props: { text: `${label}\n\nFollowers\n${followers}\n\nLikes\n${likes}` },
-      style: { bg_color: "#161B22", text_color: "#EAECEF", radius: 14, border_width: 1, border_color: bg, align: "center", font: "montserrat_20" },
-      hidden: true,
-    },
-    {
-      type: "qrcode", id: `pop_${id}_qr`, x: 308, y: 96, w: 128, h: 128,
-      props: { data: url, size: 128 }, style: {},
-      hidden: true,
-    },
-  ];
+/** A bottom-right social button on the main profile page that navigates to that
+ *  platform's own detail page via page.show. */
+function socialNavButton(id: string, x: number, bg: string, glyph: string): WidgetNode {
+  return {
+    type: "button", id: `btn_${id}`, x, y: 262, w: 48, h: 48,
+    props: { text: glyph },
+    style: { bg_color: bg, text_color: "#FFFFFF", radius: 24, font: "montserrat_20", border_width: 0 },
+    actions: [{ on: "clicked", do: "page.show", target: `social_${id}` }],
+  };
 }
 
-const PROFILE_SOCIAL: WidgetNode[] = [
-  ...socialButton("fb", 256, "#1877F2", "f", "Facebook", "12,345", "6,789", "https://facebook.com/yourpage"),
-  ...socialButton("yt", 312, "#FF0000", ">", "YouTube", "98,765", "45,210", "https://youtube.com/@yourchannel"),
-  ...socialButton("tt", 368, "#111418", "T", "TikTok", "54,321", "210,987", "https://tiktok.com/@yourhandle"),
-  ...socialButton("ig", 424, "#C13584", "O", "Instagram", "23,456", "33,012", "https://instagram.com/yourhandle"),
+/** A full social detail page: title, followers/likes (mock), a QR to the link,
+ *  and a Back button to the main profile page. Widget ids are platform-prefixed
+ *  so they stay unique across pages. */
+function socialPage(
+  id: string, bg: string, label: string, followers: string, likes: string, url: string,
+): { id: string; name: string; widgets: WidgetNode[] } {
+  return {
+    id: `social_${id}`,
+    name: label,
+    widgets: [
+      { type: "label", id: `${id}_bg`, x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: "#0B0E11" } },
+      {
+        type: "button", id: `${id}_back`, x: 12, y: 12, w: 104, h: 40, props: { text: "< Back" },
+        style: { bg_color: "#161B22", text_color: "#EAECEF", radius: 10, border_width: 1, border_color: "#2B3139", font: "montserrat_20" },
+        actions: [{ on: "clicked", do: "page.show", target: "main" }],
+      },
+      { type: "label", id: `${id}_title`, x: 20, y: 66, w: 300, h: 40, props: { text: label }, style: { text_color: bg, align: "left", font: "montserrat_28" } },
+      { type: "label", id: `${id}_fl`, x: 20, y: 126, w: 240, h: 22, props: { text: "Followers" }, style: { text_color: "#848E9C", align: "left", font: "montserrat_20" } },
+      { type: "label", id: `${id}_fv`, x: 20, y: 150, w: 260, h: 40, props: { text: followers }, style: { text_color: "#EAECEF", align: "left", font: "montserrat_28" } },
+      { type: "label", id: `${id}_ll`, x: 20, y: 202, w: 240, h: 22, props: { text: "Likes" }, style: { text_color: "#848E9C", align: "left", font: "montserrat_20" } },
+      { type: "label", id: `${id}_lv`, x: 20, y: 226, w: 260, h: 40, props: { text: likes }, style: { text_color: "#EAECEF", align: "left", font: "montserrat_28" } },
+      { type: "qrcode", id: `${id}_qr`, x: 322, y: 92, w: 140, h: 140, props: { data: url, size: 140 }, style: {} },
+    ],
+  };
+}
+
+const PROFILE_SOCIAL_BTNS: WidgetNode[] = [
+  socialNavButton("fb", 256, "#1877F2", "f"),
+  socialNavButton("yt", 312, "#FF0000", ">"),
+  socialNavButton("tt", 368, "#111418", "T"),
+  socialNavButton("ig", 424, "#C13584", "O"),
 ];
 
-/** Starter layouts — the "old pages" a designer can load and tweak. */
-export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[] }> = {
+/** Main profile page widgets (avatar, big clock, name/role/company + social nav). */
+const PROFILE_MAIN_WIDGETS: WidgetNode[] = [
+  { type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: "#0B0E11" } },
+  { type: "label", id: "avatar", x: 24, y: 30, w: 132, h: 132, props: { text: "" }, style: { bg_color: "#161B22", radius: 66, border_width: 2, border_color: "#F0B90B" } },
+  { type: "label", id: "verify", x: 172, y: 28, w: 286, h: 22, props: { text: "DON'T TRUST  VERIFY" }, style: { text_color: "#F0B90B", align: "right", font: "montserrat_20" } },
+  { type: "label", id: "time", x: 172, y: 52, w: 286, h: 92, props: { text: "00:00" }, style: { text_color: "#EAECEF", align: "right", font: "montserrat_80" } },
+  {
+    type: "label", id: "name", x: 24, y: 176, w: 360, h: 36, props: { text: "SATOSHI NAKAMOTO" },
+    style: { text_color: "#EAECEF", align: "left", font: "montserrat_28" },
+    bindings: [{ prop: "text", source: "settings", path: "nickname" }],
+  },
+  {
+    type: "label", id: "role", x: 24, y: 214, w: 360, h: 24, props: { text: "(SAT) CYPHERPUNK" },
+    style: { text_color: "#848E9C", align: "left", font: "montserrat_20" },
+    bindings: [{ prop: "text", source: "settings", path: "role" }],
+  },
+  {
+    type: "label", id: "company", x: 24, y: 240, w: 220, h: 22, props: { text: "Acme Capital" },
+    style: { text_color: "#F0B90B", align: "left", font: "montserrat_20" },
+    bindings: [{ prop: "text", source: "settings", path: "company" }],
+  },
+  ...PROFILE_SOCIAL_BTNS,
+];
+
+/** Profile = main page + one detail page per platform (page.show navigation). */
+const PROFILE_PAGES = [
+  { id: "main", name: "Profile", widgets: PROFILE_MAIN_WIDGETS },
+  socialPage("fb", "#1877F2", "Facebook", "12,345", "6,789", "https://facebook.com/yourpage"),
+  socialPage("yt", "#FF0000", "YouTube", "98,765", "45,210", "https://youtube.com/@yourchannel"),
+  socialPage("tt", "#22D3EE", "TikTok", "54,321", "210,987", "https://tiktok.com/@yourhandle"),
+  socialPage("ig", "#C13584", "Instagram", "23,456", "33,012", "https://instagram.com/yourhandle"),
+];
+
+/** Starter layouts. Most are single-page (`widgets`); `pages` adds extra pages
+ *  reachable with page.show (the profile's per-platform social pages). */
+export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[]; pages?: { id: string; name: string; widgets: WidgetNode[] }[] }> = {
   blank: { name: "Blank", widgets: [] },
 
   /* Mirrors the native clock page (home_ui.c): date above, big time, small
@@ -224,72 +256,14 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     ],
   },
 
-  /* "Don't trust, verify" profile page: avatar, big clock (wasm), name/role/
-     company from settings.profile, and 4 social buttons bottom-right. Tapping
-     a social button shows that platform's followers/likes (mock) + a QR to the
-     link the User App configured — all via widget.set visibility (no wasm). */
+  /* "Don't trust, verify" profile: a main page (avatar, big clock, name/role/
+     company from settings.profile) with 4 social buttons bottom-right; each
+     navigates (page.show) to that platform's own detail page (followers/likes
+     mock + QR + Back). Multi-page — designed one page at a time in the Builder. */
   profile: {
     name: "Profile",
-    widgets: [
-      {
-        type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320,
-        props: { text: "" }, style: { bg_color: "#0B0E11" },
-      },
-      {
-        // round avatar placeholder (real photo via asset/settings later)
-        type: "label", id: "avatar", x: 24, y: 30, w: 132, h: 132,
-        props: { text: "" },
-        style: { bg_color: "#161B22", radius: 66, border_width: 2, border_color: "#F0B90B" },
-      },
-      {
-        type: "label", id: "verify", x: 172, y: 28, w: 286, h: 22,
-        props: { text: "DON'T TRUST  VERIFY" },
-        style: { text_color: "#F0B90B", align: "right", font: "montserrat_20" },
-      },
-      {
-        // big clock, driven by the clock wasm (drives the "time" label)
-        type: "label", id: "time", x: 172, y: 52, w: 286, h: 92,
-        props: { text: "00:00" },
-        style: { text_color: "#EAECEF", align: "right", font: "montserrat_80" },
-      },
-      {
-        type: "label", id: "name", x: 24, y: 176, w: 360, h: 36,
-        props: { text: "SATOSHI NAKAMOTO" },
-        style: { text_color: "#EAECEF", align: "left", font: "montserrat_28" },
-        bindings: [{ prop: "text", source: "settings", path: "nickname" }],
-      },
-      {
-        type: "label", id: "role", x: 24, y: 214, w: 360, h: 24,
-        props: { text: "(SAT) CYPHERPUNK" },
-        style: { text_color: "#848E9C", align: "left", font: "montserrat_20" },
-        bindings: [{ prop: "text", source: "settings", path: "role" }],
-      },
-      {
-        type: "label", id: "company", x: 24, y: 240, w: 220, h: 22,
-        props: { text: "Acme Capital" },
-        style: { text_color: "#F0B90B", align: "left", font: "montserrat_20" },
-        bindings: [{ prop: "text", source: "settings", path: "company" }],
-      },
-      ...PROFILE_SOCIAL,
-      {
-        // shared close button for whichever social popup is open
-        type: "button", id: "pop_close", x: 412, y: 64, w: 36, h: 36,
-        props: { text: "X" },
-        style: { bg_color: "#2B3139", text_color: "#EAECEF", radius: 18, border_width: 0 },
-        hidden: true,
-        actions: [
-          { on: "clicked", do: "widget.set", target: "pop_fb_card", key: "visible", value: "0" },
-          { on: "clicked", do: "widget.set", target: "pop_fb_qr", key: "visible", value: "0" },
-          { on: "clicked", do: "widget.set", target: "pop_yt_card", key: "visible", value: "0" },
-          { on: "clicked", do: "widget.set", target: "pop_yt_qr", key: "visible", value: "0" },
-          { on: "clicked", do: "widget.set", target: "pop_tt_card", key: "visible", value: "0" },
-          { on: "clicked", do: "widget.set", target: "pop_tt_qr", key: "visible", value: "0" },
-          { on: "clicked", do: "widget.set", target: "pop_ig_card", key: "visible", value: "0" },
-          { on: "clicked", do: "widget.set", target: "pop_ig_qr", key: "visible", value: "0" },
-          { on: "clicked", do: "widget.set", target: "pop_close", key: "visible", value: "0" },
-        ],
-      },
-    ],
+    widgets: PROFILE_MAIN_WIDGETS,
+    pages: PROFILE_PAGES,
   },
 
   welcome: {

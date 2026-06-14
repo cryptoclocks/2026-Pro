@@ -81,6 +81,9 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
       if (action.on !== "clicked") continue;
       if (action.do === "wasm.event" && typeof action.event_id === "number") {
         session?.sendAppEvent(widget.id, action.event_id);
+      } else if (action.do === "page.show" && action.target) {
+        // navigate the simulator to another page in this package
+        useSim.getState().setPage(action.target);
       } else if (action.do === "widget.set" && action.target && action.key) {
         // ui_renderer handles widget.set natively on the device — emulate via overrides
         const target = widgets.find((w) => w.id === action.target);
@@ -353,10 +356,19 @@ function WidgetInner({
 }
 
 export function BuilderCanvas() {
-  const widgets = useBuilder((s) => s.widgets);
+  const editWidgets = useBuilder((s) => s.widgets);
+  const pages = useBuilder((s) => s.pages);
+  const currentPageId = useBuilder((s) => s.currentPageId);
   const orientation = useBuilder((s) => s.orientation);
   const select = useBuilder((s) => s.select);
   const simulate = useBuilder((s) => s.simulate);
+  const simPage = useSim((s) => s.page);
+  // while editing, show the page being edited (live `widgets`); while simulating,
+  // show whichever page page.show navigated to (live widgets for the current one)
+  const widgets =
+    simulate && simPage && simPage !== currentPageId
+      ? pages.find((p) => p.id === simPage)?.widgets ?? editWidgets
+      : editWidgets;
   const screen = SCREEN[orientation];
   const { setNodeRef } = useDroppable({ id: "artboard" });
 

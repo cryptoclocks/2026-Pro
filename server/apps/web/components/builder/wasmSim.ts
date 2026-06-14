@@ -46,6 +46,9 @@ interface SimState {
   overrides: Record<string, SimOverride>;
   logs: SimLog[];
   streams: SimStreamInfo[];
+  /** page id currently shown in the simulator (page.show navigates it) */
+  page: string;
+  setPage: (id: string) => void;
   patchOverride: (id: string, patch: SimOverride) => void;
   reset: () => void;
   pushLog: (level: SimLog["level"], msg: string) => void;
@@ -61,9 +64,11 @@ export const useSim = create<SimState>((set, get) => ({
   overrides: {},
   logs: [],
   streams: [],
+  page: "",
+  setPage: (page) => set({ page }),
   patchOverride: (id, patch) =>
     set({ overrides: { ...get().overrides, [id]: { ...get().overrides[id], ...patch } } }),
-  reset: () => set({ overrides: {}, logs: [], streams: [], ticks: 0, wasmStatus: "none" }),
+  reset: () => set({ overrides: {}, logs: [], streams: [], ticks: 0, wasmStatus: "none", page: "" }),
   pushLog: (level, msg) =>
     set({
       logs: [...get().logs.slice(-199), { at: new Date().toLocaleTimeString(), level, msg }],

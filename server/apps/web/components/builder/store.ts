@@ -76,7 +76,11 @@ interface BuilderState {
   logicSource: string;
   logicStarterSource: string;
   compiledWasm: CompiledWasm | null;
+  /** widgets of the page currently being edited (mirror of pages[currentPageId]) */
   widgets: WidgetNode[];
+  /** all pages in this package; page.show navigates between them on-device */
+  pages: { id: string; name: string; widgets: WidgetNode[] }[];
+  currentPageId: string;
   selectedId: string | null;
   counter: number;
   simulate: boolean;
@@ -106,6 +110,13 @@ interface BuilderState {
   setBindings: (id: string, bindings: WidgetNode["bindings"]) => void;
   removeWidget: (id: string) => void;
   select: (id: string | null) => void;
+  addPage: (name?: string) => void;
+  switchPage: (id: string) => void;
+  renamePage: (id: string, name: string) => void;
+  removePage: (id: string) => void;
+  /** mirror the working `widgets` back into `pages`, returning the full set
+   *  (call before export/publish so the current page isn't stale) */
+  syncedPages: () => { id: string; widgets: WidgetNode[] }[];
   setSimulate: (simulate: boolean) => void;
   toggleSimulate: () => void;
   loadTemplate: (key: TemplateKey) => void;
@@ -1092,6 +1103,8 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   logicStarterSource: NOOP_LOGIC_SOURCE,
   compiledWasm: null,
   widgets: [],
+  pages: [{ id: "main", name: "Main", widgets: [] }],
+  currentPageId: "main",
   selectedId: null,
   counter: 0,
   simulate: false,
@@ -1215,6 +1228,56 @@ export const useBuilder = create<BuilderState>((set, get) => ({
 
   select: (id) => set({ selectedId: id }),
 
+  // ---- multi-page ----
+  // `widgets` is the working copy of the current page; pages[] holds them all.
+  // On every switch we flush `widgets` back into its page first.
+  switchPage: (id) =>
+    set((s) => {
+      const pages = s.pages.map((p) => (p.id === s.currentPageId ? { ...p, widgets: s.widgets } : p));
+      const target = pages.find((p) => p.id === id) ?? pages[0];
+      return {
+        pages,
+        currentPageId: target.id,
+        widgets: JSON.parse(JSON.stringify(target.widgets)) as WidgetNode[],
+        selectedId: null,
+      };
+    }),
+  addPage: (name) =>
+    set((s) => {
+      const flushed = s.pages.map((p) => (p.id === s.currentPageId ? { ...p, widgets: s.widgets } : p));
+      let n = flushed.length + 1;
+      let id = `page_${n}`;
+      while (flushed.some((p) => p.id === id)) id = `page_${++n}`;
+      return {
+        pages: [...flushed, { id, name: name || `Page ${flushed.length + 1}`, widgets: [] }],
+        currentPageId: id,
+        widgets: [],
+        selectedId: null,
+      };
+    }),
+  renamePage: (id, name) =>
+    set((s) => ({ pages: s.pages.map((p) => (p.id === id ? { ...p, name } : p)) })),
+  removePage: (id) =>
+    set((s) => {
+      if (s.pages.length <= 1) return {}; // keep at least one page
+      const flushed = s.pages.map((p) => (p.id === s.currentPageId ? { ...p, widgets: s.widgets } : p));
+      const pages = flushed.filter((p) => p.id !== id);
+      const cur = id === s.currentPageId ? pages[0] : pages.find((p) => p.id === s.currentPageId)!;
+      return {
+        pages,
+        currentPageId: cur.id,
+        widgets: JSON.parse(JSON.stringify(cur.widgets)) as WidgetNode[],
+        selectedId: null,
+      };
+    }),
+  syncedPages: () => {
+    const s = get();
+    return s.pages.map((p) => ({
+      id: p.id,
+      widgets: p.id === s.currentPageId ? s.widgets : p.widgets,
+    }));
+  },
+
   setSimulate: (simulate) => set({ simulate }),
 
   toggleSimulate: () => set({ simulate: !get().simulate }),
@@ -1234,8 +1297,15 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       ? [{ id: "logic", path: "wasm/page.wasm", memory_kb: key === "crypto" || key === "weather" ? 256 : 128 }]
       : [];
     console.debug("[builder] loadTemplate", { key, widgets: t.widgets.length });
+    const tplPages = (t.pages ?? [{ id: "main", name: "Main", widgets: t.widgets }]).map((p) => ({
+      id: p.id,
+      name: p.name,
+      widgets: JSON.parse(JSON.stringify(p.widgets)) as WidgetNode[],
+    }));
     set({
-      widgets: JSON.parse(JSON.stringify(t.widgets)) as WidgetNode[],
+      widgets: JSON.parse(JSON.stringify(tplPages[0].widgets)) as WidgetNode[],
+      pages: tplPages,
+      currentPageId: tplPages[0].id,
       name: t.name === "Blank" ? get().name : t.name,
       packageId:
         key === "led_toggle" ? "com.ccp.led-toggle" :
@@ -1288,7 +1358,12 @@ export const useBuilder = create<BuilderState>((set, get) => ({
   },
 
   loadLayout: (layout) => {
-    const widgets = JSON.parse(JSON.stringify(layout.pages[0]?.widgets ?? [])) as WidgetNode[];
+    const layoutPages = (layout.pages?.length ? layout.pages : [{ id: "main", widgets: [] }]).map((p, i) => ({
+      id: p.id || `page_${i + 1}`,
+      name: (p as { name?: string }).name || (i === 0 ? "Main" : p.id || `Page ${i + 1}`),
+      widgets: JSON.parse(JSON.stringify(p.widgets ?? [])) as WidgetNode[],
+    }));
+    const widgets = layoutPages[0].widgets;
     const logicSource = layout.builder?.logic_source || ((layout.wasm?.length ?? 0) > 0 ? UNAVAILABLE_LOGIC_SOURCE : NOOP_LOGIC_SOURCE);
     console.debug("[builder] loadLayout", {
       packageId: layout.meta.id,
@@ -1319,6 +1394,8 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       logicStarterSource: logicSource,
       compiledWasm: null,
       widgets,
+      pages: layoutPages,
+      currentPageId: layoutPages[0].id,
       selectedId: null,
       simulate: false,
       counter: nextCounter(widgets),

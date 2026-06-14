@@ -71,8 +71,12 @@ export default function BuilderPage() {
         }
       }
       if (cancelled) return;
+      // start the simulator on the page being edited; page.show navigates from there
+      useSim.getState().setPage(state.currentPageId);
       const session = await SimSession.start({
-        widgets: state.widgets,
+        // every page's widgets so bindings/wasm resolve any widget by id across
+        // pages; BuilderCanvas renders just the page page.show is on
+        widgets: state.syncedPages().flatMap((p) => p.widgets),
         dataSources: state.dataSources,
         // seed the page's settings.<slug> stream with the same values the device
         // gets from its saved config — so Profile/Settings pages match the device
@@ -162,7 +166,7 @@ export default function BuilderPage() {
       assets: b.assets,
       settingsSchema: b.settingsSchema,
       logicSource: b.logicSource,
-      widgets: b.widgets,
+      pages: b.syncedPages(),
     });
 
   const refreshSavedPages = async () => {
@@ -406,6 +410,8 @@ export default function BuilderPage() {
               </option>
             ))}
           </select>
+
+          <PageTabs />
         </div>
 
         <div className="flex items-center gap-2">
@@ -705,6 +711,58 @@ function LayersPanel() {
         ))}
       </div>
     </section>
+  );
+}
+
+/** Page tabs: a package can hold several pages (navigated on-device with
+    page.show). Click to edit a page, double-click to rename, + to add. */
+function PageTabs() {
+  const pages = useBuilder((s) => s.pages);
+  const currentPageId = useBuilder((s) => s.currentPageId);
+  const switchPage = useBuilder((s) => s.switchPage);
+  const addPage = useBuilder((s) => s.addPage);
+  const renamePage = useBuilder((s) => s.renamePage);
+  const removePage = useBuilder((s) => s.removePage);
+  const simulate = useBuilder((s) => s.simulate);
+  if (simulate) return null;
+  return (
+    <div className="flex items-center gap-1 overflow-x-auto max-w-[36vw]">
+      <span className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)] shrink-0 mr-1">Pages</span>
+      {pages.map((p) => (
+        <button
+          key={p.id}
+          onClick={() => switchPage(p.id)}
+          onDoubleClick={() => {
+            const n = window.prompt("Rename page", p.name);
+            if (n) renamePage(p.id, n.trim());
+          }}
+          title="Click to edit · double-click to rename"
+          className={`px-2 py-1 rounded text-xs shrink-0 inline-flex items-center gap-1 ${
+            p.id === currentPageId ? "bg-[var(--ccp-accent)] text-black" : "bg-[var(--ccp-panel)] border border-[var(--ccp-border)]"
+          }`}
+        >
+          {p.name}
+          {pages.length > 1 && p.id === currentPageId && (
+            <span
+              className="opacity-60 hover:opacity-100"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm(`Delete page "${p.name}"?`)) removePage(p.id);
+              }}
+            >
+              ✕
+            </span>
+          )}
+        </button>
+      ))}
+      <button
+        onClick={() => addPage()}
+        className="px-2 py-1 rounded text-xs shrink-0 bg-[var(--ccp-panel)] border border-[var(--ccp-border)]"
+        title="Add a page"
+      >
+        + Page
+      </button>
+    </div>
   );
 }
 
