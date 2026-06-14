@@ -35,6 +35,28 @@ class _LoginScreenState extends State<LoginScreen> {
     });
   }
 
+  Future<void> _googleSignIn() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final email = await AuthService.signInWithGoogle();
+      if (!mounted) return;
+      if (email != null) {
+        Navigator.pop(context, email);
+        return;
+      }
+      setState(() => _busy = false); // user cancelled the picker
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Google sign-in failed: $e';
+      });
+    }
+  }
+
   Future<void> _verify() async {
     setState(() {
       _busy = true;
@@ -71,6 +93,26 @@ class _LoginScreenState extends State<LoginScreen> {
               style: TextStyle(color: ccpMuted),
             ),
             const SizedBox(height: 20),
+            if (!_codeSent) ...[
+              OutlinedButton.icon(
+                onPressed: _busy ? null : _googleSignIn,
+                icon: const Icon(Icons.login, size: 18),
+                label: const Text('Sign in with Google'),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Row(children: [
+                Expanded(child: Divider()),
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 8),
+                  child: Text('or', style: TextStyle(color: ccpMuted)),
+                ),
+                Expanded(child: Divider()),
+              ]),
+              const SizedBox(height: 16),
+            ],
             TextField(
               controller: _emailCtl,
               enabled: !_codeSent,
