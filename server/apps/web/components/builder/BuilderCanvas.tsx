@@ -74,7 +74,10 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
     }
 
     session?.sendWidgetEvent(widget.id, CCP_EVT.CLICKED, widget.x, widget.y);
-    if (widget.type !== "button") return false; // still allow select-to-inspect
+    // fire click actions for ANY widget that declares them (e.g. an image used
+    // as a social button with page.show), not just <button>s
+    const clickActions = (widget.actions ?? []).filter((a) => a.on === "clicked");
+    if (widget.type !== "button" && clickActions.length === 0) return false;
 
     select(widget.id);
     for (const action of widget.actions ?? []) {

@@ -2,13 +2,15 @@ import type { WidgetNode } from "@ccp/shared";
 
 export type TemplateKey = "blank" | "clock" | "crypto" | "crypto_big" | "weather" | "profile" | "welcome" | "led_toggle";
 
-/** A bottom-right social button on the main profile page that navigates to that
- *  platform's own detail page via page.show. */
-function socialNavButton(id: string, x: number, bg: string, glyph: string): WidgetNode {
+/** A bottom-right social button (image) on the main profile page that navigates
+ *  to that platform's detail page. It's an image widget so the admin can set a
+ *  logo PNG as its `src` (upload via the Assets panel); until then it shows a
+ *  coloured circle. Default `src` left empty. */
+function socialNavButton(id: string, x: number, bg: string): WidgetNode {
   return {
-    type: "button", id: `btn_${id}`, x, y: 262, w: 48, h: 48,
-    props: { text: glyph },
-    style: { bg_color: bg, text_color: "#FFFFFF", radius: 24, font: "montserrat_20", border_width: 0 },
+    type: "image", id: `btn_${id}`, x, y: 262, w: 48, h: 48,
+    props: { src: "" },
+    style: { bg_color: bg, radius: 24 },
     actions: [{ on: "clicked", do: "page.show", target: `social_${id}` }],
   };
 }
@@ -40,16 +42,16 @@ function socialPage(
 }
 
 const PROFILE_SOCIAL_BTNS: WidgetNode[] = [
-  socialNavButton("fb", 256, "#1877F2", "f"),
-  socialNavButton("yt", 312, "#FF0000", ">"),
-  socialNavButton("tt", 368, "#111418", "T"),
-  socialNavButton("ig", 424, "#C13584", "O"),
+  socialNavButton("fb", 256, "#1877F2"),
+  socialNavButton("yt", 312, "#FF0000"),
+  socialNavButton("tt", 368, "#111418"),
+  socialNavButton("ig", 424, "#C13584"),
 ];
 
 /** Main profile page widgets (avatar, big clock, name/role/company + social nav). */
 const PROFILE_MAIN_WIDGETS: WidgetNode[] = [
   { type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: "#0B0E11" } },
-  { type: "label", id: "avatar", x: 24, y: 30, w: 132, h: 132, props: { text: "" }, style: { bg_color: "#161B22", radius: 66, border_width: 2, border_color: "#F0B90B" } },
+  { type: "image", id: "avatar", x: 24, y: 30, w: 132, h: 132, props: { src: "" }, style: { bg_color: "#161B22", radius: 66, border_width: 2, border_color: "#F0B90B" } },
   { type: "label", id: "verify", x: 172, y: 28, w: 286, h: 22, props: { text: "DON'T TRUST  VERIFY" }, style: { text_color: "#F0B90B", align: "right", font: "montserrat_20" } },
   { type: "label", id: "time", x: 172, y: 52, w: 286, h: 92, props: { text: "00:00" }, style: { text_color: "#EAECEF", align: "right", font: "montserrat_80" } },
   {
