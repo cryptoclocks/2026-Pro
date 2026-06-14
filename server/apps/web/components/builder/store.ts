@@ -1225,10 +1225,11 @@ export const useBuilder = create<BuilderState>((set, get) => ({
     const logicSource =
       key === "led_toggle" ? LED_TOGGLE_LOGIC_SOURCE :
       key === "clock" ? CLOCK_LOGIC_SOURCE :
+      key === "profile" ? CLOCK_LOGIC_SOURCE : // drives the big "time" label
       key === "crypto" ? CRYPTO_LOGIC_SOURCE :
       key === "weather" ? WEATHER_LOGIC_SOURCE :
       NOOP_LOGIC_SOURCE;
-    const hasLogic = key === "led_toggle" || key === "clock" || key === "crypto" || key === "weather";
+    const hasLogic = key === "led_toggle" || key === "clock" || key === "profile" || key === "crypto" || key === "weather";
     const wasmModules = hasLogic
       ? [{ id: "logic", path: "wasm/page.wasm", memory_kb: key === "crypto" || key === "weather" ? 256 : 128 }]
       : [];
@@ -1241,11 +1242,14 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         key === "clock" ? "com.ccp.clock-custom" :
         key === "crypto" ? "com.ccp.crypto-custom" :
         key === "crypto_big" ? "com.ccp.crypto-big" :
+        key === "profile" ? "com.ccp.profile" :
         key === "weather" ? "com.ccp.weather" :
         key === "welcome" ? "com.ccp.welcome-custom" :
         get().packageId,
       dataSources: key === "weather"
         ? [{ id: "weather", stream: "weather.bangkok", format: "json" as const, sample_hint_ms: 60000 }]
+        : key === "profile"
+        ? [{ id: "settings", stream: "settings.profile", format: "json" as const }]
         : key === "crypto_big"
         ? [{ id: "btc", stream: "market.BTCUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 }]
         : key === "crypto"
@@ -1260,7 +1264,19 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         : [],
       wasmModules,
       assets: key === "weather" ? WEATHER_ASSETS.map((a) => ({ ...a })) : [],
-      settingsSchema: [],
+      settingsSchema: key === "profile"
+        ? [
+            { key: "nickname", label: "Nickname", type: "text" as const, default: "SATOSHI NAKAMOTO" },
+            { key: "role", label: "Role / subtitle", type: "text" as const, default: "(SAT) CYPHERPUNK" },
+            { key: "company", label: "Company", type: "text" as const, default: "Acme Capital" },
+            { key: "name_color", label: "Name colour", type: "color" as const, default: "#F0B90B" },
+            { key: "show", label: "Show this page", type: "toggle" as const, default: true },
+            { key: "fb_url", label: "Facebook URL", type: "text" as const, group: "Social" },
+            { key: "yt_url", label: "YouTube URL", type: "text" as const, group: "Social" },
+            { key: "tt_url", label: "TikTok URL", type: "text" as const, group: "Social" },
+            { key: "ig_url", label: "Instagram URL", type: "text" as const, group: "Social" },
+          ]
+        : [],
       settingsPreview: {},
       logicSource,
       logicStarterSource: logicSource,

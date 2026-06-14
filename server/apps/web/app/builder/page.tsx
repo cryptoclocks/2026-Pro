@@ -383,6 +383,7 @@ export default function BuilderPage() {
             <option value="crypto">Crypto</option>
             <option value="crypto_big">Crypto Big</option>
             <option value="weather">Weather</option>
+            <option value="profile">Profile</option>
             <option value="welcome">Welcome</option>
             <option value="led_toggle">LED Toggle</option>
             <option value="blank">Blank</option>
