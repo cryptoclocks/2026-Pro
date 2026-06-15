@@ -130,7 +130,9 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
         width: widget.w,
         height: widget.h,
         background: widget.style?.bg_grad_color
-          ? `linear-gradient(${widget.style?.bg_grad_dir === "hor" ? "to right" : "to bottom"}, ${bg}, ${widget.style.bg_grad_color})`
+          ? `linear-gradient(${
+              widget.style?.bg_grad_dir === "hor" ? "to right" : widget.style?.bg_grad_dir === "diag" ? "135deg" : "to bottom"
+            }, ${bg}, ${widget.style.bg_grad_color})`
           : bg,
         color: ov?.textColor ?? widget.style?.text_color ?? "#EAECEF",
         textAlign: (widget.style?.align as "left" | "center" | "right") ?? "center",

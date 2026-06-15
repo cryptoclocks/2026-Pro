@@ -21,10 +21,10 @@ export const SLIDESHOW_ASSETS = [
 ] as const;
 
 const SOCIAL_PAGE_THEMES = {
-  fb: { bg: "#3B6FD6", bgGrad: "#2952A8", accent: "#1877F2", text: "#0B1F33", muted: "#35506A", card: "#FFFFFF", border: "#B7D6FF" },
-  yt: { bg: "#C9CDD3", bgGrad: "#9AA0A6", accent: "#FF0000", text: "#241010", muted: "#6B3940", card: "#FFFFFF", border: "#FFD0D0" },
-  tt: { bg: "#0C2228", bgGrad: "#1E0A12", accent: "#22D3EE", text: "#FFFFFF", muted: "#81A9AF", card: "#111418", border: "#26464D" },
-  ig: { bg: "#C13584", bgGrad: "#F58529", accent: "#C13584", text: "#2A1020", muted: "#70405B", card: "#FFFFFF", border: "#F4C0D8" },
+  fb: { bg: "#FFFFFF", bgGrad: "#1877F2", dir: "ver", accent: "#1877F2", text: "#0B1F33", muted: "#35506A", card: "#FFFFFF", border: "#B7D6FF" },
+  yt: { bg: "#FFFFFF", bgGrad: "#000000", dir: "ver", accent: "#FF0000", text: "#241010", muted: "#6B3940", card: "#FFFFFF", border: "#FFD0D0" },
+  tt: { bg: "#FE2C55", bgGrad: "#25F4EE", dir: "diag", accent: "#22D3EE", text: "#FFFFFF", muted: "#81A9AF", card: "#111418", border: "#26464D" },
+  ig: { bg: "#E1306C", bgGrad: "#833AB4", dir: "ver", accent: "#C13584", text: "#2A1020", muted: "#70405B", card: "#FFFFFF", border: "#F4C0D8" },
 } as const;
 
 /** A bottom-right social button (image) on the main profile page that navigates
@@ -52,7 +52,8 @@ function socialPage(
     id: `social_${id}`,
     name: label,
     widgets: [
-      { type: "label", id: `${id}_bg`, x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: theme.bg, bg_grad_color: theme.bgGrad } },
+      { type: "label", id: `${id}_bg`, x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: theme.bg, bg_grad_color: theme.bgGrad, bg_grad_dir: theme.dir } },
+      { type: "image", id: `${id}_logo`, x: 190, y: 10, w: 100, h: 50, props: { src: `profile_${id}` }, style: {} },
       {
         type: "button", id: `${id}_back`, x: 12, y: 12, w: 104, h: 40, props: { text: "< Back" },
         style: { bg_color: theme.card, text_color: theme.accent, radius: 10, border_width: 1, border_color: theme.border, font: "montserrat_20" },
