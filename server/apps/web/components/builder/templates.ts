@@ -165,23 +165,40 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     name: "Clock",
     widgets: [
       {
+        // full-screen background (settings.clock.bg_color); first child = drawn behind
+        type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320, props: { text: "" },
+        style: { bg_color: "#0B0E11" },
+        bindings: [{ prop: "style.bg_color", source: "settings", path: "bg_color" }],
+      },
+      {
         type: "label", id: "date", x: 40, y: 92, w: 400, h: 26,
         props: { text: "Wednesday  11 Jun 2026" },
         style: { text_color: "#848E9C", align: "center", font: "montserrat_20" },
+        bindings: [
+          { prop: "visible", source: "settings", path: "show_date" },
+          { prop: "style.text_color", source: "settings", path: "date_color" },
+        ],
       },
       {
         type: "label", id: "time", x: 40, y: 126, w: 400, h: 60,
         props: { text: "--:--" },
         style: { text_color: "#00D1FF", align: "center", font: "montserrat_48" },
+        bindings: [{ prop: "style.text_color", source: "settings", path: "time_color" }],
       },
       {
+        // seconds, or AM/PM when 12-hour — text driven by CLOCK_LOGIC_SOURCE wasm
         type: "label", id: "sec", x: 318, y: 160, w: 40, h: 26,
         props: { text: "" },
         style: { text_color: "#FF9500", align: "left", font: "montserrat_20" },
+        bindings: [
+          { prop: "visible", source: "settings", path: "show_seconds" },
+          { prop: "style.text_color", source: "settings", path: "sec_color" },
+        ],
       },
       {
         type: "image", id: "logo", x: 216, y: 266, w: 48, h: 48,
         props: { src: "A:/pages/clock/assets/logo.png" }, style: {},
+        bindings: [{ prop: "visible", source: "settings", path: "show_logo" }],
       },
     ],
   },

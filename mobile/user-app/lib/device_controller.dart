@@ -102,6 +102,18 @@ class DeviceController extends ChangeNotifier {
   /// Alerts are active only when THIS device holds the crypto-alerts right.
   bool get alertsUnlocked => has('crypto-alerts');
 
+  static const maxAlarms = 8;
+
+  /// Clock alarms (settings.clock.alarms). Each: {time:"07:30", days:[1,2,3,4,5],
+  /// enabled:true, label:"Wake up", sound:"beep"|<asset path>, snooze:5}.
+  List<Map<String, dynamic>> get alarms =>
+      ((section('clock')['alarms'] as List?) ?? [])
+          .map((a) => Map<String, dynamic>.from(a as Map))
+          .toList();
+
+  /// The Alarm add-on is active only when THIS device holds the clock-alarm right.
+  bool get alarmUnlocked => has('clock-alarm');
+
   // ---- mutations ----
   void setTop(String key, dynamic value) {
     config[key] = value;

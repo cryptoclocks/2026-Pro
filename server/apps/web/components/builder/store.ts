@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import type { Layout, WidgetNode, WidgetType } from "@ccp/shared";
 import { SCREEN } from "@ccp/shared";
-import { TEMPLATES, type TemplateKey } from "./templates";
+import { PROFILE_SOCIAL_ASSETS, SLIDESHOW_ASSETS, TEMPLATES, type TemplateKey } from "./templates";
 import { defaultProps } from "./widgetProps";
 
 export type Orientation = "landscape" | "portrait";
@@ -50,6 +50,8 @@ export const WEATHER_ASSETS: AssetEntry[] = (
   path: `assets/${id}.gif`,
   src: `/weather-icons/${id}.gif`,
 }));
+
+const BUILTIN_ASSETS: AssetEntry[] = [...WEATHER_ASSETS, ...PROFILE_SOCIAL_ASSETS, ...SLIDESHOW_ASSETS] as AssetEntry[];
 export type CompiledWasm = {
   moduleId: string;
   path: string;
@@ -1312,6 +1314,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         key === "clock" ? "com.ccp.clock-custom" :
         key === "crypto" ? "com.ccp.crypto-custom" :
         key === "crypto_big" ? "com.ccp.crypto-big" :
+        key === "slideshow" ? "com.ccp.slideshow-custom" :
         key === "profile" ? "com.ccp.profile" :
         key === "weather" ? "com.ccp.weather" :
         key === "welcome" ? "com.ccp.welcome-custom" :
@@ -1320,6 +1323,8 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         ? [{ id: "weather", stream: "weather.bangkok", format: "json" as const, sample_hint_ms: 60000 }]
         : key === "profile"
         ? [{ id: "settings", stream: "settings.profile", format: "json" as const }]
+        : key === "clock"
+        ? [{ id: "settings", stream: "settings.clock", format: "json" as const }]
         : key === "crypto_big"
         ? [{ id: "btc", stream: "market.BTCUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 }]
         : key === "crypto"
@@ -1333,17 +1338,38 @@ export const useBuilder = create<BuilderState>((set, get) => ({
           ]
         : [],
       wasmModules,
-      assets: key === "weather" ? WEATHER_ASSETS.map((a) => ({ ...a })) : [],
-      settingsSchema: key === "profile"
+      assets:
+        key === "weather"
+          ? WEATHER_ASSETS.map((a) => ({ ...a }))
+          : key === "profile"
+            ? PROFILE_SOCIAL_ASSETS.map((a) => ({ ...a }))
+            : key === "slideshow"
+              ? SLIDESHOW_ASSETS.map((a) => ({ ...a }))
+              : [],
+      settingsSchema: key === "clock"
+        ? [
+            { key: "format_24h", label: "24-hour clock", type: "toggle" as const, default: true },
+            { key: "show_seconds", label: "Show seconds", type: "toggle" as const, default: true },
+            { key: "show_date", label: "Show date", type: "toggle" as const, default: true },
+            { key: "date_format", label: "Date format", type: "select" as const, options: ["long", "dmy", "mdy", "iso"], default: "long" },
+            { key: "show_logo", label: "Show logo", type: "toggle" as const, default: true },
+            { key: "tz_offset_min", label: "Timezone offset (min)", type: "number" as const, default: 420 },
+            { key: "time_color", label: "Time colour", type: "color" as const, group: "Colours", default: "#00D1FF" },
+            { key: "sec_color", label: "Seconds colour", type: "color" as const, group: "Colours", default: "#FF9500" },
+            { key: "date_color", label: "Date colour", type: "color" as const, group: "Colours", default: "#848E9C" },
+            { key: "bg_color", label: "Background", type: "color" as const, group: "Colours", default: "#0B0E11" },
+          ]
+        : key === "profile"
         ? [
             { key: "nickname", label: "Nickname", type: "text" as const, default: "SATOSHI NAKAMOTO" },
             { key: "role", label: "Role / subtitle", type: "text" as const, default: "(SAT) CYPHERPUNK" },
+            { key: "motto", label: "Motto (top-right)", type: "text" as const, default: "DON'T TRUST  VERIFY" },
             { key: "company", label: "Company", type: "text" as const, default: "Acme Capital" },
             { key: "show", label: "Show this page", type: "toggle" as const, default: true },
             { key: "name_color", label: "Name colour", type: "color" as const, group: "Colours", default: "#EAECEF" },
             { key: "role_color", label: "Role colour", type: "color" as const, group: "Colours", default: "#848E9C" },
             { key: "company_color", label: "Company colour", type: "color" as const, group: "Colours", default: "#F0B90B" },
-            { key: "verify_color", label: "Verify colour", type: "color" as const, group: "Colours", default: "#F0B90B" },
+            { key: "verify_color", label: "Motto colour", type: "color" as const, group: "Colours", default: "#F0B90B" },
             { key: "bg_color", label: "Background", type: "color" as const, group: "Colours", default: "#0B0E11" },
             { key: "fb_url", label: "Facebook URL", type: "text" as const, group: "Social" },
             { key: "yt_url", label: "YouTube URL", type: "text" as const, group: "Social" },
@@ -1383,7 +1409,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       dataSources: (layout.data_sources ?? []) as DataSourceConfig[],
       wasmModules: (layout.wasm ?? []) as WasmModuleConfig[],
       assets: (layout.assets ?? []).map((a) => {
-        const builtin = WEATHER_ASSETS.find((w) => w.id === a.id);
+        const builtin = BUILTIN_ASSETS.find((w) => w.id === a.id);
         return {
           id: a.id,
           type: a.type as AssetType,
