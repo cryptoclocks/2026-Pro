@@ -299,11 +299,17 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     name: "Weather",
     widgets: [
       {
-        // full-screen themed background; initial bg_color sets bg_opa=COVER so
-        // the runtime style.bg_color binding stays visible
+        // full-screen background colour, user-controlled via settings.weather.bg_color
         type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320,
         props: { text: "" }, style: { bg_color: "#27384B" },
-        bindings: [{ prop: "style.bg_color", source: "weather", path: "bg" }],
+        bindings: [{ prop: "style.bg_color", source: "settings", path: "bg_color" }],
+      },
+      {
+        // optional user-uploaded 480x320 .gif background (settings.weather.bg_gif).
+        // empty src = transparent so the bg colour shows (BIND_SRC is empty-safe).
+        type: "gif", id: "bg_gif", x: 0, y: 0, w: 480, h: 320,
+        props: { src: "" }, style: {},
+        bindings: [{ prop: "src", source: "settings", path: "bg_gif" }],
       },
       {
         // animated weather icon (Lottie→GIF); src swaps to the asset matching
@@ -344,6 +350,24 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         style: { text_color: "#EAF2FF", align: "left", font: "montserrat_20", opa: 210 },
         bindings: [{ prop: "text", source: "weather", path: "humidity", format: "Humidity %s" }],
       },
+      {
+        type: "label", id: "pm25", x: 18, y: 242, w: 260, h: 22,
+        props: { text: "PM2.5  --" },
+        style: { text_color: "#EAF2FF", align: "left", font: "montserrat_20", opa: 210 },
+        bindings: [
+          { prop: "text", source: "weather", path: "pm25", format: "PM2.5  %s" },
+          { prop: "visible", source: "settings", path: "show_pm" },
+        ],
+      },
+      {
+        type: "label", id: "pm10", x: 18, y: 268, w: 260, h: 22,
+        props: { text: "PM10  --" },
+        style: { text_color: "#EAF2FF", align: "left", font: "montserrat_20", opa: 210 },
+        bindings: [
+          { prop: "text", source: "weather", path: "pm10", format: "PM10  %s" },
+          { prop: "visible", source: "settings", path: "show_pm" },
+        ],
+      },
     ],
   },
 
@@ -375,9 +399,15 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     name: "Calendar",
     widgets: [
       {
+        type: "label", id: "bg", x: 0, y: 0, w: 480, h: 320, props: { text: "" },
+        style: { bg_color: "#0B0E11" },
+        bindings: [{ prop: "style.bg_color", source: "settings", path: "bg_color" }],
+      },
+      {
         type: "label", id: "cal_title", x: 0, y: 34, w: 480, h: 30,
         props: { text: "CALENDAR" },
         style: { text_color: "#F0B90B", align: "center", font: "montserrat_20" },
+        bindings: [{ prop: "text", source: "settings", path: "title" }],
       },
       {
         type: "label", id: "date", x: 0, y: 120, w: 480, h: 80,

@@ -183,7 +183,23 @@ export class FeedsService implements OnModuleInit, OnModuleDestroy {
     };
     const cw = j.current;
     if (!cw) throw new Error("no current");
-    return weatherPayload(city.name, cw.temperature_2m, cw.relative_humidity_2m, cw.weather_code);
+    // air quality (best-effort; PM stays "--" if the AQ endpoint is unavailable)
+    let pm25: number | undefined;
+    let pm10: number | undefined;
+    try {
+      const aq = await fetch(
+        `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${city.lat}` +
+          `&longitude=${city.lon}&current=pm2_5,pm10`,
+      );
+      if (aq.ok) {
+        const aj = (await aq.json()) as { current?: { pm2_5?: number; pm10?: number } };
+        pm25 = aj.current?.pm2_5;
+        pm10 = aj.current?.pm10;
+      }
+    } catch {
+      /* PM is optional */
+    }
+    return weatherPayload(city.name, cw.temperature_2m, cw.relative_humidity_2m, cw.weather_code, pm25, pm10);
   }
 }
 
@@ -192,7 +208,9 @@ export class FeedsService implements OnModuleInit, OnModuleDestroy {
  * simulator so the Weather page behaves identically on device and in preview.
  * `theme` is what the page wasm switches background + animation on.
  */
-export function weatherPayload(city: string, tempC: number, humidity: number, code: number) {
+export function weatherPayload(
+  city: string, tempC: number, humidity: number, code: number, pm25?: number, pm10?: number,
+) {
   const [desc, theme] = wmoToDescTheme(code);
   return {
     city,
@@ -205,6 +223,8 @@ export function weatherPayload(city: string, tempC: number, humidity: number, co
     theme, // clear | partly | cloudy | rain | thunder | snow | fog
     icon: theme, // asset id of the matching weather GIF (bound to the gif widget's src)
     bg: THEME_BG[theme] ?? "#27384B", // full-screen background color for the theme
+    pm25: pm25 != null ? `${Math.round(pm25)}` : "--", // µg/m³ (unit shown in label)
+    pm10: pm10 != null ? `${Math.round(pm10)}` : "--",
   };
 }
 

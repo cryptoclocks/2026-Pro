@@ -1398,11 +1398,16 @@ export const useBuilder = create<BuilderState>((set, get) => ({
         key === "welcome" ? "com.ccp.welcome-custom" :
         get().packageId,
       dataSources: key === "weather"
-        ? [{ id: "weather", stream: "weather.bangkok", format: "json" as const, sample_hint_ms: 60000 }]
+        ? [
+            { id: "weather", stream: "weather.bangkok", format: "json" as const, sample_hint_ms: 60000 },
+            { id: "settings", stream: "settings.weather", format: "json" as const },
+          ]
         : key === "profile"
         ? [{ id: "settings", stream: "settings.profile", format: "json" as const }]
         : key === "clock"
         ? [{ id: "settings", stream: "settings.clock", format: "json" as const }]
+        : key === "calendar"
+        ? [{ id: "settings", stream: "settings.calendar", format: "json" as const }]
         : key === "crypto_big"
         ? [{ id: "btc", stream: "market.BTCUSDT.ticker", format: "json" as const, sample_hint_ms: 2000 }]
         : key === "crypto"
@@ -1436,6 +1441,18 @@ export const useBuilder = create<BuilderState>((set, get) => ({
             { key: "sec_color", label: "Seconds colour", type: "color" as const, group: "Colours", default: "#FF9500" },
             { key: "date_color", label: "Date colour", type: "color" as const, group: "Colours", default: "#848E9C" },
             { key: "bg_color", label: "Background", type: "color" as const, group: "Colours", default: "#0B0E11" },
+          ]
+        : key === "weather"
+        ? [
+            { key: "city", label: "City", type: "text" as const, default: "Bangkok" },
+            { key: "show_pm", label: "Show PM2.5 / PM10", type: "toggle" as const, default: true },
+            { key: "bg_color", label: "Background colour", type: "color" as const, default: "#27384B" },
+            { key: "bg_gif", label: "Background GIF (480×320, set in app)", type: "text" as const },
+          ]
+        : key === "calendar"
+        ? [
+            { key: "title", label: "Title", type: "text" as const, default: "CALENDAR" },
+            { key: "bg_color", label: "Background colour", type: "color" as const, default: "#0B0E11" },
           ]
         : key === "profile"
         ? [

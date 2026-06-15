@@ -1252,3 +1252,211 @@ class PhotosSettings extends StatelessWidget {
     );
   }
 }
+
+/* ===================== shared ===================== */
+/// Hex colour field with a live swatch (top-level so Weather/Calendar reuse it).
+Widget hexColorField(String label, TextEditingController ctl) {
+  return Padding(
+    padding: const EdgeInsets.only(top: 8),
+    child: ValueListenableBuilder<TextEditingValue>(
+      valueListenable: ctl,
+      builder: (context, val, _) {
+        Color? swatch;
+        final hex = val.text.trim().replaceFirst('#', '');
+        if (hex.length == 6) {
+          final v = int.tryParse('FF$hex', radix: 16);
+          if (v != null) swatch = Color(v);
+        }
+        return TextField(
+          controller: ctl,
+          decoration: InputDecoration(
+            labelText: label,
+            hintText: '#RRGGBB',
+            border: const OutlineInputBorder(),
+            isDense: true,
+            prefixIcon: Padding(
+              padding: const EdgeInsets.all(8),
+              child: Container(
+                width: 22,
+                height: 22,
+                decoration: BoxDecoration(
+                  color: swatch ?? ccpPanel,
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(color: ccpMuted),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+/* ===================== Weather ===================== */
+class WeatherSettings extends StatefulWidget {
+  final DeviceController c;
+  const WeatherSettings(this.c, {super.key});
+  @override
+  State<WeatherSettings> createState() => _WeatherSettingsState();
+}
+
+class _WeatherSettingsState extends State<WeatherSettings> {
+  static const _bgGifPath = 'pages/weather/assets/bg.gif';
+  late final _s = widget.c.section('weather');
+  late final TextEditingController _city =
+      TextEditingController(text: (_s['city'] as String?) ?? 'Bangkok');
+  late bool _showPm = (_s['show_pm'] as bool?) ?? true;
+  late final TextEditingController _bgColor =
+      TextEditingController(text: (_s['bg_color'] as String?) ?? '#27384B');
+  late String _bgGif = (_s['bg_gif'] as String?) ?? '';
+  bool _gifBusy = false;
+
+  void _patch(DeviceController c) {
+    c.patch('weather', 'city', _city.text.trim());
+    c.patch('weather', 'show_pm', _showPm);
+    c.patch('weather', 'bg_color', _bgColor.text.trim());
+    c.patch('weather', 'bg_gif', _bgGif);
+  }
+
+  Future<void> _uploadGif() async {
+    final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (picked == null) return;
+    final bytes = await picked.readAsBytes();
+    void snack(String m) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
+      }
+    }
+    // lock to .gif: extension or the "GIF" magic header (47 49 46)
+    final isGif = picked.name.toLowerCase().endsWith('.gif') ||
+        (bytes.length > 3 && bytes[0] == 0x47 && bytes[1] == 0x49 && bytes[2] == 0x46);
+    if (!isGif) {
+      snack('Please pick a .gif file.');
+      return;
+    }
+    final decoded = img.decodeGif(bytes);
+    if (decoded == null) {
+      snack('Not a valid GIF.');
+      return;
+    }
+    if (decoded.width != 480 || decoded.height != 320) {
+      snack('GIF must be exactly 480×320 (got ${decoded.width}×${decoded.height}).');
+      return;
+    }
+    setState(() => _gifBusy = true);
+    try {
+      await widget.c.api.uploadFile(_bgGifPath, bytes);
+      setState(() => _bgGif = _bgGifPath);
+      snack('Background GIF uploaded.');
+    } catch (e) {
+      snack('Upload failed: $e');
+    } finally {
+      if (mounted) setState(() => _gifBusy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.c;
+    return AnimatedBuilder(
+      animation: c,
+      builder: (context, _) => SettingsScaffold(
+        title: 'Weather',
+        onSave: () async {
+          _patch(c);
+          await c.save();
+        },
+        children: [
+          settingCard('Location & data', [
+            TextField(
+              controller: _city,
+              decoration: const InputDecoration(
+                  labelText: 'City', border: OutlineInputBorder(), isDense: true),
+            ),
+            SwitchListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              activeColor: ccpAccent,
+              title: const Text('Show PM2.5 / PM10'),
+              value: _showPm,
+              onChanged: (v) => setState(() => _showPm = v),
+            ),
+          ]),
+          settingCard('Background', [
+            hexColorField('Background colour', _bgColor),
+            const SizedBox(height: 10),
+            Text(
+                _bgGif.isEmpty
+                    ? 'Or upload an animated background (.gif, exactly 480×320).'
+                    : 'Custom GIF background is set. Remove it to use the colour.',
+                style: const TextStyle(color: ccpMuted, fontSize: 12)),
+            const SizedBox(height: 8),
+            Row(children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: _gifBusy
+                      ? const SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.gif_box),
+                  label: Text(_gifBusy ? 'Uploading...' : 'Upload .gif'),
+                  onPressed: _gifBusy ? null : _uploadGif,
+                ),
+              ),
+              if (_bgGif.isNotEmpty) ...[
+                const SizedBox(width: 8),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  onPressed: () => setState(() => _bgGif = ''),
+                ),
+              ],
+            ]),
+          ]),
+        ],
+      ),
+    );
+  }
+}
+
+/* ===================== Calendar ===================== */
+class CalendarSettings extends StatefulWidget {
+  final DeviceController c;
+  const CalendarSettings(this.c, {super.key});
+  @override
+  State<CalendarSettings> createState() => _CalendarSettingsState();
+}
+
+class _CalendarSettingsState extends State<CalendarSettings> {
+  late final _s = widget.c.section('calendar');
+  late final TextEditingController _title =
+      TextEditingController(text: (_s['title'] as String?) ?? 'CALENDAR');
+  late final TextEditingController _bgColor =
+      TextEditingController(text: (_s['bg_color'] as String?) ?? '#0B0E11');
+
+  @override
+  Widget build(BuildContext context) {
+    final c = widget.c;
+    return AnimatedBuilder(
+      animation: c,
+      builder: (context, _) => SettingsScaffold(
+        title: 'Calendar',
+        onSave: () async {
+          c.patch('calendar', 'title', _title.text.trim());
+          c.patch('calendar', 'bg_color', _bgColor.text.trim());
+          await c.save();
+        },
+        children: [
+          settingCard('Calendar page', [
+            TextField(
+              controller: _title,
+              decoration: const InputDecoration(
+                  labelText: 'Title', border: OutlineInputBorder(), isDense: true),
+            ),
+            hexColorField('Background colour', _bgColor),
+          ]),
+        ],
+      ),
+    );
+  }
+}

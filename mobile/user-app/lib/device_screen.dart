@@ -58,6 +58,12 @@ class _DeviceScreenState extends State<DeviceScreen> {
                 () => _open(CryptoSettings(_c))),
             _MenuTile(Icons.photo_library, 'Photo slideshow',
                 'Upload, order, effect', () => _open(PhotosSettings(_c))),
+            if (_c.has('weather'))
+              _MenuTile(Icons.cloud, 'Weather', 'City, PM2.5/PM10, background',
+                  () => _open(WeatherSettings(_c))),
+            if (_c.has('calendar'))
+              _MenuTile(Icons.event, 'Calendar', 'Title, background',
+                  () => _open(CalendarSettings(_c))),
             _MenuTile(Icons.storefront, 'Store', 'Add more pages',
                 () => _open(StoreScreen(_c)), highlight: true),
           ];

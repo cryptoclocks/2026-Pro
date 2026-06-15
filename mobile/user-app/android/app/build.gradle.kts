@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "com.cryptoclock.ccp_user_app"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36 // file_picker + updated plugins compile against SDK 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
