@@ -251,6 +251,25 @@ export class PayloadsService {
       title: opts.title || opts.layout.meta.name,
       description: opts.layout.meta.description,
     });
+    // Auto-grant the page to the publisher's OWN CryptoClocks so it appears
+    // without a manual Fleet → Rights step (other people's devices still need a
+    // grant). Then propagate picks them up and pushes the bundle.
+    const ownerDevices = await this.prisma.device.findMany({
+      where: { ownerId: opts.ownerId },
+      select: { deviceId: true },
+    });
+    for (const d of ownerDevices) {
+      await this.prisma.entitlement
+        .upsert({
+          where: { deviceId_itemId: { deviceId: d.deviceId, itemId: marketplaceItem.id } },
+          update: {},
+          create: { deviceId: d.deviceId, itemId: marketplaceItem.id, userId: opts.ownerId, source: "GIFT" },
+        })
+        .catch((e) => this.logger.warn(`auto-grant ${d.deviceId}: ${e}`));
+    }
+    if (ownerDevices.length) {
+      this.logger.debug(`publishCompiled:auto-granted ${ownerDevices.length} owner device(s) for ${marketplaceItem.slug}`);
+    }
     // Auto-update every CryptoClock that already owns this page: point it at the
     // new version and push MQTT sync so admins don't re-grant after each edit.
     const pushedTo = await this.propagateToEntitledDevices(
