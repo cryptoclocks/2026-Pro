@@ -50,9 +50,9 @@ class _DeviceScreenState extends State<DeviceScreen> {
           final tiles = <_MenuTile>[
             _MenuTile(Icons.tune, 'System', 'Pages, brightness, mode, WiFi',
                 () => _open(SystemSettings(_c))),
-            _MenuTile(Icons.person, 'Profile', 'Name, account login',
+            _MenuTile(Icons.person, 'Profile', 'Photo, name, colours, social',
                 () => _open(ProfileSettings(_c))),
-            _MenuTile(Icons.schedule, 'Clock', 'Theme',
+            _MenuTile(Icons.schedule, 'Clock', '24/12h, date, colours, alarm',
                 () => _open(ClockSettings(_c))),
             _MenuTile(Icons.show_chart, 'Crypto', 'Coins, chart, alerts',
                 () => _open(CryptoSettings(_c))),

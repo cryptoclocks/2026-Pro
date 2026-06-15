@@ -480,6 +480,42 @@ class _ProfileSettingsState extends State<ProfileSettings> {
           await c.save();
         },
         children: [
+          settingCard('Profile photo', [
+            Row(children: [
+              ClipOval(
+                child: Container(
+                  width: 72,
+                  height: 72,
+                  color: ccpPanel,
+                  child: _avatar.isEmpty
+                      ? const Icon(Icons.person, color: ccpMuted, size: 36)
+                      : Image.network(
+                          c.api.fileUrl(_avatar).toString(),
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) =>
+                              const Icon(Icons.person, color: ccpMuted, size: 36),
+                        ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: _avatarBusy
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.add_a_photo),
+                  label: Text(_avatarBusy ? 'Uploading...' : 'Upload photo'),
+                  onPressed: _avatarBusy ? null : _uploadAvatar,
+                ),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            const Text('Square PNG uploaded to the display for the Profile page.',
+                style: TextStyle(color: ccpMuted, fontSize: 12)),
+          ]),
           settingCard('Display owner', [
             TextField(
               controller: _name,
@@ -526,42 +562,6 @@ class _ProfileSettingsState extends State<ProfileSettings> {
               value: _show,
               onChanged: (v) => setState(() => _show = v),
             ),
-          ]),
-          settingCard('Profile photo', [
-            Row(children: [
-              ClipOval(
-                child: Container(
-                  width: 72,
-                  height: 72,
-                  color: ccpPanel,
-                  child: _avatar.isEmpty
-                      ? const Icon(Icons.person, color: ccpMuted, size: 36)
-                      : Image.network(
-                          c.api.fileUrl(_avatar).toString(),
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) =>
-                              const Icon(Icons.person, color: ccpMuted, size: 36),
-                        ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton.icon(
-                  icon: _avatarBusy
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.add_a_photo),
-                  label: Text(_avatarBusy ? 'Uploading...' : 'Upload photo'),
-                  onPressed: _avatarBusy ? null : _uploadAvatar,
-                ),
-              ),
-            ]),
-            const SizedBox(height: 8),
-            const Text('Square PNG uploaded to the display for the Profile page.',
-                style: TextStyle(color: ccpMuted, fontSize: 12)),
           ]),
           settingCard('Colours', [
             const Text('Hex colour for each part of the profile page.',
