@@ -1,6 +1,6 @@
 import type { WidgetNode } from "@ccp/shared";
 
-export type TemplateKey = "blank" | "clock" | "crypto" | "crypto_big" | "slideshow" | "weather" | "profile" | "welcome" | "led_toggle";
+export type TemplateKey = "blank" | "clock" | "crypto" | "crypto_big" | "slideshow" | "weather" | "profile" | "welcome" | "led_toggle" | "calendar";
 
 export const PROFILE_SOCIAL_ASSETS = [
   { id: "profile_avatar", type: "image" as const, path: "assets/profile/avatar.png", src: "/profile-social/avatar.png" },
@@ -365,6 +365,24 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
       {
         type: "image", id: "photo", x: 0, y: 0, w: 480, h: 320,
         props: { src: "slideshow_sample1" }, style: {},
+      },
+    ],
+  },
+
+  /* Calendar: a date-focused page driven by the clock wasm (sets the "date"
+     label to the tz/format-aware date string). Edit the layout in the Builder. */
+  calendar: {
+    name: "Calendar",
+    widgets: [
+      {
+        type: "label", id: "cal_title", x: 0, y: 34, w: 480, h: 30,
+        props: { text: "CALENDAR" },
+        style: { text_color: "#F0B90B", align: "center", font: "montserrat_20" },
+      },
+      {
+        type: "label", id: "date", x: 0, y: 120, w: 480, h: 80,
+        props: { text: "--" },
+        style: { text_color: "#EAECEF", align: "center", font: "montserrat_28" },
       },
     ],
   },

@@ -41,6 +41,18 @@ type BuilderPageResponse = SavedBuilderPage & {
   latest: SavedBuilderPage["latest"] & { layout: Layout };
 };
 
+/* The official device pages. One entry per page — opening it loads the saved
+   (published) version if it exists, otherwise a fresh copy of the starter
+   template. This replaces the old "starter template" + "saved page" split. */
+const OFFICIAL_PAGES = [
+  { code: "P001", label: "Profile", key: "profile", pkg: "com.ccp.profile" },
+  { code: "P002", label: "Clock", key: "clock", pkg: "com.ccp.clock-custom" },
+  { code: "P003", label: "Crypto", key: "crypto", pkg: "com.ccp.crypto-custom" },
+  { code: "P004", label: "Photo Slideshow", key: "slideshow", pkg: "com.ccp.slideshow-custom" },
+  { code: "P005", label: "Weather", key: "weather", pkg: "com.ccp.weather" },
+  { code: "P006", label: "Calendar", key: "calendar", pkg: "com.ccp.calendar" },
+] as const;
+
 export default function BuilderPage() {
   const b = useBuilder();
   const { me, token } = useAuth();
@@ -189,6 +201,18 @@ export default function BuilderPage() {
     setSavedPages((await res.json()) as SavedBuilderPage[]);
   };
 
+  // Unified page open: saved/published version if it exists, else the starter.
+  const openPage = async (code: string) => {
+    const p = OFFICIAL_PAGES.find((x) => x.code === code);
+    if (!p) return;
+    const saved = savedPages.find((s) => s.packageId === p.pkg);
+    if (saved && token) {
+      await loadSavedPage(p.pkg);
+    } else {
+      b.loadTemplate(p.key as never);
+    }
+  };
+
   const loadSavedPage = async (packageId: string) => {
     if (!packageId || !token) return;
     try {
@@ -325,7 +349,7 @@ export default function BuilderPage() {
           `Size: ${published.sizeBytes} bytes\n\n` +
           (published.pushedToDevices
             ? `✓ Auto-updated ${published.pushedToDevices} CryptoClock${published.pushedToDevices === 1 ? "" : "s"} already entitled to this page (MQTT sync sent — they re-download within seconds, no re-grant needed).`
-            : "No devices own this page yet. Grant it from Fleet → Rights and the device downloads this bundle without reflashing."),
+            : "No devices are entitled to this page yet. Grant it from Fleet → Rights and the device downloads this bundle without reflashing."),
       );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
@@ -385,41 +409,24 @@ export default function BuilderPage() {
           </select>
 
           <select
-            className="px-2 py-1 rounded bg-[var(--ccp-panel)] border border-[var(--ccp-border)] w-36"
-            defaultValue=""
-            onChange={(e) => {
-              if (e.target.value) b.loadTemplate(e.target.value as never);
-              e.target.value = "";
-            }}
-            title="Starter template: creates an editable copy, not a live device page"
-          >
-            <option value="">Starter template…</option>
-            <option value="clock">Clock</option>
-            <option value="crypto">Crypto</option>
-            <option value="crypto_big">Crypto Big</option>
-            <option value="weather">Weather</option>
-            <option value="profile">Profile</option>
-            <option value="welcome">Welcome</option>
-            <option value="led_toggle">LED Toggle</option>
-            <option value="blank">Blank</option>
-          </select>
-
-          <select
-            className="px-2 py-1 rounded bg-[var(--ccp-panel)] border border-[var(--ccp-border)] w-48"
+            className="px-2 py-1 rounded bg-[var(--ccp-panel)] border border-[var(--ccp-border)] w-56"
             value=""
-            disabled={!token || busy !== null}
+            disabled={busy !== null}
             onChange={(e) => {
-              void loadSavedPage(e.target.value);
+              if (e.target.value) void openPage(e.target.value);
               e.target.value = "";
             }}
-            title="Open a page already saved/published on the Hub"
+            title="Open a page — its published version if it exists, otherwise a fresh starter copy"
           >
-            <option value="">{token ? "Open saved page…" : "Sign in to open saved pages"}</option>
-            {savedPages.map((page) => (
-              <option key={page.packageId} value={page.packageId}>
-                {page.title} {page.latest.version}
-              </option>
-            ))}
+            <option value="">Open page…</option>
+            {OFFICIAL_PAGES.map((p) => {
+              const saved = savedPages.find((s) => s.packageId === p.pkg);
+              return (
+                <option key={p.code} value={p.code}>
+                  {p.code} · {p.label}{saved ? `  (saved ${saved.latest.version})` : "  (new)"}
+                </option>
+              );
+            })}
           </select>
 
           <PageTabs />

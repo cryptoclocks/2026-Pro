@@ -1366,11 +1366,12 @@ export const useBuilder = create<BuilderState>((set, get) => ({
     const logicSource =
       key === "led_toggle" ? LED_TOGGLE_LOGIC_SOURCE :
       key === "clock" ? CLOCK_LOGIC_SOURCE :
+      key === "calendar" ? CLOCK_LOGIC_SOURCE : // drives the "date" label
       key === "profile" ? CLOCK_LOGIC_SOURCE : // drives the big "time" label
       key === "crypto" ? CRYPTO_LOGIC_SOURCE :
       key === "weather" ? WEATHER_LOGIC_SOURCE :
       NOOP_LOGIC_SOURCE;
-    const hasLogic = key === "led_toggle" || key === "clock" || key === "profile" || key === "crypto" || key === "weather";
+    const hasLogic = key === "led_toggle" || key === "clock" || key === "calendar" || key === "profile" || key === "crypto" || key === "weather";
     const wasmModules = hasLogic
       ? [{ id: "logic", path: "wasm/page.wasm", memory_kb: key === "crypto" || key === "weather" ? 256 : 128 }]
       : [];
@@ -1388,6 +1389,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       packageId:
         key === "led_toggle" ? "com.ccp.led-toggle" :
         key === "clock" ? "com.ccp.clock-custom" :
+        key === "calendar" ? "com.ccp.calendar" :
         key === "crypto" ? "com.ccp.crypto-custom" :
         key === "crypto_big" ? "com.ccp.crypto-big" :
         key === "slideshow" ? "com.ccp.slideshow-custom" :
