@@ -36,6 +36,20 @@ function activePageSettings(d: Device): { slug: string; name: string; schema: Se
   return { slug: id.split(".").pop() || id, name: layout?.meta?.name || id, schema };
 }
 interface CatalogItem { slug: string; title: string; kind: string; priceCents: number; currency: string; published?: boolean }
+type SocialKey = "fb" | "yt" | "tt" | "ig";
+type SocialStats = Record<SocialKey, { followers: string; following: string; secondaryLabel: string }>;
+interface SocialResolveResponse {
+  ok?: boolean;
+  platform?: string;
+  name?: string;
+  followers?: string;
+  following?: string;
+  likes?: string;
+  talkingAbout?: string;
+  secondaryLabel?: string;
+  secondaryValue?: string;
+  warning?: string;
+}
 
 export default function FleetPage() {
   return (
@@ -207,27 +221,46 @@ function RightsModal({ device, catalog, token, onClose, onChanged }: {
     }
   };
 
+  // Hide un-owned drafts (half-finished / duplicate pages) — keep anything the
+  // device already owns so it can still be revoked.
+  const visible = catalog.filter((c) => owned.includes(c.slug) || c.published !== false);
+  const pages = visible.filter((c) => c.kind === "PAGE");
+  const features = visible.filter((c) => c.kind === "FEATURE");
+
+  const row = (c: CatalogItem) => {
+    const has = owned.includes(c.slug);
+    return (
+      <div key={c.slug} className="flex items-center gap-2 py-1.5 border-b border-[var(--ccp-border)]/40">
+        <div className="flex-1">
+          <div className="text-sm">{c.title}</div>
+          <div className="text-[11px] text-[var(--ccp-muted)]">
+            {c.slug} · {formatMoney(c.priceCents, c.currency)}{c.published === false ? " · draft" : ""}
+          </div>
+        </div>
+        <button className={has ? "btn btn-danger" : "btn btn-primary"} disabled={busy} onClick={() => toggle(c.slug, has)}>
+          {has ? "Revoke" : "Grant"}
+        </button>
+      </div>
+    );
+  };
+
   return (
     <Modal onClose={onClose} title={`Rights — ${device.name ?? device.deviceId}`}>
       <p className="text-xs text-[var(--ccp-muted)] mb-3">
         Rights attach to this specific CryptoClock. Granting pushes it to the device instantly.
       </p>
-      {catalog.map((c) => {
-        const has = owned.includes(c.slug);
-        return (
-          <div key={c.slug} className="flex items-center gap-2 py-1.5 border-b border-[var(--ccp-border)]/40">
-            <div className="flex-1">
-              <div className="text-sm">{c.title} <span className="pill ml-1">{c.kind}</span></div>
-              <div className="text-[11px] text-[var(--ccp-muted)]">
-                {c.slug} · {formatMoney(c.priceCents, c.currency)}{c.published === false ? " · draft" : ""}
-              </div>
-            </div>
-            <button className={has ? "btn btn-danger" : "btn btn-primary"} disabled={busy} onClick={() => toggle(c.slug, has)}>
-              {has ? "Revoke" : "Grant"}
-            </button>
-          </div>
-        );
-      })}
+      {pages.length > 0 && (
+        <>
+          <div className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)] mt-1 mb-1">Pages</div>
+          {pages.map(row)}
+        </>
+      )}
+      {features.length > 0 && (
+        <>
+          <div className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)] mt-4 mb-1">Features</div>
+          {features.map(row)}
+        </>
+      )}
     </Modal>
   );
 }
@@ -244,13 +277,57 @@ function SettingsModal({ device, token, onClose, onSaved }: {
   device: Device; token: string | null; onClose: () => void; onSaved: () => void;
 }) {
   const s = device.settings ?? {};
+  const profile = (s.profile as Record<string, unknown>) ?? {};
   const clock = (s.clock as Record<string, unknown>) ?? {};
   const crypto = (s.crypto as Record<string, unknown>) ?? {};
+  const slideshow = (s.slideshow as Record<string, unknown>) ?? {};
   const [pages, setPages] = useState<string[]>((s.pages as string[]) ?? ["clock", "crypto", "slideshow"]);
   const [theme, setTheme] = useState<string>((clock.theme as string) ?? "gold");
+  const [ownerName, setOwnerName] = useState<string>((profile.name as string) ?? device.name ?? device.deviceId);
+  const [nickname, setNickname] = useState<string>((profile.nickname as string) ?? "SATOSHI NAKAMOTO");
+  const [role, setRole] = useState<string>((profile.role as string) ?? "(SAT) CYPHERPUNK");
+  const [motto, setMotto] = useState<string>((profile.motto as string) ?? "DON'T TRUST  VERIFY");
+  const [company, setCompany] = useState<string>((profile.company as string) ?? "Acme Capital");
+  const [showProfile, setShowProfile] = useState<boolean>((profile.show as boolean) ?? true);
+  const [nameColor, setNameColor] = useState<string>((profile.name_color as string) ?? "#EAECEF");
+  const [roleColor, setRoleColor] = useState<string>((profile.role_color as string) ?? "#848E9C");
+  const [companyColor, setCompanyColor] = useState<string>((profile.company_color as string) ?? "#F0B90B");
+  const [verifyColor, setVerifyColor] = useState<string>((profile.verify_color as string) ?? "#F0B90B");
+  const [bgColor, setBgColor] = useState<string>((profile.bg_color as string) ?? "#0B0E11");
+  const [fbUrl, setFbUrl] = useState<string>((profile.fb_url as string) ?? "");
+  const [ytUrl, setYtUrl] = useState<string>((profile.yt_url as string) ?? "");
+  const [ttUrl, setTtUrl] = useState<string>((profile.tt_url as string) ?? "");
+  const [igUrl, setIgUrl] = useState<string>((profile.ig_url as string) ?? "");
+  const [socialStats, setSocialStats] = useState<SocialStats>({
+    fb: {
+      followers: (profile.fb_followers as string) ?? "",
+      following: (profile.fb_following as string) ?? "",
+      secondaryLabel: (profile.fb_secondary_label as string) ?? "Following",
+    },
+    yt: {
+      followers: (profile.yt_followers as string) ?? "",
+      following: (profile.yt_following as string) ?? "",
+      secondaryLabel: (profile.yt_secondary_label as string) ?? "Following",
+    },
+    tt: {
+      followers: (profile.tt_followers as string) ?? "",
+      following: (profile.tt_following as string) ?? "",
+      secondaryLabel: (profile.tt_secondary_label as string) ?? "Following",
+    },
+    ig: {
+      followers: (profile.ig_followers as string) ?? "",
+      following: (profile.ig_following as string) ?? "",
+      secondaryLabel: (profile.ig_secondary_label as string) ?? "Following",
+    },
+  });
   const [symbols, setSymbols] = useState<string>(((crypto.symbols as string[]) ?? ["BTCUSDT"]).join(", "));
+  const [style, setStyle] = useState<string>((crypto.style as string) ?? "chart");
   const [currency, setCurrency] = useState<string>((crypto.currency as string) ?? "USD");
   const [fetchS, setFetchS] = useState<number>((crypto.fetch_interval_s as number) ?? 10);
+  const [slideEffect, setSlideEffect] = useState<string>((slideshow.effect as string) ?? "fade");
+  const [slideInterval, setSlideInterval] = useState<number>((slideshow.interval_s as number) ?? 5);
+  const [socialBusy, setSocialBusy] = useState(false);
+  const [socialNote, setSocialNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const togglePage = (p: string) => setPages((cur) => (cur.includes(p) ? cur.filter((x) => x !== p) : [...cur, p]));
 
@@ -262,14 +339,98 @@ function SettingsModal({ device, token, onClose, onSaved }: {
 
   const save = async () => {
     setBusy(true);
-    const config: Record<string, unknown> = {
-      ...s, pages, clock: { ...clock, theme },
-      crypto: { ...crypto, symbols: symbols.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean), currency, fetch_interval_s: fetchS },
+    try {
+      const config: Record<string, unknown> = {
+        ...s,
+        pages,
+        profile: {
+          ...profile,
+          name: ownerName.trim(),
+          nickname: nickname.trim(),
+          role: role.trim(),
+          motto: motto.trim(),
+          company: company.trim(),
+          show: showProfile,
+          name_color: nameColor.trim(),
+          role_color: roleColor.trim(),
+          company_color: companyColor.trim(),
+          verify_color: verifyColor.trim(),
+          bg_color: bgColor.trim(),
+          fb_url: fbUrl.trim(),
+          yt_url: ytUrl.trim(),
+          tt_url: ttUrl.trim(),
+          ig_url: igUrl.trim(),
+          fb_followers: socialStats.fb.followers.trim(),
+          fb_following: socialStats.fb.following.trim(),
+          fb_secondary_label: socialStats.fb.secondaryLabel.trim(),
+          yt_followers: socialStats.yt.followers.trim(),
+          yt_following: socialStats.yt.following.trim(),
+          yt_secondary_label: socialStats.yt.secondaryLabel.trim(),
+          tt_followers: socialStats.tt.followers.trim(),
+          tt_following: socialStats.tt.following.trim(),
+          tt_secondary_label: socialStats.tt.secondaryLabel.trim(),
+          ig_followers: socialStats.ig.followers.trim(),
+          ig_following: socialStats.ig.following.trim(),
+          ig_secondary_label: socialStats.ig.secondaryLabel.trim(),
+        },
+        clock: { ...clock, theme },
+        crypto: {
+          ...crypto,
+          style,
+          symbols: symbols.split(",").map((x) => x.trim().toUpperCase()).filter(Boolean),
+          currency,
+          fetch_interval_s: fetchS,
+        },
+        slideshow: {
+          ...slideshow,
+          effect: slideEffect,
+          interval_s: slideInterval,
+        },
+      };
+      if (pageSettings) config[pageSettings.slug] = pageVals; // settings.<slug> for the page
+      await api(`/api/v1/devices/${device.deviceId}/settings`, token, { method: "PUT", body: JSON.stringify({ config }) });
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshSocialStats = async () => {
+    const urls: Record<SocialKey, string> = { fb: fbUrl, yt: ytUrl, tt: ttUrl, ig: igUrl };
+    const platforms: Record<SocialKey, string> = { fb: "facebook", yt: "youtube", tt: "tiktok", ig: "instagram" };
+    const next: SocialStats = {
+      fb: { ...socialStats.fb },
+      yt: { ...socialStats.yt },
+      tt: { ...socialStats.tt },
+      ig: { ...socialStats.ig },
     };
-    if (pageSettings) config[pageSettings.slug] = pageVals; // settings.<slug> for the page
-    await api(`/api/v1/devices/${device.deviceId}/settings`, token, { method: "PUT", body: JSON.stringify({ config }) });
-    setBusy(false);
-    onSaved();
+    setSocialBusy(true);
+    setSocialNote(null);
+    try {
+      const notes: string[] = [];
+      for (const key of Object.keys(urls) as SocialKey[]) {
+        const url = urls[key].trim();
+        if (!url) continue;
+        const r = await api("/api/v1/social/resolve", token, {
+          method: "POST",
+          body: JSON.stringify({ url, platform: platforms[key] }),
+        }) as SocialResolveResponse;
+        const followers = r.followers || r.likes || "";
+        const following = r.secondaryValue || r.following || r.talkingAbout || "";
+        next[key] = {
+          followers: followers || next[key].followers,
+          following: following || next[key].following,
+          secondaryLabel: r.secondaryLabel || next[key].secondaryLabel || "Following",
+        };
+        notes.push(`${key.toUpperCase()}: ${followers || "?"} / ${following || "?"}${r.warning ? " (best effort)" : ""}`);
+      }
+      setSocialStats(next);
+      setSocialNote(notes.length ? notes.join(" · ") : "Add at least one social URL first.");
+    } catch (e) {
+      setSocialNote(e instanceof Error ? e.message : "Cannot refresh social stats.");
+    } finally {
+      setSocialBusy(false);
+    }
   };
 
   return (
@@ -287,8 +448,84 @@ function SettingsModal({ device, token, onClose, onSaved }: {
           {["gold", "mint", "neon"].map((t) => <option key={t} value={t}>{t}</option>)}
         </select>
       </Field>
+      <Field label="Profile name">
+        <input className="input w-full" value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="Satoshi Nakamoto" />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Nickname">
+          <input className="input w-full" value={nickname} onChange={(e) => setNickname(e.target.value)} />
+        </Field>
+        <Field label="Role">
+          <input className="input w-full" value={role} onChange={(e) => setRole(e.target.value)} />
+        </Field>
+      </div>
+      <Field label="Motto (top-right)">
+        <input className="input w-full" value={motto} onChange={(e) => setMotto(e.target.value)} placeholder="DON'T TRUST  VERIFY" />
+      </Field>
+      <Field label="Company">
+        <input className="input w-full" value={company} onChange={(e) => setCompany(e.target.value)} />
+      </Field>
+      <Field label="Show profile page">
+        <button type="button" className="btn" style={showProfile ? { borderColor: "var(--ccp-accent)", color: "var(--ccp-accent)" } : {}} onClick={() => setShowProfile((v) => !v)}>
+          {showProfile ? "Enabled" : "Hidden"}
+        </button>
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Name colour">
+          <input className="input w-full font-mono" value={nameColor} onChange={(e) => setNameColor(e.target.value)} />
+        </Field>
+        <Field label="Role colour">
+          <input className="input w-full font-mono" value={roleColor} onChange={(e) => setRoleColor(e.target.value)} />
+        </Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Company colour">
+          <input className="input w-full font-mono" value={companyColor} onChange={(e) => setCompanyColor(e.target.value)} />
+        </Field>
+        <Field label="Motto colour">
+          <input className="input w-full font-mono" value={verifyColor} onChange={(e) => setVerifyColor(e.target.value)} />
+        </Field>
+      </div>
+      <Field label="Background colour">
+        <input className="input w-full font-mono" value={bgColor} onChange={(e) => setBgColor(e.target.value)} />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Facebook URL">
+          <input className="input w-full" value={fbUrl} onChange={(e) => setFbUrl(e.target.value)} />
+        </Field>
+        <Field label="YouTube URL">
+          <input className="input w-full" value={ytUrl} onChange={(e) => setYtUrl(e.target.value)} />
+        </Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="TikTok URL">
+          <input className="input w-full" value={ttUrl} onChange={(e) => setTtUrl(e.target.value)} />
+        </Field>
+        <Field label="Instagram URL">
+          <input className="input w-full" value={igUrl} onChange={(e) => setIgUrl(e.target.value)} />
+        </Field>
+      </div>
+      <Field label="Public social stats">
+        <button type="button" className="btn w-full" disabled={socialBusy} onClick={refreshSocialStats}>
+          {socialBusy ? "Reading public pages..." : "Refresh from social URLs"}
+        </button>
+        <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[var(--ccp-muted)]">
+          {(Object.keys(socialStats) as SocialKey[]).map((k) => (
+            <div key={k} className="rounded-lg border border-[var(--ccp-border)] px-2 py-1">
+              <span className="font-semibold uppercase text-[var(--ccp-fg)]">{k}</span>{" "}
+              {socialStats[k].followers || "—"} / {socialStats[k].following || "—"} {socialStats[k].secondaryLabel}
+            </div>
+          ))}
+        </div>
+        {socialNote && <p className="mt-2 text-xs text-[var(--ccp-muted)]">{socialNote}</p>}
+      </Field>
       <Field label="Crypto symbols (comma separated)">
         <input className="input w-full" value={symbols} onChange={(e) => setSymbols(e.target.value)} placeholder="BTCUSDT, ETHUSDT" />
+      </Field>
+      <Field label="Crypto style">
+        <select className="select w-full" value={style} onChange={(e) => setStyle(e.target.value)}>
+          {["chart", "big"].map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Currency">
@@ -301,6 +538,20 @@ function SettingsModal({ device, token, onClose, onSaved }: {
             {[5, 10, 30, 60, 300, 900].map((n) => <option key={n} value={n}>{n < 60 ? `${n}s` : `${n / 60}m`}</option>)}
           </select>
         </Field>
+      </div>
+      <div className="mt-5 border-t border-[var(--ccp-border)] pt-4">
+        <div className="text-xs uppercase tracking-wide text-[var(--ccp-muted)] mb-3">Photos settings</div>
+        <Field label="Effect">
+          <select className="select w-full" value={slideEffect} onChange={(e) => setSlideEffect(e.target.value)}>
+            {["fade", "slide", "none"].map((v) => <option key={v} value={v}>{v}</option>)}
+          </select>
+        </Field>
+        <Field label="Interval">
+          <select className="select w-full" value={slideInterval} onChange={(e) => setSlideInterval(Number(e.target.value))}>
+            {[3, 5, 10, 15, 30].map((n) => <option key={n} value={n}>{`${n}s`}</option>)}
+          </select>
+        </Field>
+        <p className="text-xs text-[var(--ccp-muted)]">The mobile app can still manage the photo files themselves; this lets Fleet keep the same page behavior/config.</p>
       </div>
       {pageSettings && (
         <div className="mt-5 border-t border-[var(--ccp-border)] pt-4">
@@ -319,7 +570,7 @@ function SettingsModal({ device, token, onClose, onSaved }: {
 function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-30 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="card w-full max-w-md p-5 max-h-[85vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="card w-full max-w-2xl p-5 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold mb-1">{title}</h2>
         {children}
       </div>
