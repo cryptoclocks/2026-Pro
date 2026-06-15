@@ -169,6 +169,24 @@ static void deliver_page_settings_for_slug(const cJSON *config, const char *slug
     snprintf(stream, sizeof(stream), "settings.%s", slug);
     ui_renderer_handle_data(stream, json, strlen(json));
     free(json);
+
+    /* The clock page's time text is drawn by wasm (CLOCK_LOGIC_SOURCE), which
+     * can't see the binding stream — mirror the format/tz settings into the wasm
+     * KV ("wasmkv") so ccp_kv_get() picks them up (24/12h, date format, tz). */
+    if (!strcmp(slug, "clock")) {
+        const cJSON *it = cJSON_GetObjectItem(obj, "tz_offset_min");
+        char b[16];
+        int len = snprintf(b, sizeof(b), "%d", cJSON_IsNumber(it) ? it->valueint : 420);
+        storage_kv_set_blob("wasmkv", "clk_tz", b, len);
+
+        it = cJSON_GetObjectItem(obj, "format_24h");
+        bool f24 = it ? cJSON_IsTrue(it) : true; /* default 24h when unset */
+        storage_kv_set_blob("wasmkv", "clk_fmt24", f24 ? "1" : "0", 1);
+
+        it = cJSON_GetObjectItem(obj, "date_format");
+        const char *df = cJSON_IsString(it) ? it->valuestring : "long";
+        storage_kv_set_blob("wasmkv", "clk_datefmt", df, strlen(df));
+    }
 }
 
 static void deliver_page_settings(const cJSON *config)

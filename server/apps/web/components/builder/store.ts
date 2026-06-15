@@ -207,7 +207,7 @@ export const CLOCK_LOGIC_SOURCE = `#![no_std]
 const CCP_ABI_VERSION: u32 = 1;
 const CCP_OK: i32 = 0;
 const CCP_ERR_INVAL: i32 = -1;
-const TZ_OFFSET_MIN: i64 = 7 * 60; // Asia/Bangkok UTC+7 — change for other zones
+const TZ_OFFSET_MIN: i64 = 7 * 60; // Asia/Bangkok UTC+7 — default if no setting yet
 
 #[link(wasm_import_module = "env")]
 extern "C" {
@@ -215,6 +215,8 @@ extern "C" {
     fn ccp_ui_set_text(widget: i32, text: *const u8, len: u32) -> i32;
     fn ccp_request_tick(interval_ms: u32) -> i32;
     fn ccp_time_unix() -> u64;
+    // settings.clock.* mirrored into wasm KV by the firmware (clk_tz/clk_fmt24/clk_datefmt)
+    fn ccp_kv_get(key: *const u8, klen: u32, out: *mut u8, out_len: u32) -> i32;
 }
 
 static mut W_TIME: i32 = -1;
@@ -247,54 +249,111 @@ pub extern "C" fn ccp_on_tick(_now_ms: u64) {
             set_text(W_DATE, b"Syncing time...");
             return;
         }
-        let local = utc as i64 + TZ_OFFSET_MIN * 60;
+        // settings.clock.* mirrored into wasm KV by the firmware
+        let mut kb = [0u8; 16];
+        let mut tz = TZ_OFFSET_MIN;
+        let n = kv_read(b"clk_tz", &mut kb);
+        if n > 0 { tz = parse_int(&kb[..n]); }
+        let mut fmt24 = true;
+        let n = kv_read(b"clk_fmt24", &mut kb);
+        if n > 0 { fmt24 = kb[0] != b'0'; }
+        let mut datefmt = b'l'; // long | dmy | mdy | iso -> first byte
+        let n = kv_read(b"clk_datefmt", &mut kb);
+        if n > 0 { datefmt = kb[0]; }
+
+        let local = utc as i64 + tz * 60;
         if local == LAST {
             return; // same second -> nothing to redraw
         }
         LAST = local;
 
         let sod = local.rem_euclid(86400) as u32; // seconds of day
-        let h = sod / 3600;
+        let h24 = sod / 3600;
         let m = (sod / 60) % 60;
         let s = sod % 60;
 
-        let mut tb = [0u8; 5]; // "HH:MM"
-        put2(&mut tb[0..2], h);
-        tb[2] = b':';
-        put2(&mut tb[3..5], m);
-        set_text(W_TIME, &tb);
+        // time: 24h "HH:MM" or 12h "H:MM" (AM/PM shown in the seconds slot)
+        let (dh, pm) = if fmt24 {
+            (h24, false)
+        } else {
+            let pm = h24 >= 12;
+            let mut hh = h24 % 12;
+            if hh == 0 { hh = 12; }
+            (hh, pm)
+        };
+        let mut tb = [0u8; 8];
+        let mut tn = 0usize;
+        if fmt24 {
+            put2(&mut tb[0..2], dh);
+            tn = 2;
+        } else {
+            if dh >= 10 { tb[tn] = b'0' + (dh / 10) as u8; tn += 1; }
+            tb[tn] = b'0' + (dh % 10) as u8;
+            tn += 1;
+        }
+        tb[tn] = b':';
+        tn += 1;
+        put2(&mut tb[tn..tn + 2], m);
+        tn += 2;
+        set_text(W_TIME, &tb[..tn]);
 
-        let mut sb = [0u8; 2]; // "SS"
-        put2(&mut sb[0..2], s);
-        set_text(W_SEC, &sb);
+        if fmt24 {
+            let mut sb = [0u8; 2]; // "SS"
+            put2(&mut sb[0..2], s);
+            set_text(W_SEC, &sb);
+        } else {
+            set_text(W_SEC, if pm { b"PM" } else { b"AM" });
+        }
 
-        // "Wednesday  11 Jun 2026" — same format as the native clock page
         let days = local.div_euclid(86400);
         let (y, mo, d) = civil_from_days(days);
-        static WD: [&[u8]; 7] = [b"Sunday", b"Monday", b"Tuesday", b"Wednesday",
-                                 b"Thursday", b"Friday", b"Saturday"];
-        static MO: [&[u8]; 12] = [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun",
-                                  b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
-        let wd = WD[(days + 4).rem_euclid(7) as usize]; // 1970-01-01 = Thursday
-        let mut db = [0u8; 28];
-        let mut n = 0;
-        n += copy(&mut db[n..], wd);
-        n += copy(&mut db[n..], b"  ");
-        if d >= 10 {
-            db[n] = b'0' + (d / 10) as u8;
-            n += 1;
-        }
-        db[n] = b'0' + (d % 10) as u8;
-        n += 1;
-        n += copy(&mut db[n..], b" ");
-        n += copy(&mut db[n..], MO[(mo - 1) as usize]);
-        n += copy(&mut db[n..], b" ");
         let yv = y as u32;
-        db[n] = b'0' + (yv / 1000 % 10) as u8;
-        db[n + 1] = b'0' + (yv / 100 % 10) as u8;
-        db[n + 2] = b'0' + (yv / 10 % 10) as u8;
-        db[n + 3] = b'0' + (yv % 10) as u8;
-        n += 4;
+        let mut db = [0u8; 28];
+        let mut n = 0usize;
+        if datefmt == b'i' {
+            // 2026-06-11
+            db[0] = b'0' + (yv / 1000 % 10) as u8;
+            db[1] = b'0' + (yv / 100 % 10) as u8;
+            db[2] = b'0' + (yv / 10 % 10) as u8;
+            db[3] = b'0' + (yv % 10) as u8;
+            db[4] = b'-';
+            put2(&mut db[5..7], mo);
+            db[7] = b'-';
+            put2(&mut db[8..10], d);
+            n = 10;
+        } else if datefmt == b'd' || datefmt == b'm' {
+            // dmy: DD/MM/YYYY  |  mdy: MM/DD/YYYY
+            let (a, b2) = if datefmt == b'd' { (d, mo) } else { (mo, d) };
+            put2(&mut db[0..2], a);
+            db[2] = b'/';
+            put2(&mut db[3..5], b2);
+            db[5] = b'/';
+            db[6] = b'0' + (yv / 1000 % 10) as u8;
+            db[7] = b'0' + (yv / 100 % 10) as u8;
+            db[8] = b'0' + (yv / 10 % 10) as u8;
+            db[9] = b'0' + (yv % 10) as u8;
+            n = 10;
+        } else {
+            // long: "Wednesday  11 Jun 2026"
+            static WD: [&[u8]; 7] = [b"Sunday", b"Monday", b"Tuesday", b"Wednesday",
+                                     b"Thursday", b"Friday", b"Saturday"];
+            static MO: [&[u8]; 12] = [b"Jan", b"Feb", b"Mar", b"Apr", b"May", b"Jun",
+                                      b"Jul", b"Aug", b"Sep", b"Oct", b"Nov", b"Dec"];
+            let wd = WD[(days + 4).rem_euclid(7) as usize]; // 1970-01-01 = Thursday
+            n += copy(&mut db[n..], wd);
+            n += copy(&mut db[n..], b"  ");
+            if d >= 10 { db[n] = b'0' + (d / 10) as u8; n += 1; }
+            db[n] = b'0' + (d % 10) as u8;
+            n += 1;
+            n += copy(&mut db[n..], b" ");
+            n += copy(&mut db[n..], MO[(mo - 1) as usize]);
+            n += copy(&mut db[n..], b" ");
+            db[n] = b'0' + (yv / 1000 % 10) as u8;
+            db[n + 1] = b'0' + (yv / 100 % 10) as u8;
+            db[n + 2] = b'0' + (yv / 10 % 10) as u8;
+            db[n + 3] = b'0' + (yv % 10) as u8;
+            n += 4;
+        }
         set_text(W_DATE, &db[..n]);
     }
 }
@@ -313,6 +372,23 @@ fn put2(out: &mut [u8], v: u32) {
 fn copy(out: &mut [u8], src: &[u8]) -> usize {
     out[..src.len()].copy_from_slice(src);
     src.len()
+}
+
+unsafe fn kv_read(key: &[u8], buf: &mut [u8]) -> usize {
+    let n = ccp_kv_get(key.as_ptr(), key.len() as u32, buf.as_mut_ptr(), buf.len() as u32);
+    if n > 0 { n as usize } else { 0 }
+}
+
+fn parse_int(b: &[u8]) -> i64 {
+    let mut i = 0;
+    let mut neg = false;
+    if i < b.len() && b[i] == b'-' { neg = true; i += 1; }
+    let mut v: i64 = 0;
+    while i < b.len() && b[i] >= b'0' && b[i] <= b'9' {
+        v = v * 10 + (b[i] - b'0') as i64;
+        i += 1;
+    }
+    if neg { -v } else { v }
 }
 
 /* days since 1970-01-01 -> (year, month 1-12, day 1-31)
