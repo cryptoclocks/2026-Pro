@@ -57,6 +57,7 @@ typedef struct {
 
 #define MAX_SYMBOLS 4
 #define MAX_ALERTS  8
+#define MAX_ALARMS  8
 
 typedef enum { THEME_GOLD, THEME_MINT, THEME_NEON } clock_theme_t;
 typedef enum { CRYPTO_STYLE_CHART, CRYPTO_STYLE_BIG } crypto_style_t;
@@ -82,6 +83,12 @@ typedef struct {
     struct { char symbol[16]; bool above; double price; } alerts[MAX_ALERTS];
     int alert_count;
     bool alerts_unlocked;
+    /* clock alarms — unlocked when the device holds the "clock-alarm" right.
+     * days = weekday bitmask bit0=Mon..bit6=Sun; 0 = ring once at next match. */
+    struct { char time[6]; uint8_t days; bool enabled; char label[24];
+             char sound[16]; int snooze_min; } alarms[MAX_ALARMS];
+    int alarm_count;
+    bool alarm_unlocked;
     int slide_interval_s;
     slide_fx_t slide_fx;
     char slide_order[MAX_SLIDES][32];
@@ -146,6 +153,14 @@ static struct {
     volatile int alert_cur;             /* rule index currently showing, -1 = none */
     int64_t alert_snooze_until[MAX_ALERTS];
     bool alert_off[MAX_ALERTS];         /* Stop = disabled for this session */
+
+    /* clock alarms — overlay on lv_layer_top covers any page; a global 1Hz
+     * timer (alarm_timer) compares wall-clock time to each enabled alarm. */
+    lv_obj_t *alarm_overlay;
+    volatile int alarm_cur;             /* alarm index currently ringing, -1 = none */
+    int64_t alarm_snooze_until[MAX_ALARMS];
+    int64_t alarm_armed_key[MAX_ALARMS]; /* minute-key already fired (de-dupe) */
+    lv_timer_t *alarm_timer;
 
     /* menu */
     lv_obj_t *menu;
@@ -231,6 +246,40 @@ static void cfg_apply_json(home_cfg_t *c, const cJSON *root)
             else if (!strcmp(th->valuestring, "neon")) c->clock_theme = THEME_NEON;
             else c->clock_theme = THEME_GOLD;
         }
+        const cJSON *alarms = cJSON_GetObjectItem(clock, "alarms");
+        if (cJSON_IsArray(alarms)) {
+            c->alarm_count = 0;
+            const cJSON *a;
+            cJSON_ArrayForEach(a, alarms) {
+                if (c->alarm_count >= MAX_ALARMS) break;
+                const cJSON *t = cJSON_GetObjectItem(a, "time");
+                if (!cJSON_IsString(t)) continue;
+                int idx = c->alarm_count;
+                strlcpy(c->alarms[idx].time, t->valuestring, sizeof(c->alarms[idx].time));
+                const cJSON *en = cJSON_GetObjectItem(a, "enabled");
+                c->alarms[idx].enabled = en ? cJSON_IsTrue(en) : true;
+                const cJSON *lbl = cJSON_GetObjectItem(a, "label");
+                strlcpy(c->alarms[idx].label, cJSON_IsString(lbl) ? lbl->valuestring : "",
+                        sizeof(c->alarms[idx].label));
+                const cJSON *snd = cJSON_GetObjectItem(a, "sound");
+                strlcpy(c->alarms[idx].sound, cJSON_IsString(snd) ? snd->valuestring : "beep",
+                        sizeof(c->alarms[idx].sound));
+                const cJSON *snz = cJSON_GetObjectItem(a, "snooze");
+                c->alarms[idx].snooze_min =
+                    (cJSON_IsNumber(snz) && snz->valueint > 0) ? snz->valueint : 5;
+                uint8_t mask = 0;
+                const cJSON *days = cJSON_GetObjectItem(a, "days");
+                if (cJSON_IsArray(days)) {
+                    const cJSON *d;
+                    cJSON_ArrayForEach(d, days) {
+                        if (cJSON_IsNumber(d) && d->valueint >= 1 && d->valueint <= 7)
+                            mask |= (uint8_t)(1 << (d->valueint - 1));
+                    }
+                }
+                c->alarms[idx].days = mask;
+                c->alarm_count++;
+            }
+        }
     }
     const cJSON *crypto = cJSON_GetObjectItem(root, "crypto");
     if (crypto) {
@@ -293,12 +342,12 @@ static void cfg_apply_json(home_cfg_t *c, const cJSON *root)
     const cJSON *ents = cJSON_GetObjectItem(root, "entitlements");
     if (cJSON_IsArray(ents)) {
         c->alerts_unlocked = false;
+        c->alarm_unlocked = false;
         const cJSON *e;
         cJSON_ArrayForEach(e, ents) {
-            if (cJSON_IsString(e) && !strcmp(e->valuestring, "crypto-alerts")) {
-                c->alerts_unlocked = true;
-                break;
-            }
+            if (!cJSON_IsString(e)) continue;
+            if (!strcmp(e->valuestring, "crypto-alerts")) c->alerts_unlocked = true;
+            else if (!strcmp(e->valuestring, "clock-alarm")) c->alarm_unlocked = true;
         }
     }
     const cJSON *slide = cJSON_GetObjectItem(root, "slideshow");
@@ -1271,6 +1320,207 @@ static void alert_show(int idx, double price)
              s.cfg.alerts[idx].price, price);
 }
 
+/* ============================================================== alarms */
+
+/* a custom uploaded sound (a path / .wav) loops natively; presets are silent
+ * here and beep via alarm_beep_preset() each second instead. */
+static void alarm_play_sound(int idx)
+{
+    const char *snd = s.cfg.alarms[idx].sound;
+    if (!strchr(snd, '/') && !strstr(snd, ".wav")) {
+        return;
+    }
+    char path[96];
+    if (snd[0] == '/') {
+        snprintf(path, sizeof(path), "%s%s",
+                 storage_sd_mounted() ? STORAGE_SD_BASE : STORAGE_LFS_BASE, snd);
+    } else if (!strncmp(snd, "pages/", 6)) {
+        snprintf(path, sizeof(path), "%s/%s",
+                 storage_sd_mounted() ? STORAGE_SD_BASE : STORAGE_LFS_BASE, snd);
+    } else {
+        strlcpy(path, snd, sizeof(path));
+    }
+    audio_engine_play_file(path, true);
+}
+
+/* re-emit a preset beep so a preset alarm keeps ringing until dismissed
+ * (called once a second by alarm_check while the overlay is up). */
+static void alarm_beep_preset(int idx)
+{
+    const char *snd = s.cfg.alarms[idx].sound;
+    if (strchr(snd, '/') || strstr(snd, ".wav")) {
+        return; /* file sound loops on its own */
+    }
+    static bool toggle;
+    toggle = !toggle;
+    if (!strcmp(snd, "siren")) {
+        audio_engine_tone(toggle ? 1100 : 700, 480, 80);
+    } else if (!strcmp(snd, "chime")) {
+        audio_engine_tone(toggle ? 1318 : 1047, 260, 70);
+    } else { /* beep */
+        audio_engine_tone(880, 250, 75);
+    }
+}
+
+static void alarm_snooze_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s.alarm_overlay) {
+        lv_obj_delete(s.alarm_overlay);
+        s.alarm_overlay = NULL;
+    }
+    if (s.alarm_cur >= 0 && s.alarm_cur < MAX_ALARMS) {
+        int mins = s.cfg.alarms[s.alarm_cur].snooze_min;
+        if (mins <= 0) mins = 5;
+        s.alarm_snooze_until[s.alarm_cur] =
+            (int64_t)esp_log_timestamp() + (int64_t)mins * 60 * 1000;
+    }
+    s.alarm_cur = -1;
+    audio_engine_stop();
+}
+
+static void alarm_stop_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s.alarm_overlay) {
+        lv_obj_delete(s.alarm_overlay);
+        s.alarm_overlay = NULL;
+    }
+    if (s.alarm_cur >= 0 && s.alarm_cur < MAX_ALARMS) {
+        s.alarm_snooze_until[s.alarm_cur] = 0; /* drop any pending snooze */
+    }
+    s.alarm_cur = -1;
+    audio_engine_stop();
+}
+
+/* full-screen alarm on the top layer (covers any page — native or package) */
+static void alarm_show(int idx)
+{
+    if (!display_engine_lock(500)) {
+        return;
+    }
+    if (s.alarm_overlay) {
+        display_engine_unlock();
+        return;
+    }
+    s.alarm_cur = idx;
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    s.alarm_overlay = ov;
+    lv_obj_set_size(ov, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(ov, lv_color_hex(0x081420), 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(ov, 4, 0);
+    lv_obj_set_style_border_color(ov, lv_color_hex(COL_ACCENT), 0);
+    lv_obj_set_style_radius(ov, 0, 0);
+    lv_obj_remove_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(ov);
+#if LV_FONT_MONTSERRAT_28
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+#endif
+    lv_obj_set_style_text_color(title, lv_color_hex(COL_ACCENT), 0);
+    lv_label_set_text(title, LV_SYMBOL_BELL "  ALARM");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 16);
+
+    lv_obj_t *tlbl = lv_label_create(ov);
+#if LV_FONT_MONTSERRAT_48
+    lv_obj_set_style_text_font(tlbl, &lv_font_montserrat_48, 0);
+#endif
+    lv_obj_set_style_text_color(tlbl, lv_color_hex(COL_FG), 0);
+    lv_label_set_text(tlbl, s.cfg.alarms[idx].time);
+    lv_obj_align(tlbl, LV_ALIGN_CENTER, 0, -40);
+
+    if (s.cfg.alarms[idx].label[0]) {
+        lv_obj_t *ll = lv_label_create(ov);
+#if LV_FONT_MONTSERRAT_28
+        lv_obj_set_style_text_font(ll, &lv_font_montserrat_28, 0);
+#endif
+        lv_obj_set_style_text_color(ll, lv_color_hex(0x848E9C), 0);
+        lv_label_set_text(ll, s.cfg.alarms[idx].label);
+        lv_obj_align(ll, LV_ALIGN_CENTER, 0, 14);
+    }
+
+    lv_obj_t *snz = lv_button_create(ov);
+    lv_obj_set_size(snz, 200, 56);
+    lv_obj_align(snz, LV_ALIGN_BOTTOM_LEFT, 20, -16);
+    lv_obj_set_style_bg_color(snz, lv_color_hex(COL_ACCENT), 0);
+    lv_obj_set_style_radius(snz, 12, 0);
+    lv_obj_t *snzl = lv_label_create(snz);
+#if LV_FONT_MONTSERRAT_20
+    lv_obj_set_style_text_font(snzl, &lv_font_montserrat_20, 0);
+#endif
+    lv_obj_set_style_text_color(snzl, lv_color_hex(0x000000), 0);
+    lv_label_set_text(snzl, LV_SYMBOL_MUTE "  SNOOZE");
+    lv_obj_center(snzl);
+    lv_obj_add_event_cb(snz, alarm_snooze_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *stp = lv_button_create(ov);
+    lv_obj_set_size(stp, 200, 56);
+    lv_obj_align(stp, LV_ALIGN_BOTTOM_RIGHT, -20, -16);
+    lv_obj_set_style_bg_color(stp, lv_color_hex(COL_RED), 0);
+    lv_obj_set_style_radius(stp, 12, 0);
+    lv_obj_t *stpl = lv_label_create(stp);
+#if LV_FONT_MONTSERRAT_20
+    lv_obj_set_style_text_font(stpl, &lv_font_montserrat_20, 0);
+#endif
+    lv_obj_set_style_text_color(stpl, lv_color_hex(0xFFFFFF), 0);
+    lv_label_set_text(stpl, LV_SYMBOL_STOP "  STOP");
+    lv_obj_center(stpl);
+    lv_obj_add_event_cb(stp, alarm_stop_cb, LV_EVENT_CLICKED, NULL);
+
+    display_engine_unlock();
+
+    alarm_play_sound(idx);  /* file sounds loop */
+    alarm_beep_preset(idx); /* preset: first beep immediately */
+    ESP_LOGI(TAG, "ALARM %s %s", s.cfg.alarms[idx].time, s.cfg.alarms[idx].label);
+}
+
+/* global 1 Hz check: fires alarms whose time/day match, and snooze re-fires */
+static void alarm_check(lv_timer_t *t)
+{
+    (void)t;
+    if (s.alarm_overlay) {
+        if (s.alarm_cur >= 0) alarm_beep_preset(s.alarm_cur); /* keep ringing */
+        return;
+    }
+    if (!s.cfg.alarm_unlocked || s.cfg.alarm_count == 0) {
+        return;
+    }
+    time_t now = time(NULL);
+    if (now < 1600000000) { /* time not synced yet */
+        return;
+    }
+    int64_t now_ms = (int64_t)esp_log_timestamp();
+    time_t local = now + (time_t)s.cfg.tz_offset_min * 60;
+    struct tm tm;
+    gmtime_r(&local, &tm);
+    int dnum = (tm.tm_wday == 0) ? 7 : tm.tm_wday; /* Mon=1..Sun=7 */
+    uint8_t wbit = (uint8_t)(1 << (dnum - 1));
+    int64_t minute_key =
+        (int64_t)(local / 86400) * 1440 + tm.tm_hour * 60 + tm.tm_min;
+
+    for (int i = 0; i < s.cfg.alarm_count; i++) {
+        if (!s.cfg.alarms[i].enabled) continue;
+        if (s.alarm_snooze_until[i] > 0) { /* snoozed: re-fire on expiry */
+            if (now_ms >= s.alarm_snooze_until[i]) {
+                s.alarm_snooze_until[i] = 0;
+                alarm_show(i);
+                return;
+            }
+            continue;
+        }
+        int hh = -1, mm = -1;
+        if (sscanf(s.cfg.alarms[i].time, "%d:%d", &hh, &mm) != 2) continue;
+        if (hh != tm.tm_hour || mm != tm.tm_min) continue;
+        if (s.cfg.alarms[i].days != 0 && !(s.cfg.alarms[i].days & wbit)) continue;
+        if (s.alarm_armed_key[i] == minute_key) continue; /* already fired this minute */
+        s.alarm_armed_key[i] = minute_key;
+        alarm_show(i);
+        return;
+    }
+}
+
 /* ============================================================ slideshow */
 
 /** Where slideshow images live: SD when mounted, else LittleFS. */
@@ -1893,6 +2143,11 @@ void home_ui_show_home(void)
         return;
     }
     goto_page(0, true);
+    /* one global 1 Hz timer drives clock alarms regardless of the visible page */
+    if (!s.alarm_timer) {
+        s.alarm_cur = -1;
+        s.alarm_timer = lv_timer_create(alarm_check, 1000, NULL);
+    }
     display_engine_unlock();
 }
 
@@ -2011,6 +2266,17 @@ esp_err_t home_ui_reload(void)
     }
     destroy_pages();
     cfg_load(&s.cfg);
+    /* reloaded alarms: drop any ringing/snooze so the new set re-arms cleanly */
+    if (s.alarm_overlay) {
+        lv_obj_delete(s.alarm_overlay);
+        s.alarm_overlay = NULL;
+    }
+    s.alarm_cur = -1;
+    audio_engine_stop();
+    for (int i = 0; i < MAX_ALARMS; i++) {
+        s.alarm_snooze_until[i] = 0;
+        s.alarm_armed_key[i] = 0;
+    }
     setup_pages_from_cfg();
     ccp_board_set_brightness(s.cfg.brightness);
     if (s.owns_screen) {
