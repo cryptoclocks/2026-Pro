@@ -27,14 +27,8 @@ const CATALOG: CatalogSeed[] = [
     description: "Full-screen + sound alerts when a coin crosses your high/low price (needs admin approval).", priceCents: 4900, currency: "thb" },
   { slug: "weather", title: "Weather", kind: "PAGE", icon: "cloud",
     description: "Local forecast, hi/lo, conditions.", priceCents: 0, currency: "thb" },
-  { slug: "news-ticker", title: "News Ticker", kind: "PAGE", icon: "newspaper",
-    description: "Scrolling headlines from your feeds.", priceCents: 0, currency: "thb" },
   { slug: "calendar", title: "Calendar", kind: "PAGE", icon: "event",
     description: "Today's agenda from Google Calendar.", priceCents: 0, currency: "thb" },
-  { slug: "stocks", title: "Stocks", kind: "PAGE", icon: "trending_up",
-    description: "Track equities & indices alongside crypto.", priceCents: 0, currency: "thb" },
-  { slug: "fear-greed", title: "Fear & Greed", kind: "PAGE", icon: "speed",
-    description: "Crypto market sentiment gauge.", priceCents: 0, currency: "thb" },
 ];
 
 @Injectable()
@@ -58,6 +52,16 @@ export class MarketplaceService implements OnModuleInit {
         })
         .catch((e) => this.log.warn(`seed ${c.slug}: ${e}`));
     }
+    // Prune: hide built-in pages we no longer offer (e.g. removed from CATALOG).
+    // Only touches seed rows (authorId == null) so custom/published pages — which
+    // always have an author — are never unpublished.
+    await this.prisma.marketplaceItem
+      .updateMany({
+        where: { slug: { notIn: CATALOG.map((c) => c.slug) }, authorId: null, published: true },
+        data: { published: false },
+      })
+      .then((r) => r.count && this.log.log(`pruned ${r.count} retired catalog page(s)`))
+      .catch((e) => this.log.warn(`prune: ${e}`));
   }
 
   private get stripeReady(): boolean {
