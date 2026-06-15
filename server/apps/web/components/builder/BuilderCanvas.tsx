@@ -166,6 +166,15 @@ function fontPx(style?: WidgetNode["style"]) {
   return m ? Number(m[1]) : 14;
 }
 
+/* LVGL line-heights (px) for the bundled fonts — these differ from CSS's default
+   ~1.2em leading, which is why text (esp. the big montserrat_80 clock) used to
+   sit lower in the artboard than on the device. Match them so the preview is
+   WYSIWYG. montserrat_80 is a cropped digits+colon face with line-height 58. */
+const LVGL_LINE_HEIGHT: Record<number, number> = { 14: 16, 20: 23, 28: 32, 48: 57, 80: 58 };
+function fontLineHeight(px: number) {
+  return LVGL_LINE_HEIGHT[px] ?? Math.round(px * 1.15);
+}
+
 /** Line chart matching what lv_chart (type line) shows on the device. */
 function SimLineChart({ series, color, w, h }: { series: number[]; color: string; w: number; h: number }) {
   if (series.length < 2) return null;
@@ -204,11 +213,16 @@ function WidgetInner({
   switch (w.type) {
     case "label": {
       const txt = ov?.text ?? (p.text as string) ?? "Label";
-      // LVGL labels draw from the top of their box; size comes from the font, with
-      // an optional transform scale (device uses lv transform_scale → same effect)
-      const px = fontPx(w.style) * (Number(w.style?.scale) > 0 ? Number(w.style?.scale) : 1);
+      // size comes from the font, with an optional transform scale (device uses lv
+      // transform_scale → same effect). Use LVGL's line-height (not CSS's larger
+      // leading) and vertically centre a single-line label in its box the way the
+      // firmware now does, so the big clock sits at the same height here & on-device.
+      const scale = Number(w.style?.scale) > 0 ? Number(w.style?.scale) : 1;
+      const px = fontPx(w.style) * scale;
+      const lh = fontLineHeight(fontPx(w.style)) * scale;
+      const singleLine = !String(txt).includes("\n");
       return (
-        <span style={{ fontSize: px, lineHeight: 1.2, width: "100%", alignSelf: "flex-start" }}>
+        <span style={{ fontSize: px, lineHeight: `${lh}px`, width: "100%", alignSelf: singleLine ? "center" : "flex-start" }}>
           {txt}
         </span>
       );

@@ -862,6 +862,19 @@ static void build_widget_tree(lv_obj_t *parent, const cJSON *node)
         lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
     }
 
+    /* LVGL draws label text from the top of the box; the web Builder centres a
+     * single-line label in its box. Match it so a tall clock label (montserrat_80,
+     * line-height 58, in a ~92px box) sits at the same height the admin shows.
+     * Only when the box is taller than one line but under two (single-line w/ slack)
+     * so multi-line labels keep their top-anchored wrap. */
+    if (!strcmp(ent->type, "label")) {
+        lv_coord_t lh = lv_font_get_line_height(lv_obj_get_style_text_font(obj, LV_PART_MAIN));
+        lv_coord_t bh = (lv_coord_t)jnum(node, "h", 50);
+        if (lh > 0 && bh > lh && bh < 2 * lh) {
+            lv_obj_set_style_pad_top(obj, (bh - lh) / 2, 0);
+        }
+    }
+
     parse_bindings(node, (int)(ent - s_ui.widgets));
     parse_actions(node, ent);
     if (ent->action_count > 0 || ent->wasm_module[0]) {
