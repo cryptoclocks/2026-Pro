@@ -504,6 +504,8 @@ static void apply_style(lv_obj_t *obj, const cJSON *style)
             lv_obj_set_width(obj, LV_SIZE_CONTENT);
             lv_obj_set_height(obj, LV_SIZE_CONTENT);
         }
+        lv_obj_set_style_transform_pivot_x(obj, 0, 0);
+        lv_obj_set_style_transform_pivot_y(obj, 0, 0);
         lv_obj_set_style_transform_scale(obj, (int)(it->valuedouble * 256.0 + 0.5), 0);
     }
     if ((c = jstr(style, "align", NULL))) {
@@ -868,10 +870,17 @@ static void build_widget_tree(lv_obj_t *parent, const cJSON *node)
      * Only when the box is taller than one line but under two (single-line w/ slack)
      * so multi-line labels keep their top-anchored wrap. */
     if (!strcmp(ent->type, "label")) {
-        lv_coord_t lh = lv_font_get_line_height(lv_obj_get_style_text_font(obj, LV_PART_MAIN));
-        lv_coord_t bh = (lv_coord_t)jnum(node, "h", 50);
-        if (lh > 0 && bh > lh && bh < 2 * lh) {
-            lv_obj_set_style_pad_top(obj, (bh - lh) / 2, 0);
+        /* Skip transform-scaled labels: they use LV_SIZE_CONTENT + transform_scale,
+         * where adding a pad_top destabilises the layout so lv_obj_update_layout
+         * never settles (LVGL task spins -> task_wdt). Only centre fixed-box labels. */
+        const cJSON *st = cJSON_GetObjectItem(node, "style");
+        const bool scaled = st && cJSON_GetObjectItem(st, "scale");
+        if (!scaled) {
+            lv_coord_t lh = lv_font_get_line_height(lv_obj_get_style_text_font(obj, LV_PART_MAIN));
+            lv_coord_t bh = (lv_coord_t)jnum(node, "h", 50);
+            if (lh > 0 && bh > lh && bh < 2 * lh) {
+                lv_obj_set_style_pad_top(obj, (bh - lh) / 2, 0);
+            }
         }
     }
 
