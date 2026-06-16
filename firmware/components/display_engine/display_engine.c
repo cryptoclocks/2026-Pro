@@ -24,9 +24,11 @@ static const char *TAG = "display";
 #define LVGL_TASK_CORE    1
 #define LVGL_TICK_MS      5
 
-/* One bounce chunk = 24 panel rows = 320*24*2 = 15 KB of DMA-capable RAM (x2).
- * Internal DIRAM is the scarcest resource; 20 chunks/frame costs little. */
-#define TRANS_ROWS        24
+/* One bounce chunk = N panel rows = 320*N*2 bytes of DMA-capable RAM (x2).
+ * Internal DIRAM is the scarcest resource (it was exhausting under the full page
+ * set), so use small 12-row chunks (~7.5 KB x2) — more SPI transactions, but it
+ * frees ~15 KB of internal RAM for LVGL to render pages. */
+#define TRANS_ROWS        12
 #define TRANS_PIXELS      (CCP_LCD_H_RES * TRANS_ROWS)
 
 #if CCP_DISPLAY_ROTATION == 90 || CCP_DISPLAY_ROTATION == 270
