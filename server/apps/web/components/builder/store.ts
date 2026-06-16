@@ -3,7 +3,7 @@
 import { create } from "zustand";
 import type { Layout, WidgetNode, WidgetType } from "@ccp/shared";
 import { SCREEN } from "@ccp/shared";
-import { PROFILE_SOCIAL_ASSETS, SLIDESHOW_ASSETS, TEMPLATES, type TemplateKey } from "./templates";
+import { CLOCK_ASSETS, PROFILE_SOCIAL_ASSETS, SLIDESHOW_ASSETS, TEMPLATES, type TemplateKey } from "./templates";
 import { defaultProps } from "./widgetProps";
 
 export type Orientation = "landscape" | "portrait";
@@ -51,7 +51,7 @@ export const WEATHER_ASSETS: AssetEntry[] = (
   src: `/weather-icons/${id}.gif`,
 }));
 
-const BUILTIN_ASSETS: AssetEntry[] = [...WEATHER_ASSETS, ...PROFILE_SOCIAL_ASSETS, ...SLIDESHOW_ASSETS] as AssetEntry[];
+const BUILTIN_ASSETS: AssetEntry[] = [...WEATHER_ASSETS, ...CLOCK_ASSETS, ...PROFILE_SOCIAL_ASSETS, ...SLIDESHOW_ASSETS] as AssetEntry[];
 export type CompiledWasm = {
   moduleId: string;
   path: string;
@@ -1388,11 +1388,11 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       name: t.name === "Blank" ? get().name : t.name,
       packageId:
         key === "led_toggle" ? "com.ccp.led-toggle" :
-        key === "clock" ? "com.ccp.clock-custom" :
+        key === "clock" ? "com.ccp.clock" :
         key === "calendar" ? "com.ccp.calendar" :
-        key === "crypto" ? "com.ccp.crypto-custom" :
+        key === "crypto" ? "com.ccp.crypto" :
         key === "crypto_big" ? "com.ccp.crypto-big" :
-        key === "slideshow" ? "com.ccp.slideshow-custom" :
+        key === "slideshow" ? "com.ccp.slideshow" :
         key === "profile" ? "com.ccp.profile" :
         key === "weather" ? "com.ccp.weather" :
         key === "welcome" ? "com.ccp.welcome-custom" :
@@ -1424,6 +1424,8 @@ export const useBuilder = create<BuilderState>((set, get) => ({
       assets:
         key === "weather"
           ? WEATHER_ASSETS.map((a) => ({ ...a }))
+          : key === "clock" || key === "welcome"
+            ? CLOCK_ASSETS.map((a) => ({ ...a }))
           : key === "profile"
             ? PROFILE_SOCIAL_ASSETS.map((a) => ({ ...a }))
             : key === "slideshow"

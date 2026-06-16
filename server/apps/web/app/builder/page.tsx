@@ -10,8 +10,8 @@ import {
   type DragEndEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import type { Layout, WidgetType } from "@ccp/shared";
-import { NOOP_LOGIC_SOURCE, UNAVAILABLE_LOGIC_SOURCE, useBuilder, type CompiledWasm, type WasmModuleConfig } from "@/components/builder/store";
+import type { Layout, WidgetNode, WidgetType } from "@ccp/shared";
+import { NOOP_LOGIC_SOURCE, UNAVAILABLE_LOGIC_SOURCE, useBuilder, type AssetEntry, type CompiledWasm, type WasmModuleConfig } from "@/components/builder/store";
 import { WidgetPalette } from "@/components/builder/WidgetPalette";
 import { BuilderCanvas } from "@/components/builder/BuilderCanvas";
 import { Inspector } from "@/components/builder/Inspector";
@@ -46,9 +46,9 @@ type BuilderPageResponse = SavedBuilderPage & {
    template. This replaces the old "starter template" + "saved page" split. */
 const OFFICIAL_PAGES = [
   { code: "P001", label: "Profile", key: "profile", pkg: "com.ccp.profile" },
-  { code: "P002", label: "Clock", key: "clock", pkg: "com.ccp.clock-custom" },
-  { code: "P003", label: "Crypto", key: "crypto", pkg: "com.ccp.crypto-custom" },
-  { code: "P004", label: "Photo Slideshow", key: "slideshow", pkg: "com.ccp.slideshow-custom" },
+  { code: "P002", label: "Clock", key: "clock", pkg: "com.ccp.clock" },
+  { code: "P003", label: "Crypto", key: "crypto", pkg: "com.ccp.crypto" },
+  { code: "P004", label: "Photo Slideshow", key: "slideshow", pkg: "com.ccp.slideshow" },
   { code: "P005", label: "Weather", key: "weather", pkg: "com.ccp.weather" },
   { code: "P006", label: "Calendar", key: "calendar", pkg: "com.ccp.calendar" },
 ] as const;
@@ -301,8 +301,9 @@ export default function BuilderPage() {
         setMessage("Bundling assets…");
         for (const asset of b.assets) {
           try {
-            const buf = await (await fetch(asset.src)).arrayBuffer();
-            assetFiles.push({ path: asset.path, base64: bytesToBase64(new Uint8Array(buf)) });
+            const target = asset.type === "image" ? findImageAssetTarget(layout, asset) : null;
+            const bytes = await assetBytesForPublish(asset, target);
+            assetFiles.push({ path: asset.path, base64: bytesToBase64(bytes) });
           } catch (err) {
             if (!savedPackageExists) throw new Error(`Could not read asset "${asset.id}": ${err instanceof Error ? err.message : err}`);
             // on re-publish a fetch failure is non-fatal — the server keeps the prior file
@@ -850,10 +851,16 @@ function assetIdFromName(name: string): string {
   return base || "asset";
 }
 
+/** Keep user uploads under the page's own asset folder inside the bundle. */
+function assetFolderFromPackageId(packageId: string): string {
+  return (packageId.split(".").pop() || "page").replace(/-custom$/, "").replace(/[^a-z0-9_-]+/gi, "_").toLowerCase();
+}
+
 /** Upload page assets (PNG/GIF/WAV) from disk; on Publish they're bundled into
     the package zip and the device extracts them to its SD card. */
 function AssetsPanel() {
   const assets = useBuilder((s) => s.assets);
+  const packageId = useBuilder((s) => s.packageId);
   const addAsset = useBuilder((s) => s.addAsset);
   const removeAsset = useBuilder((s) => s.removeAsset);
   const [err, setErr] = useState<string | null>(null);
@@ -872,7 +879,7 @@ function AssetsPanel() {
       const reader = new FileReader();
       reader.onload = () => {
         const id = assetIdFromName(file.name);
-        addAsset({ id, type, path: `assets/${id}.${ext}`, src: reader.result as string, sizeBytes: file.size });
+        addAsset({ id, type, path: `assets/${assetFolderFromPackageId(packageId)}/${id}.${ext}`, src: reader.result as string, sizeBytes: file.size });
       };
       reader.readAsDataURL(file);
     }
@@ -989,6 +996,77 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(binary);
+}
+
+function findImageAssetTarget(layout: Layout, asset: AssetEntry): { w: number; h: number } | null {
+  let bestW = 0;
+  let bestH = 0;
+  let bestArea = 0;
+  const visit = (widgets: WidgetNode[]) => {
+    for (const widget of widgets) {
+      const props = widget.props as Record<string, unknown> | undefined;
+      const src = props?.src;
+      if (widget.type === "image" && (src === asset.id || src === asset.path)) {
+        const w = Math.max(1, Math.round(widget.w));
+        const h = Math.max(1, Math.round(widget.h));
+        const area = w * h;
+        if (area > bestArea) {
+          bestW = w;
+          bestH = h;
+          bestArea = area;
+        }
+      }
+      if (widget.children?.length) visit(widget.children);
+    }
+  };
+  for (const page of layout.pages ?? []) visit(page.widgets ?? []);
+  return bestArea > 0 ? { w: bestW, h: bestH } : null;
+}
+
+async function assetBytesForPublish(asset: AssetEntry, target: { w: number; h: number } | null): Promise<Uint8Array> {
+  const res = await fetch(asset.src);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const blob = await res.blob();
+  const isPng =
+    asset.path.toLowerCase().endsWith(".png") ||
+    blob.type === "image/png" ||
+    asset.src.startsWith("data:image/png");
+  if (!target || !isPng) return new Uint8Array(await blob.arrayBuffer());
+  return resizePngToWidget(blob, target.w, target.h);
+}
+
+async function resizePngToWidget(blob: Blob, width: number, height: number): Promise<Uint8Array> {
+  const img = await loadImage(blob);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width));
+  canvas.height = Math.max(1, Math.round(height));
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Could not create image resize canvas");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const out = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((next) => {
+      if (next) resolve(next);
+      else reject(new Error("Could not encode resized PNG"));
+    }, "image/png");
+  });
+  return new Uint8Array(await out.arrayBuffer());
+}
+
+function loadImage(blob: Blob): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not decode image"));
+    };
+    img.src = url;
+  });
 }
 
 /** "1.2.3" -> "1.2.4"; falls back to appending .1 for non-semver strings. */

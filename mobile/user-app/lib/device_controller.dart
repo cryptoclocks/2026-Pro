@@ -49,7 +49,7 @@ class DeviceController extends ChangeNotifier {
   /// Catalog metadata (title/description/priceCents) for a slug.
   Map<String, dynamic>? catalogItem(String slug) {
     for (final c in catalog) {
-      if (c['slug'] == slug) return c;
+      if (c['slug'] == slug || c['runtimeSlug'] == slug) return c;
     }
     return null;
   }
@@ -67,10 +67,11 @@ class DeviceController extends ChangeNotifier {
   List<String> get availablePages {
     final pages = <String>[...allPages];
     for (final c in catalog) {
-      final slug = c['slug'] as String?;
-      if (c['kind'] == 'PAGE' && slug != null &&
-          entitlements.contains(slug) && !pages.contains(slug)) {
-        pages.add(slug);
+      final productSlug = c['slug'] as String?;
+      final runtimeSlug = (c['runtimeSlug'] as String?) ?? productSlug;
+      if (c['kind'] == 'PAGE' && productSlug != null && runtimeSlug != null &&
+          entitlements.contains(productSlug) && !pages.contains(runtimeSlug)) {
+        pages.add(runtimeSlug);
       }
     }
     for (final p in enabledPages) {
@@ -83,13 +84,8 @@ class DeviceController extends ChangeNotifier {
   /// a capitalised slug).
   String pageTitle(String slug) {
     if (_nativeTitles.containsKey(slug)) return _nativeTitles[slug]!;
-    final item = catalogItem(slug);
-    final title = item?['title'] as String?;
-    if (title != null && title.isNotEmpty) {
-      // a user-built (authored) page can share a name with a built-in one
-      // (e.g. native "Clock" vs your Builder "Clock") — mark it so they differ
-      return item?['authorId'] != null ? '$title (custom)' : title;
-    }
+    final title = catalogItem(slug)?['title'] as String?;
+    if (title != null && title.isNotEmpty) return title;
     return slug.isEmpty ? slug : slug[0].toUpperCase() + slug.substring(1);
   }
 
