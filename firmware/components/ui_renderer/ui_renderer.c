@@ -864,25 +864,6 @@ static void build_widget_tree(lv_obj_t *parent, const cJSON *node)
         lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
     }
 
-    /* LVGL draws label text from the top of the box; the web Builder centres a
-     * single-line label in its box. Match it so a tall clock label (montserrat_80,
-     * line-height 58, in a ~92px box) sits at the same height the admin shows.
-     * Only when the box is taller than one line but under two (single-line w/ slack)
-     * so multi-line labels keep their top-anchored wrap. */
-    if (!strcmp(ent->type, "label")) {
-        /* Skip transform-scaled labels: they use LV_SIZE_CONTENT + transform_scale,
-         * where adding a pad_top destabilises the layout so lv_obj_update_layout
-         * never settles (LVGL task spins -> task_wdt). Only centre fixed-box labels. */
-        const cJSON *st = cJSON_GetObjectItem(node, "style");
-        const bool scaled = st && cJSON_GetObjectItem(st, "scale");
-        if (!scaled) {
-            lv_coord_t lh = lv_font_get_line_height(lv_obj_get_style_text_font(obj, LV_PART_MAIN));
-            lv_coord_t bh = (lv_coord_t)jnum(node, "h", 50);
-            if (lh > 0 && bh > lh && bh < 2 * lh) {
-                lv_obj_set_style_pad_top(obj, (bh - lh) / 2, 0);
-            }
-        }
-    }
 
     parse_bindings(node, (int)(ent - s_ui.widgets));
     parse_actions(node, ent);
@@ -1013,8 +994,40 @@ esp_err_t ui_renderer_load_dir(const char *package_dir)
     return err;
 }
 
+/* Route cJSON's parse-tree allocations to PSRAM instead of the scarce internal
+ * DIRAM. A package layout.json parses into hundreds of sub-128-byte nodes; under
+ * CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=128 those land in internal RAM and fragment
+ * it. A small layout (weather ~7 KB) fits; a larger one (the clock ~13 KB) pushed
+ * the largest free internal block below what LVGL needs to build the page — the
+ * load failed or lv_obj_update_layout spun until task_wdt fired. PSRAM has MBs free
+ * and nothing here runs from an ISR, so parsing from PSRAM is safe. */
+static void *ui_cjson_malloc(size_t sz) { return heap_caps_malloc(sz, MALLOC_CAP_SPIRAM); }
+static void ui_cjson_free(void *p) { heap_caps_free(p); }
+
+/* LVGL custom allocator (CONFIG_LV_USE_CUSTOM_MALLOC): the whole LVGL heap —
+ * object tree, styles, draw descriptors — comes from the 8 MB PSRAM instead of the
+ * ~300 KB internal DRAM that DMA/WiFi/task-stacks need. Under the previous CLIB
+ * malloc, LVGL's many sub-128-byte allocations fell into internal RAM (per
+ * SPIRAM_MALLOC_ALWAYSINTERNAL=128) and fragmented it until a large package layout
+ * (the 13 KB clock) could no longer be built. heap_caps_* keeps everything in PSRAM.
+ * Custom mode requires the full lv_mem core surface, mirroring LVGL's CLIB backend. */
+void lv_mem_init(void) { return; }
+void lv_mem_deinit(void) { return; }
+lv_mem_pool_t lv_mem_add_pool(void *mem, size_t bytes) { LV_UNUSED(mem); LV_UNUSED(bytes); return NULL; }
+void lv_mem_remove_pool(lv_mem_pool_t pool) { LV_UNUSED(pool); }
+void *lv_malloc_core(size_t size) { return heap_caps_malloc(size, MALLOC_CAP_SPIRAM); }
+void *lv_realloc_core(void *p, size_t new_size)
+{
+    return heap_caps_realloc(p, new_size, MALLOC_CAP_SPIRAM);
+}
+void lv_free_core(void *p) { heap_caps_free(p); }
+void lv_mem_monitor_core(lv_mem_monitor_t *mon_p) { LV_UNUSED(mon_p); }
+lv_result_t lv_mem_test_core(void) { return LV_RESULT_OK; }
+
 esp_err_t ui_renderer_init(const ui_hooks_t *hooks)
 {
+    cJSON_Hooks ch = { .malloc_fn = ui_cjson_malloc, .free_fn = ui_cjson_free };
+    cJSON_InitHooks(&ch);
     if (hooks) {
         s_ui.hooks = *hooks;
     }

@@ -2094,11 +2094,17 @@ static void setup_pages_from_cfg(void)
         page_t *p = &s.pages[s.page_count];
         memset(p, 0, sizeof(*p));
         strlcpy(p->id, s.cfg.pages[i], sizeof(p->id));
-        if (!strcmp(p->id, "clock")) p->kind = PAGE_CLOCK;
-        else if (!strcmp(p->id, "crypto")) p->kind = PAGE_CRYPTO;
-        else if (!strcmp(p->id, "slideshow")) p->kind = PAGE_SLIDESHOW;
-        else if (sync_manager_installed_dir_for_slug(p->id, p->dir, sizeof(p->dir))) {
+        /* Prefer an installed custom package over the built-in renderer for the same
+         * slug so a published com.ccp.<slug> (the Builder clock as com.ccp.clock)
+         * replaces the native page — admin/device/app share one canonical slug. */
+        if (sync_manager_installed_dir_for_slug(p->id, p->dir, sizeof(p->dir))) {
             p->kind = PAGE_PACKAGE;
+        } else if (!strcmp(p->id, "clock")) {
+            p->kind = PAGE_CLOCK;
+        } else if (!strcmp(p->id, "crypto")) {
+            p->kind = PAGE_CRYPTO;
+        } else if (!strcmp(p->id, "slideshow")) {
+            p->kind = PAGE_SLIDESHOW;
         } else {
             continue; /* page id without an installed package -> skip */
         }

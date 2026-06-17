@@ -39,8 +39,10 @@ CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
 
 # ---------- LVGL 9 (managed component Kconfig) ----------
 CONFIG_LV_COLOR_DEPTH_16=y
-# clib malloc -> esp malloc -> PSRAM (frees the 64KB builtin pool from .bss)
-CONFIG_LV_USE_CLIB_MALLOC=y
+# custom malloc -> lv_*_core in ui_renderer route ALL LVGL allocs to PSRAM
+# (clib malloc still let sub-128B allocs fall into scarce internal DRAM per
+# SPIRAM_MALLOC_ALWAYSINTERNAL, fragmenting it until large package layouts failed)
+CONFIG_LV_USE_CUSTOM_MALLOC=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
