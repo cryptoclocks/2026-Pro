@@ -527,7 +527,14 @@ static lv_obj_t *create_widget(lv_obj_t *parent, const cJSON *node, widget_ent_t
     if (!strcmp(type, "label")) {
         obj = lv_label_create(parent);
         lv_label_set_text(obj, jstr(props, "text", ""));
-        lv_label_set_long_mode(obj, LV_LABEL_LONG_WRAP);
+        /* CLIP, not WRAP: Builder labels carry an explicit x/y/w/h box, so they
+         * must keep that fixed size. LV_LABEL_LONG_WRAP re-derives the label's
+         * size from its text content on every layout pass; with a large font
+         * (e.g. the clock's montserrat_80) the derived size and the fixed box
+         * disagree, so layout_update_core keeps re-setting scr_layout_inv and
+         * lv_obj_update_layout spins forever in the display refresh (task_wdt on
+         * the LVGL task, blank/frozen page). CLIP honours the fixed box. */
+        lv_label_set_long_mode(obj, LV_LABEL_LONG_CLIP);
     } else if (!strcmp(type, "button")) {
         obj = lv_button_create(parent);
         lv_obj_t *lbl = lv_label_create(obj);
