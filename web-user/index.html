@@ -240,8 +240,8 @@ function imgToSquarePng(file, size){
     img.onerror=()=>rej('not a valid image'); img.src=URL.createObjectURL(file); });
 }
 const Hub = {
-  async catalog(){ try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/items`); return await r.json(); }catch(_){ return []; } },
-  async entitlements(deviceId){ const t=Auth.token(); if(!t)return[]; try{ const r=await tfetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/entitlements`,{headers:{'Authorization':'Bearer '+t}}); return await r.json(); }catch(_){ return []; } },
+  async catalog(){ try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/items`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
+  async entitlements(deviceId){ const t=Auth.token(); if(!t)return[]; try{ const r=await tfetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/entitlements`,{headers:{'Authorization':'Bearer '+t}}); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
   async checkout(slug, deviceId){ const t=Auth.token(); if(!t) return {error:'Please login first'};
     try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/checkout`, {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+t}, body:JSON.stringify({slug, deviceId})}, 15000); return await r.json(); }catch(e){ return {error:String(e)}; } },
   async resolveSocial(url, platform){ const t=Auth.token(); if(!t) return {error:'Please login first'};
