@@ -60,16 +60,19 @@ static volatile bool s_ui_loaded = false;
 static void publish_status(void)
 {
     char ip[16] = "";
-    char pkg[64] = "", ver[16] = "";
+    char pkg[64] = "", ver[16] = "", mac[18] = "";
     net_manager_ip(ip, sizeof(ip));
     sync_manager_active_id(pkg, sizeof(pkg));
     sync_manager_active_version(ver, sizeof(ver));
+    device_security_mac_str(mac, sizeof(mac));
 
-    char json[256];
+    /* include id+mac so the server maps this encId topic back to the plaintext
+       device id (and MAC) without decrypting the topic. */
+    char json[320];
     snprintf(json, sizeof(json),
-             "{\"online\":true,\"fw\":\"%s\",\"pkg\":\"%s\",\"pkg_ver\":\"%s\","
+             "{\"online\":true,\"id\":\"%s\",\"mac\":\"%s\",\"fw\":\"%s\",\"pkg\":\"%s\",\"pkg_ver\":\"%s\","
              "\"ip\":\"%s\",\"rssi\":%d,\"locked\":%s}",
-             ota_manager_running_version(), pkg, ver, ip, net_manager_rssi(),
+             device_security_id(), mac, ota_manager_running_version(), pkg, ver, ip, net_manager_rssi(),
              device_security_locked() ? "true" : "false");
     conn_publish_status(json);
 }
