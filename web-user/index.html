@@ -99,17 +99,43 @@ const Auth = {
   hdr(){ return { 'apikey':CFG.supabaseAnonKey, 'Content-Type':'application/json' }; },
   email(){ return LS.get('ccp_email'); },
   token(){ return LS.get('ccp_access_token'); },
-  save(email, tok){ LS.set('ccp_email', email||''); LS.set('ccp_access_token', tok||''); },
-  signOut(){ MqttRpc.disconnect(); LS.del('ccp_email'); LS.del('ccp_access_token'); },
-  async requestOtp(email){
-    try{ const r = await fetch(`${CFG.supabaseUrl}/auth/v1/otp`, {method:'POST', headers:this.hdr(), body:JSON.stringify({email, create_user:true})});
-      if(r.status>=400){ const m=await r.json(); return m.msg||m.error_description||('HTTP '+r.status); } return null;
-    }catch(e){ return String(e); }
+  refreshToken(){ return LS.get('ccp_refresh_token'); },
+  save(email, tok, refresh){
+    LS.set('ccp_email', email||'');
+    LS.set('ccp_access_token', tok||'');
+    if(refresh) LS.set('ccp_refresh_token', refresh);
   },
-  async verifyOtp(email, code){
-    try{ const r=await fetch(`${CFG.supabaseUrl}/auth/v1/verify`, {method:'POST', headers:this.hdr(), body:JSON.stringify({type:'email', email, token:code})});
-      if(r.status>=400) return null; const j=await r.json(); const e=j.user?.email||email; this.save(e, j.access_token||''); return e;
-    }catch(_){ return null; }
+  signOut(){
+    MqttRpc.disconnect();
+    LS.del('ccp_email');
+    LS.del('ccp_access_token');
+    LS.del('ccp_refresh_token');
+  },
+  tokenExpired(token, skewS=60){
+    if(!token) return true;
+    try{
+      const p=JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/').padEnd(Math.ceil(token.split('.')[1].length/4)*4,'=')));
+      return typeof p.exp!=='number'||p.exp<=Math.floor(Date.now()/1000)+skewS;
+    }catch(_){ return true; }
+  },
+  async refresh(){
+    const refresh=this.refreshToken();
+    if(!refresh||!CFG.supabaseUrl||!CFG.supabaseAnonKey){ this.signOut(); return ''; }
+    try{
+      const r=await fetch(`${CFG.supabaseUrl}/auth/v1/token?grant_type=refresh_token`,{
+        method:'POST',headers:this.hdr(),body:JSON.stringify({refresh_token:refresh})
+      });
+      if(!r.ok){ this.signOut(); return ''; }
+      const j=await r.json(), tok=j.access_token||'';
+      if(!tok){ this.signOut(); return ''; }
+      this.save(j.user?.email||this.email(),tok,j.refresh_token||refresh);
+      return tok;
+    }catch(_){ this.signOut(); return ''; }
+  },
+  async accessToken(forceRefresh=false){
+    const tok=this.token();
+    if(!forceRefresh&&!this.tokenExpired(tok)) return tok;
+    return this.refresh();
   },
   // Google: redirect through Supabase OAuth; token comes back in the URL hash.
   googleRedirect(){
@@ -133,9 +159,10 @@ const Auth = {
     if(!location.hash.includes('access_token=')) return false;
     const p = new URLSearchParams(location.hash.slice(1));
     const tok = p.get('access_token'); if(!tok) return false;
+    const refresh = p.get('refresh_token')||'';
     let email='';
     try{ const r=await fetch(`${CFG.supabaseUrl}/auth/v1/user`, {headers:{apikey:CFG.supabaseAnonKey, Authorization:'Bearer '+tok}}); const j=await r.json(); email=j.email||''; }catch(_){}
-    this.save(email, tok);
+    this.save(email, tok, refresh);
     history.replaceState({}, document.title, location.pathname);
     return true;
   },
@@ -147,7 +174,7 @@ const MqttRpc = {
   async connect(){
     if(this.client?.connected) return this;
     if(!CFG.mqttWsUrl) throw new Error('MQTT WSS URL is not configured');
-    const token=Auth.token(), userId=jwtSubject(token);
+    const token=await Auth.accessToken(), userId=jwtSubject(token);
     if(!token||!userId) throw new Error('Sign in again before connecting');
     this.userId=userId;
     const c=mqtt.connect(CFG.mqttWsUrl,{
@@ -228,6 +255,17 @@ class CloudDeviceApi {
 
 /* ===================== Hub API (cloud) ===================== */
 function tfetch(url, opts={}, ms=8000){ const ac=new AbortController(); const t=setTimeout(()=>ac.abort(), ms); return fetch(url, {...opts, signal:ac.signal}).finally(()=>clearTimeout(t)); }
+async function hubFetch(url, opts={}, ms=8000){
+  let token=await Auth.accessToken();
+  if(!token) return new Response(null,{status:401});
+  const request=(t)=>tfetch(url,{...opts,headers:{...(opts.headers||{}),Authorization:'Bearer '+t}},ms);
+  let r=await request(token);
+  if(r.status===401){
+    token=await Auth.accessToken(true);
+    if(token) r=await request(token);
+  }
+  return r;
+}
 /* Centre-crop an image File to a square and re-encode as a `size`×`size` PNG (the
  * device wants small fixed-size assets — same as the Flutter app's avatar flow). */
 function imgToSquarePng(file, size){
@@ -241,13 +279,13 @@ function imgToSquarePng(file, size){
 }
 const Hub = {
   async catalog(){ try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/items`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
-  async entitlements(deviceId){ const t=Auth.token(); if(!t)return[]; try{ const r=await tfetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/entitlements`,{headers:{'Authorization':'Bearer '+t}}); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
-  async checkout(slug, deviceId){ const t=Auth.token(); if(!t) return {error:'Please login first'};
-    try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/checkout`, {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+t}, body:JSON.stringify({slug, deviceId})}, 15000); return await r.json(); }catch(e){ return {error:String(e)}; } },
-  async resolveSocial(url, platform){ const t=Auth.token(); if(!t) return {error:'Please login first'};
-    try{ const r=await tfetch(`${CFG.hubBase}/api/v1/social/resolve`, {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+t}, body:JSON.stringify({url, platform})}, 15000); if(r.status>=300) return {error:'HTTP '+r.status}; return await r.json(); }catch(e){ return {error:String(e)}; } },
-  async requestFeature(deviceId, page, feature){ const t=Auth.token(); if(!t) return 'Please login first';
-    try{ const r=await tfetch(`${CFG.hubBase}/api/v1/me/feature-requests`, {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+t}, body:JSON.stringify({deviceId, page, feature, detail:{}})}, 15000); return r.status>=300?('HTTP '+r.status):null; }catch(e){ return String(e); } },
+  async entitlements(deviceId){ try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/entitlements`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
+  async checkout(slug, deviceId){
+    try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/store/checkout`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({slug, deviceId})}, 15000); if(r.status===401)return{error:'Please sign in again'}; return await r.json(); }catch(e){ return {error:String(e)}; } },
+  async resolveSocial(url, platform){
+    try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/social/resolve`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url, platform})}, 15000); if(r.status===401)return{error:'Please sign in again'}; if(r.status>=300) return {error:'HTTP '+r.status}; return await r.json(); }catch(e){ return {error:String(e)}; } },
+  async requestFeature(deviceId, page, feature){
+    try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/me/feature-requests`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({deviceId, page, feature, detail:{}})}, 15000); return r.status===401?'Please sign in again':r.status>=300?('HTTP '+r.status):null; }catch(e){ return String(e); } },
 };
 
 /* Locked add-on UI (paid feature this device doesn't hold yet): title/price/desc +
@@ -310,8 +348,17 @@ function bindColors(root){ root.querySelectorAll('[data-color]').forEach(b=>{ b.
 /* ===================== App state + router ===================== */
 const App = { ctrl:null, route:'gate' };
 function render(html){ el('app').innerHTML = html; const a=el('app'); a.querySelectorAll('[data-back]').forEach(b=>b.onclick=()=>history.back()); bindColors(a); }
-function go(route, push=true){ App.route=route; if(push) history.pushState({route}, ''); draw(); }
-window.onpopstate = ()=>{ draw(); };
+function go(route, push=true){
+  App.route=route;
+  const state={route};
+  if(push) history.pushState(state, '', location.pathname);
+  else history.replaceState(state, '', location.pathname);
+  draw();
+}
+window.onpopstate = (event)=>{
+  App.route=event.state?.route || (App.ctrl?'device':Auth.email()?'connect':'welcome');
+  draw();
+};
 
 /* ---------- views ---------- */
 async function draw(){
@@ -331,7 +378,7 @@ async function draw(){
   if(r==='store') return drawStore();
 }
 
-function drawGate(){ App.route = Auth.email() ? 'connect' : 'welcome'; draw(); }
+function drawGate(){ go(Auth.email() ? 'connect' : 'welcome', false); }
 
 function drawWelcome(){
   render(`<div class="center">
@@ -344,30 +391,12 @@ function drawWelcome(){
 }
 
 function drawLogin(){
-  let sent=false;
-  const view=()=>{ render(`${header('Login', true)}<main>
+  render(`${header('Login', true)}<main>
     <div class="center" style="padding:6px 0 18px"><div class="logo" style="width:60px;height:60px;font-size:28px">🔒</div>
-      <div class="muted small">Login to manage your CryptoClock</div></div>
-    ${!sent?`<button id="google" style="width:100%">Sign in with Google</button><div class="divider">or</div>`:''}
-    ${field('Email','email', el('email')?.value||'', 'email')}
-    ${sent?field('6-digit code from your email','code','','number'):''}
-    <div id="err" class="err small" style="margin-top:8px"></div>
-    <div style="margin-top:14px"><button class="primary" id="go">${sent?'Verify code':'Send code to email'}</button></div>
-    ${sent?`<button class="ghost" id="diff" style="width:100%;margin-top:8px;color:var(--muted)">Use a different email</button>`:''}
+      <div class="muted small">Sign in with Google to manage your CryptoClock.</div></div>
+    <button class="primary" id="google" style="width:100%">Sign in with Google</button>
   </main>`);
-    if(!sent) el('google').onclick=()=>Auth.googleRedirect();
-    el('go').onclick=onGo; if(sent) el('diff').onclick=()=>{sent=false;view();};
-  };
-  async function onGo(){
-    const err=el('err'); err.textContent='';
-    if(!sent){ const email=el('email').value.trim(); if(!email.includes('@')){ err.textContent='Enter a valid email'; return; }
-      el('go').disabled=true; el('go').textContent='Please wait...'; const e=await Auth.requestOtp(email);
-      el('go').disabled=false; if(e){ err.textContent=e; el('go').textContent='Send code to email'; } else { sent=true; view(); }
-    } else { const email=el('email').value.trim(), code=el('code').value.trim();
-      el('go').disabled=true; el('go').textContent='Please wait...'; const ok=await Auth.verifyOtp(email,code);
-      if(ok){ toast('Signed in','ok'); go('connect'); } else { err.textContent='Wrong or expired code — try again'; el('go').disabled=false; el('go').textContent='Verify code'; } }
-  }
-  view();
+  el('google').onclick=()=>Auth.googleRedirect();
 }
 
 function drawConnect(){
@@ -650,6 +679,7 @@ async function drawStore(){
 /* ===================== boot ===================== */
 (async function(){
   await Auth.captureHash(); // handle Google OAuth return
+  if(Auth.email()) await Auth.accessToken();
   draw();
 })();
 </script>

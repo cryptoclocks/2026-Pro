@@ -45,7 +45,8 @@ Node-RED credentials, or an Aedes broker master password.
 
 ## MQTT RPC contract
 
-After Supabase login, the browser connects with:
+The production app uses Google Sign-In through Supabase OAuth only. After
+login, the browser connects with:
 
 ```text
 username: web-user:<verified-user-id>
