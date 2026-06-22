@@ -126,7 +126,7 @@ const PROFILE_MAIN_WIDGETS: WidgetNode[] = [
     type: "label", id: "name", x: 24, y: 176, w: 360, h: 36, props: { text: "SATOSHI NAKAMOTO" },
     style: { text_color: "#EAECEF", align: "left", font: "montserrat_28" },
     bindings: [
-      { prop: "text", source: "settings", path: "nickname" },
+      { prop: "text", source: "settings", path: "name" },
       { prop: "style.text_color", source: "settings", path: "name_color" },
     ],
   },
