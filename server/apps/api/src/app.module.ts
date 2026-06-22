@@ -10,6 +10,7 @@ import { AuthModule } from "./auth/auth.module";
 import { UsersModule } from "./users/users.module";
 import { FeaturesModule } from "./features/features.module";
 import { FeedsModule } from "./feeds/feeds.module";
+import { SocialModule } from "./social/social.module";
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { FeedsModule } from "./feeds/feeds.module";
     UsersModule,
     FeaturesModule,
     FeedsModule,
+    SocialModule,
   ],
 })
 export class AppModule {}

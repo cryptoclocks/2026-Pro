@@ -1,17 +1,7 @@
 import { Injectable, Logger, NotFoundException, OnModuleInit } from "@nestjs/common";
 import Stripe from "stripe";
 import { PrismaService } from "../prisma/prisma.service";
-
-type Kind = "PAGE" | "FEATURE";
-interface CatalogSeed {
-  slug: string;
-  title: string;
-  description: string;
-  kind: Kind;
-  icon: string;
-  priceCents: number;
-  currency?: string;
-}
+import { CATALOG, CATALOG_SLUGS, catalogForSlug, catalogLookupSlugs } from "./catalog";
 
 /**
  * The catalog of things a device can have: PAGE = a swipeable page, FEATURE =
@@ -19,18 +9,6 @@ interface CatalogSeed {
  * entitlements (per-device) can reference real rows. Built-in pages (clock /
  * crypto / slideshow) ship free and are always available — not listed here.
  */
-const CATALOG: CatalogSeed[] = [
-  { slug: "clock-alarm", title: "Clock Alarm", kind: "FEATURE", icon: "alarm",
-    description: "Alarm add-on for the Clock page with sound and device-side controls.", priceCents: 9900, currency: "thb" },
-  /* Policy: default pages are Free; nothing is priced in USD (THB only, paid = ฿49). */
-  { slug: "crypto-alerts", title: "Crypto Price Alerts", kind: "FEATURE", icon: "speed",
-    description: "Full-screen + sound alerts when a coin crosses your high/low price (needs admin approval).", priceCents: 4900, currency: "thb" },
-  { slug: "weather", title: "Weather", kind: "PAGE", icon: "cloud",
-    description: "Local forecast, hi/lo, conditions.", priceCents: 0, currency: "thb" },
-  { slug: "calendar", title: "Calendar", kind: "PAGE", icon: "event",
-    description: "Today's agenda from Google Calendar.", priceCents: 0, currency: "thb" },
-];
-
 @Injectable()
 export class MarketplaceService implements OnModuleInit {
   private readonly log = new Logger(MarketplaceService.name);
@@ -41,13 +19,26 @@ export class MarketplaceService implements OnModuleInit {
   /** Seed the catalog so every gateable thing is a real DB row. */
   async onModuleInit() {
     for (const c of CATALOG) {
+      const payloadId = c.kind === "PAGE" ? await this.resolvePayloadId(c) : null;
+      const data = {
+        title: c.title,
+        description: c.description,
+        kind: c.kind,
+        icon: c.icon,
+        priceCents: c.priceCents,
+        currency: c.currency,
+        published: true,
+        ...(payloadId ? { payloadId } : {}),
+      };
       await this.prisma.marketplaceItem
         .upsert({
           where: { slug: c.slug },
-          update: { title: c.title, description: c.description, kind: c.kind, icon: c.icon, priceCents: c.priceCents, currency: c.currency ?? "thb" },
+          update: data,
           create: {
             slug: c.slug, title: c.title, description: c.description,
-            kind: c.kind, icon: c.icon, priceCents: c.priceCents, currency: c.currency ?? "usd", published: true,
+            kind: c.kind, icon: c.icon, priceCents: c.priceCents, currency: c.currency,
+            ...(payloadId ? { payloadId } : {}),
+            published: true,
           },
         })
         .catch((e) => this.log.warn(`seed ${c.slug}: ${e}`));
@@ -57,7 +48,7 @@ export class MarketplaceService implements OnModuleInit {
     // always have an author — are never unpublished.
     await this.prisma.marketplaceItem
       .updateMany({
-        where: { slug: { notIn: CATALOG.map((c) => c.slug) }, authorId: null, published: true },
+        where: { slug: { notIn: CATALOG_SLUGS }, authorId: null, published: true },
         data: { published: false },
       })
       .then((r) => r.count && this.log.log(`pruned ${r.count} retired catalog page(s)`))
@@ -71,13 +62,14 @@ export class MarketplaceService implements OnModuleInit {
 
   listItems() {
     return this.prisma.marketplaceItem.findMany({
-      where: { published: true },
-      orderBy: [{ kind: "asc" }, { priceCents: "asc" }],
-    });
+      where: { slug: { in: CATALOG_SLUGS }, published: true },
+    }).then((items) => sortCatalogItems(items).map(withRuntimeSlug));
   }
 
   adminListItems() {
-    return this.prisma.marketplaceItem.findMany({ orderBy: { createdAt: "asc" } });
+    return this.prisma.marketplaceItem.findMany({
+      where: { slug: { in: CATALOG_SLUGS } },
+    }).then((items) => sortCatalogItems(items).map(withRuntimeSlug));
   }
 
   updateItem(id: string, patch: { priceCents?: number; published?: boolean; title?: string; description?: string }) {
@@ -95,7 +87,7 @@ export class MarketplaceService implements OnModuleInit {
 
   /** Grant a catalog item to ONE device (admin gift / approval / purchase). */
   async grantToDevice(deviceId: string, slug: string, userId: string, source: "PURCHASE" | "GIFT" = "GIFT") {
-    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
+    const item = await this.findItemBySlugOrAlias(slug);
     if (!item) throw new NotFoundException(`item ${slug} not found`);
     return this.prisma.entitlement.upsert({
       where: { deviceId_itemId: { deviceId, itemId: item.id } },
@@ -105,17 +97,17 @@ export class MarketplaceService implements OnModuleInit {
   }
 
   async revokeFromDevice(deviceId: string, slug: string) {
-    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
-    if (!item) throw new NotFoundException(`item ${slug} not found`);
+    const items = await this.findItemsBySlugOrAlias(slug);
+    if (items.length === 0) throw new NotFoundException(`item ${slug} not found`);
     await this.prisma.entitlement
-      .delete({ where: { deviceId_itemId: { deviceId, itemId: item.id } } })
+      .deleteMany({ where: { deviceId, itemId: { in: items.map((item) => item.id) } } })
       .catch(() => undefined);
     return { ok: true };
   }
 
   /** Stripe Checkout for a device-scoped purchase, or {configured:false}. */
   async checkout(slug: string, deviceId: string, userId: string, successUrl: string, cancelUrl: string) {
-    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
+    const item = await this.findItemBySlugOrAlias(slug);
     if (!item) return { error: "unknown item" };
     if (!deviceId) return { error: "deviceId required (which CryptoClock?)" };
     if (!this.stripeReady) {
@@ -140,4 +132,47 @@ export class MarketplaceService implements OnModuleInit {
     });
     return { configured: true, url: session.url };
   }
+
+  private findItemBySlugOrAlias(slug: string) {
+    return this.prisma.marketplaceItem.findUnique({
+      where: { slug: catalogForSlug(slug)?.slug ?? slug },
+    });
+  }
+
+  private findItemsBySlugOrAlias(slug: string) {
+    return this.prisma.marketplaceItem.findMany({
+      where: { slug: { in: catalogLookupSlugs(slug) } },
+    });
+  }
+
+  private async resolvePayloadId(seed: { runtimeSlug: string; aliases?: string[] }) {
+    const aliasSlugs = [...new Set([seed.runtimeSlug, ...(seed.aliases ?? [])])];
+    const existing = await this.prisma.marketplaceItem.findFirst({
+      where: { slug: { in: aliasSlugs }, payloadId: { not: null } },
+      select: { payloadId: true },
+    });
+    if (existing?.payloadId) return existing.payloadId;
+
+    const packageIds = [
+      `com.ccp.${seed.runtimeSlug}`,
+      `com.ccp.${seed.runtimeSlug.replace(/-/g, ".")}`,
+    ];
+    const payload = await this.prisma.payload.findFirst({
+      where: { packageId: { in: packageIds } },
+      select: { id: true },
+    });
+    return payload?.id ?? null;
+  }
+}
+
+function withRuntimeSlug<T extends { slug: string }>(item: T) {
+  return {
+    ...item,
+    runtimeSlug: catalogForSlug(item.slug)?.runtimeSlug ?? item.slug,
+  };
+}
+
+function sortCatalogItems<T extends { slug: string }>(items: T[]) {
+  const order = new Map(CATALOG_SLUGS.map((slug, index) => [slug, index]));
+  return [...items].sort((a, b) => (order.get(a.slug) ?? 999) - (order.get(b.slug) ?? 999));
 }

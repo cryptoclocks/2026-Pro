@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -10,11 +10,13 @@ import { LayoutSchema, type Layout, type Manifest } from "@ccp/shared";
 import type { User } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { MqttBridgeService } from "../mqtt/mqtt-bridge.service";
+import { catalogForSlug } from "../marketplace/catalog";
 
 const execFileAsync = promisify(execFile);
 const MAX_LOGIC_SOURCE_BYTES = 128 * 1024;
 const MAX_WASM_BYTES = 2 * 1024 * 1024;
 const MAX_ASSET_BYTES = 4 * 1024 * 1024; // per-file cap for gif/png/wav assets
+const STAGED_ROLLOUT_OWNER_EMAIL = (process.env.CCP_STAGED_ROLLOUT_OWNER_EMAIL ?? "mycryptoclock@gmail.com").toLowerCase();
 
 type CompileRustWasmInput = {
   source: string;
@@ -34,6 +36,14 @@ type PublishedAssetFile = {
 type BundleFile = {
   path: string;
   data: Buffer;
+};
+
+type RolloutResult = {
+  pushed: number;
+  held: number;
+  total: number;
+  scope: "stage" | "all";
+  stageOwnerEmail: string;
 };
 
 /**
@@ -270,21 +280,25 @@ export class PayloadsService {
     if (ownerDevices.length) {
       this.logger.debug(`publishCompiled:auto-granted ${ownerDevices.length} owner device(s) for ${marketplaceItem.slug}`);
     }
-    // Auto-update every CryptoClock that already owns this page: point it at the
-    // new version and push MQTT sync so admins don't re-grant after each edit.
-    const pushedTo = await this.propagateToEntitledDevices(
+    // Stage auto-updates to the admin-owned CryptoClocks first. Other entitled
+    // devices stay on their current version until the admin presses rollout.
+    const rollout = await this.propagateToEntitledDevices(
       payloadVersion.payloadId,
       payloadVersion.id,
       packageId,
       version,
       bundleSha256,
       bundle.length,
+      { targetOwnerEmail: STAGED_ROLLOUT_OWNER_EMAIL },
     );
-    this.logger.debug(`publishCompiled:done package=${packageId} version=${version} pv=${payloadVersion.id} item=${marketplaceItem.slug} bundle=${bundle.length} pushedTo=${pushedTo}`);
+    this.logger.debug(`publishCompiled:done package=${packageId} version=${version} pv=${payloadVersion.id} item=${marketplaceItem.slug} bundle=${bundle.length} pushedTo=${rollout.pushed} held=${rollout.held}`);
 
     return {
       ok: true,
-      pushedToDevices: pushedTo,
+      pushedToDevices: rollout.pushed,
+      rolloutHeldDevices: rollout.held,
+      rolloutTotalEntitled: rollout.total,
+      rolloutStageOwnerEmail: rollout.stageOwnerEmail,
       payloadVersionId: payloadVersion.id,
       packageId,
       version,
@@ -305,10 +319,10 @@ export class PayloadsService {
   }
 
   /**
-   * Push a freshly published version to every device already entitled to this
-   * page (Entitlement → MarketplaceItem.payloadId == this payload). Each device's
-   * activePayloadVersion is bumped and an MQTT cmd:sync is sent so the ESP32
-   * downloads the new bundle without a re-grant. Returns the device count.
+   * Push a payload version to devices already entitled to this page
+   * (Entitlement → MarketplaceItem.payloadId == this payload). In stage mode,
+   * only devices owned by the stage owner email receive MQTT sync; the rest are
+   * counted as held. In all mode, every entitled device receives the update.
    */
   private async propagateToEntitledDevices(
     payloadId: string,
@@ -317,22 +331,29 @@ export class PayloadsService {
     version: string,
     bundleSha256: string,
     sizeBytes: number,
-  ): Promise<number> {
+    opts: { targetOwnerEmail?: string } = {},
+  ): Promise<RolloutResult> {
     const ents = await this.prisma.entitlement.findMany({
       where: { item: { payloadId } },
       select: { deviceId: true },
     });
     const hwIds = [...new Set(ents.map((e) => e.deviceId))];
+    const targetOwnerEmail = opts.targetOwnerEmail?.toLowerCase();
+    const devices = await this.prisma.device.findMany({
+      where: { deviceId: { in: hwIds } },
+      include: { owner: { select: { email: true } } },
+    });
+    const targetDevices = targetOwnerEmail
+      ? devices.filter((d) => d.owner?.email?.toLowerCase() === targetOwnerEmail)
+      : devices;
     const bundleUrl = `${process.env.PUBLIC_API_URL ?? "http://localhost:4000"}/api/v1/packages/${packageId}/${version}/bundle.zip`;
     let count = 0;
-    for (const hwId of hwIds) {
-      const device = await this.prisma.device.findUnique({ where: { deviceId: hwId } });
-      if (!device) continue;
+    for (const device of targetDevices) {
       await this.prisma.device.update({
         where: { id: device.id },
         data: { activePayloadVersionId: versionId },
       });
-      this.mqtt.sendCommand(hwId, "sync", {
+      this.mqtt.sendCommand(device.deviceId, "sync", {
         package_id: packageId,
         version,
         bundle_url: bundleUrl,
@@ -341,7 +362,45 @@ export class PayloadsService {
       });
       count += 1;
     }
-    return count;
+    return {
+      pushed: count,
+      held: Math.max(0, devices.length - targetDevices.length),
+      total: devices.length,
+      scope: targetOwnerEmail ? "stage" : "all",
+      stageOwnerEmail: targetOwnerEmail ?? STAGED_ROLLOUT_OWNER_EMAIL,
+    };
+  }
+
+  async rolloutToAllEntitledDevices(versionId: string, user: User) {
+    const pv = await this.prisma.payloadVersion.findUnique({
+      where: { id: versionId },
+      include: { payload: true },
+    });
+    if (!pv) {
+      throw new NotFoundException("payload version not found");
+    }
+    const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+    if (!isAdmin && pv.payload.ownerId !== user.id) {
+      throw new ForbiddenException("not allowed to roll out this payload");
+    }
+    const result = await this.propagateToEntitledDevices(
+      pv.payloadId,
+      pv.id,
+      pv.payload.packageId,
+      pv.version,
+      pv.bundleSha256,
+      pv.sizeBytes,
+    );
+    return {
+      ok: true,
+      payloadVersionId: pv.id,
+      packageId: pv.payload.packageId,
+      version: pv.version,
+      pushedToDevices: result.pushed,
+      rolloutHeldDevices: result.held,
+      rolloutTotalEntitled: result.total,
+      rolloutStageOwnerEmail: result.stageOwnerEmail,
+    };
   }
 
   /** Create or bump a payload version from a validated layout + bundle hash. */
@@ -557,30 +616,56 @@ export class PayloadsService {
     title: string;
     description?: string;
   }) {
-    const slug = slugFromPackageId(opts.packageId);
-    return this.prisma.marketplaceItem.upsert({
-      where: { slug },
-      update: {
-        title: opts.title,
-        description: opts.description,
-        payloadId: opts.payloadId,
-        authorId: opts.ownerId,
-        kind: "PAGE",
-      },
-      create: {
-        slug,
-        title: opts.title,
-        description: opts.description,
-        kind: "PAGE",
+    const runtimeSlug = slugFromPackageId(opts.packageId);
+    const slug = catalogForSlug(runtimeSlug)?.slug ?? runtimeSlug;
+    const legacySlug = legacySlugFromPackageId(opts.packageId);
+    const existing =
+      (await this.prisma.marketplaceItem.findUnique({ where: { slug } })) ??
+      (await this.prisma.marketplaceItem.findUnique({ where: { slug: legacySlug } })) ??
+      (await this.prisma.marketplaceItem.findFirst({ where: { payloadId: opts.payloadId } }));
+    const data = {
+      slug,
+      title: opts.title,
+      description: opts.description,
+      payloadId: opts.payloadId,
+      authorId: opts.ownerId,
+      kind: "PAGE" as const,
+    };
+    if (existing) {
+      return this.prisma.marketplaceItem.update({
+        where: { id: existing.id },
+        data,
+      });
+    }
+    return this.prisma.marketplaceItem.create({
+      data: {
+        ...data,
         icon: "widgets",
-        payloadId: opts.payloadId,
-        authorId: opts.ownerId,
         priceCents: 0,
         currency: "thb",
         published: false,
       },
     });
   }
+}
+
+function legacySlugFromPackageId(packageId: string) {
+  return packageId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function slugFromPackageId(packageId: string) {
+  const pageId = packageId.toLowerCase().startsWith("com.ccp.")
+    ? packageId.slice("com.ccp.".length)
+    : packageId;
+  return pageId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
 }
 
 function rustCargoToml() {
@@ -623,14 +708,6 @@ function assertBundlePath(path: string) {
 
 function sha256(data: Buffer) {
   return createHash("sha256").update(data).digest("hex");
-}
-
-function slugFromPackageId(packageId: string) {
-  return packageId
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 80);
 }
 
 function buildZip(files: BundleFile[]) {

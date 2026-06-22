@@ -20,6 +20,10 @@ export const SLIDESHOW_ASSETS = [
   { id: "slideshow_sample3", type: "image" as const, path: "assets/slideshow/sample3.png", src: "/slideshow-samples/sample3.png" },
 ] as const;
 
+export const CLOCK_ASSETS = [
+  { id: "clock_logo", type: "image" as const, path: "assets/clock/logo.png", src: "/logo.png" },
+] as const;
+
 const SOCIAL_PAGE_THEMES = {
   fb: { bg: "#FFFFFF", bgGrad: "#1877F2", dir: "ver", accent: "#1877F2", text: "#0B1F33", muted: "#35506A", card: "#FFFFFF", border: "#B7D6FF" },
   yt: { bg: "#FFFFFF", bgGrad: "#000000", dir: "ver", accent: "#FF0000", text: "#241010", muted: "#6B3940", card: "#FFFFFF", border: "#FFD0D0" },
@@ -33,8 +37,9 @@ const SOCIAL_PAGE_THEMES = {
 function socialNavButton(id: string, x: number, bg: string): WidgetNode {
   return {
     type: "image", id: `btn_${id}`, x, y: 262, w: 48, h: 48,
-    props: { src: `profile_${id}` },
+    props: { src: `profile_${id}`, inner_align: "contain" },
     style: { bg_color: bg, radius: 24 },
+    hidden: true,
     actions: [{ on: "clicked", do: "page.show", target: `social_${id}` }],
   };
 }
@@ -53,7 +58,7 @@ function socialPage(
     name: label,
     widgets: [
       { type: "label", id: `${id}_bg`, x: 0, y: 0, w: 480, h: 320, props: { text: "" }, style: { bg_color: theme.bg, bg_grad_color: theme.bgGrad, bg_grad_dir: theme.dir } },
-      { type: "image", id: `${id}_logo`, x: 190, y: 10, w: 100, h: 50, props: { src: `profile_${id}` }, style: {} },
+      { type: "image", id: `${id}_logo`, x: 216, y: 10, w: 48, h: 48, props: { src: `profile_${id}`, inner_align: "contain" }, style: {} },
       {
         type: "button", id: `${id}_back`, x: 12, y: 12, w: 104, h: 40, props: { text: "< Back" },
         style: { bg_color: theme.card, text_color: theme.accent, radius: 10, border_width: 1, border_color: theme.border, font: "montserrat_20" },
@@ -81,7 +86,7 @@ function socialPage(
       },
       {
         type: "image", id: `${id}_qr_logo`, x: 322 + (qrSize - logoSize) / 2, y: 92 + (qrSize - logoSize) / 2, w: logoSize, h: logoSize,
-        props: { src: `profile_qr_${id}` },
+        props: { src: `profile_qr_${id}`, inner_align: "contain" },
         style: { bg_color: bg, radius: 8, pad: 3 },
       },
     ],
@@ -104,7 +109,7 @@ const PROFILE_MAIN_WIDGETS: WidgetNode[] = [
   },
   {
     type: "image", id: "avatar", x: 24, y: 30, w: 132, h: 132,
-    props: { src: "profile_avatar" },
+    props: { src: "profile_avatar", inner_align: "contain" },
     style: { bg_color: "#161B22", radius: 66, border_width: 2, border_color: "#F0B90B" },
     bindings: [{ prop: "src", source: "settings", path: "avatar" }],
   },
@@ -153,13 +158,45 @@ const PROFILE_PAGES = [
   socialPage("ig", "#C13584", "Instagram", "23,456", "33,012", "https://instagram.com/yourhandle"),
 ];
 
+const CALENDAR_WEEKDAYS: WidgetNode[] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((text, col) => ({
+  type: "label",
+  id: `weekday_${col}`,
+  x: 8 + col * 67,
+  y: 72,
+  w: 62,
+  h: 20,
+  props: { text },
+  style: {
+    text_color: col === 0 ? "#F6465D" : col === 6 ? "#00D1FF" : "#848E9C",
+    align: "center",
+    font: "montserrat_20",
+  },
+}));
+
+const CALENDAR_DAYS: WidgetNode[] = Array.from({ length: 42 }, (_, index) => ({
+  type: "label",
+  id: `day_${index}`,
+  x: 8 + (index % 7) * 67,
+  y: 96 + Math.floor(index / 7) * 36,
+  w: 62,
+  h: 32,
+  props: { text: "" },
+  style: {
+    bg_color: "#161B22",
+    text_color: "#EAECEF",
+    align: "center",
+    font: "montserrat_20",
+    radius: 4,
+  },
+}));
+
 /** Starter layouts. Most are single-page (`widgets`); `pages` adds extra pages
  *  reachable with page.show (the profile's per-platform social pages). */
 export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[]; pages?: { id: string; name: string; widgets: WidgetNode[] }[] }> = {
   blank: { name: "Blank", widgets: [] },
 
-  /* Mirrors the native clock page (home_ui.c): date above, big time, small
-     orange seconds at the minutes' baseline, 48x48 brand logo bottom-center.
+  /* Mirrors the native clock page (home_ui.c): date above, big 80px-capable
+     time, small orange seconds at the minutes' baseline, 48x48 brand logo bottom-center.
      Driven by CLOCK_LOGIC_SOURCE (real wasm) — not by mock bindings. */
   clock: {
     name: "Clock",
@@ -171,7 +208,7 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         bindings: [{ prop: "style.bg_color", source: "settings", path: "bg_color" }],
       },
       {
-        type: "label", id: "date", x: 40, y: 92, w: 400, h: 26,
+        type: "label", id: "date", x: 40, y: 42, w: 400, h: 26,
         props: { text: "Wednesday  11 Jun 2026" },
         style: { text_color: "#848E9C", align: "center", font: "montserrat_20" },
         bindings: [
@@ -180,14 +217,14 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         ],
       },
       {
-        type: "label", id: "time", x: 40, y: 126, w: 400, h: 60,
-        props: { text: "--:--" },
-        style: { text_color: "#00D1FF", align: "center", font: "montserrat_48" },
+        type: "label", id: "time", x: 0, y: 86, w: 480, h: 130,
+        props: { text: "00:00" },
+        style: { text_color: "#00D1FF", align: "center", font: "montserrat_160" },
         bindings: [{ prop: "style.text_color", source: "settings", path: "time_color" }],
       },
       {
         // seconds, or AM/PM when 12-hour — text driven by CLOCK_LOGIC_SOURCE wasm
-        type: "label", id: "sec", x: 318, y: 160, w: 40, h: 26,
+        type: "label", id: "sec", x: 424, y: 190, w: 48, h: 26,
         props: { text: "" },
         style: { text_color: "#FF9500", align: "left", font: "montserrat_20" },
         bindings: [
@@ -197,7 +234,7 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
       },
       {
         type: "image", id: "logo", x: 216, y: 266, w: 48, h: 48,
-        props: { src: "A:/pages/clock/assets/logo.png" }, style: {},
+        props: { src: "clock_logo", inner_align: "stretch" }, style: {},
         bindings: [{ prop: "visible", source: "settings", path: "show_logo" }],
       },
     ],
@@ -393,8 +430,8 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     ],
   },
 
-  /* Calendar: a date-focused page driven by the clock wasm (sets the "date"
-     label to the tz/format-aware date string). Edit the layout in the Builder. */
+  /* Calendar: interactive month view. CALENDAR_LOGIC_SOURCE fills the 7x6 grid,
+     highlights today and handles previous/next month navigation. */
   calendar: {
     name: "Calendar",
     widgets: [
@@ -404,16 +441,29 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         bindings: [{ prop: "style.bg_color", source: "settings", path: "bg_color" }],
       },
       {
-        type: "label", id: "cal_title", x: 0, y: 34, w: 480, h: 30,
-        props: { text: "CALENDAR" },
-        style: { text_color: "#F0B90B", align: "center", font: "montserrat_20" },
-        bindings: [{ prop: "text", source: "settings", path: "title" }],
+        type: "button", id: "prev_month", x: 12, y: 8, w: 48, h: 40,
+        props: { text: "<" },
+        style: { bg_color: "#161B22", text_color: "#F0B90B", radius: 6, font: "montserrat_28" },
+        actions: [{ on: "clicked", do: "wasm.event", target: "logic", event_id: 1 }],
       },
       {
-        type: "label", id: "date", x: 0, y: 120, w: 480, h: 80,
-        props: { text: "--" },
+        type: "label", id: "month_title", x: 68, y: 8, w: 344, h: 34,
+        props: { text: "JUNE 2026" },
         style: { text_color: "#EAECEF", align: "center", font: "montserrat_28" },
       },
+      {
+        type: "button", id: "next_month", x: 420, y: 8, w: 48, h: 40,
+        props: { text: ">" },
+        style: { bg_color: "#161B22", text_color: "#F0B90B", radius: 6, font: "montserrat_28" },
+        actions: [{ on: "clicked", do: "wasm.event", target: "logic", event_id: 2 }],
+      },
+      {
+        type: "label", id: "today_label", x: 70, y: 44, w: 340, h: 22,
+        props: { text: "TODAY  20 JUN 2026" },
+        style: { text_color: "#F0B90B", align: "center", font: "montserrat_20" },
+      },
+      ...CALENDAR_WEEKDAYS,
+      ...CALENDAR_DAYS,
     ],
   },
 
@@ -422,7 +472,7 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
     widgets: [
       {
         type: "image", id: "logo", x: 200, y: 70, w: 80, h: 80,
-        props: { src: "A:/pages/clock/assets/logo.png" }, style: {},
+        props: { src: "clock_logo", inner_align: "stretch" }, style: {},
       },
       {
         type: "label", id: "hello", x: 40, y: 170, w: 400, h: 40,

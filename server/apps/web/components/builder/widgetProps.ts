@@ -33,7 +33,16 @@ export const COMMON_STYLE: PropDef[] = [
   { key: "opa", label: "Opacity", kind: "number", target: "style", min: 0, max: 255 },
   { key: "shadow_width", label: "Shadow", kind: "number", target: "style", min: 0, max: 64 },
   { key: "font", label: "Font", kind: "select", target: "style",
-    options: ["", "montserrat_14", "montserrat_20", "montserrat_28", "montserrat_48"] },
+    options: [
+      "",
+      "montserrat_14", "montserrat_20", "montserrat_28", "montserrat_32", "montserrat_48",
+      "montserrat_64", "montserrat_80", "montserrat_96", "montserrat_112",
+      "montserrat_128", "montserrat_144", "montserrat_160",
+      "dseg7_32", "dseg7_48", "dseg7_64", "dseg7_80", "dseg7_96",
+      "dseg7_112", "dseg7_128", "dseg7_144", "dseg7_160",
+      "dseg14_32", "dseg14_48", "dseg14_64", "dseg14_80", "dseg14_96",
+      "dseg14_112", "dseg14_128", "dseg14_144", "dseg14_160",
+    ] },
   { key: "align", label: "Text align", kind: "select", target: "style",
     options: ["left", "center", "right"] },
 ];

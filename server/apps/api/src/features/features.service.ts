@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { DevicesService } from "../devices/devices.service";
+import { catalogForSlug } from "../marketplace/catalog";
 
 interface CreateDto {
   deviceId: string;
@@ -66,7 +67,7 @@ export class FeaturesService {
       // 1) grant the per-device entitlement (slug = "<page>-<feature>", e.g.
       //    crypto-alerts) so the device/app self-gate the feature.
       const slug = `${req.page}-${req.feature}`;
-      const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
+      const item = await this.prisma.marketplaceItem.findUnique({ where: { slug: catalogForSlug(slug)?.slug ?? slug } });
       if (item) {
         await this.prisma.entitlement.upsert({
           where: { deviceId_itemId: { deviceId: req.deviceId, itemId: item.id } },

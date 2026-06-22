@@ -449,6 +449,280 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 }
 `;
 
+/* Interactive 7x6 month calendar. The firmware adds CCP_EVT_APP_BASE (100) to
+   layout app events while the browser simulator sends the declared id, so the
+   handler accepts both forms for exact simulator/device parity. */
+export const CALENDAR_LOGIC_SOURCE = `#![no_std]
+
+const CCP_ABI_VERSION: u32 = 1;
+const CCP_OK: i32 = 0;
+const CCP_ERR_INVAL: i32 = -1;
+const TZ_OFFSET_MIN: i64 = 7 * 60;
+const EVT_PREV: u32 = 1;
+const EVT_NEXT: u32 = 2;
+const COL_TEXT: u32 = 0xFFEAECEF;
+const COL_PANEL: u32 = 0xFF161B22;
+const COL_TODAY: u32 = 0xFFF0B90B;
+const COL_TODAY_TEXT: u32 = 0xFF0B0E11;
+
+#[link(wasm_import_module = "env")]
+extern "C" {
+    fn ccp_ui_get_widget(id: *const u8, id_len: u32) -> i32;
+    fn ccp_ui_set_text(widget: i32, text: *const u8, len: u32) -> i32;
+    fn ccp_ui_set_color(widget: i32, argb: u32, part: u32) -> i32;
+    fn ccp_request_tick(interval_ms: u32) -> i32;
+    fn ccp_time_unix() -> u64;
+}
+
+static mut W_MONTH: i32 = -1;
+static mut W_TODAY: i32 = -1;
+static mut W_DAYS: [i32; 42] = [-1; 42];
+static mut VIEW_OFFSET: i32 = 0;
+static mut LAST_TODAY: i64 = -1;
+static mut HIGHLIGHTED: i32 = -1;
+
+#[no_mangle]
+pub extern "C" fn ccp_on_init(abi_version: u32) -> i32 {
+    if abi_version != CCP_ABI_VERSION {
+        return CCP_ERR_INVAL;
+    }
+    unsafe {
+        W_MONTH = get(b"month_title");
+        W_TODAY = get(b"today_label");
+        let mut i = 0usize;
+        while i < W_DAYS.len() {
+            let mut id = [0u8; 6];
+            id[0] = b'd';
+            id[1] = b'a';
+            id[2] = b'y';
+            id[3] = b'_';
+            let n = if i >= 10 {
+                id[4] = b'0' + (i / 10) as u8;
+                id[5] = b'0' + (i % 10) as u8;
+                6
+            } else {
+                id[4] = b'0' + i as u8;
+                5
+            };
+            W_DAYS[i] = ccp_ui_get_widget(id.as_ptr(), n as u32);
+            i += 1;
+        }
+        ccp_request_tick(60_000);
+        render();
+    }
+    CCP_OK
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_tick(_now_ms: u64) {
+    unsafe {
+        let utc = ccp_time_unix();
+        if utc == 0 { return; }
+        let today = (utc as i64 + TZ_OFFSET_MIN * 60).div_euclid(86400);
+        if today != LAST_TODAY {
+            render();
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_event(_widget: i32, event: u32, _p0: i32, _p1: i32) {
+    unsafe {
+        match event {
+            EVT_PREV | 101 => {
+                VIEW_OFFSET -= 1;
+                render();
+            }
+            EVT_NEXT | 102 => {
+                VIEW_OFFSET += 1;
+                render();
+            }
+            _ => {}
+        }
+    }
+}
+
+unsafe fn render() {
+    let utc = ccp_time_unix();
+    if utc == 0 {
+        set_text(W_MONTH, b"SYNCING...");
+        set_text(W_TODAY, b"WAITING FOR TIME");
+        return;
+    }
+
+    let today_days = (utc as i64 + TZ_OFFSET_MIN * 60).div_euclid(86400);
+    let (today_y, today_m, today_d) = civil_from_days(today_days);
+    LAST_TODAY = today_days;
+    let (view_y, view_m) = shift_month(today_y, today_m, VIEW_OFFSET);
+
+    let mut title = [0u8; 18];
+    let mut n = 0usize;
+    n += copy(&mut title[n..], MONTHS[(view_m - 1) as usize]);
+    title[n] = b' ';
+    n += 1;
+    n += put_year(&mut title[n..], view_y);
+    set_text(W_MONTH, &title[..n]);
+
+    let mut today = [0u8; 24];
+    let mut tn = copy(&mut today, b"TODAY  ");
+    tn += put_u32(&mut today[tn..], today_d);
+    today[tn] = b' ';
+    tn += 1;
+    tn += copy(&mut today[tn..], SHORT_MONTHS[(today_m - 1) as usize]);
+    today[tn] = b' ';
+    tn += 1;
+    tn += put_year(&mut today[tn..], today_y);
+    set_text(W_TODAY, &today[..tn]);
+
+    if HIGHLIGHTED >= 0 {
+        let old = W_DAYS[HIGHLIGHTED as usize];
+        ccp_ui_set_color(old, COL_PANEL, 0);
+        ccp_ui_set_color(old, COL_TEXT, 1);
+        HIGHLIGHTED = -1;
+    }
+
+    let first_days = days_from_civil(view_y, view_m, 1);
+    let first_weekday = (first_days + 4).rem_euclid(7) as usize;
+    let count = days_in_month(view_y, view_m) as usize;
+    let mut i = 0usize;
+    while i < W_DAYS.len() {
+        if i >= first_weekday && i < first_weekday + count {
+            let day = (i - first_weekday + 1) as u32;
+            let mut db = [0u8; 2];
+            let dn = put_u32(&mut db, day);
+            set_text(W_DAYS[i], &db[..dn]);
+            if view_y == today_y && view_m == today_m && day == today_d {
+                ccp_ui_set_color(W_DAYS[i], COL_TODAY, 0);
+                ccp_ui_set_color(W_DAYS[i], COL_TODAY_TEXT, 1);
+                HIGHLIGHTED = i as i32;
+            }
+        } else {
+            set_text(W_DAYS[i], b"");
+        }
+        i += 1;
+    }
+}
+
+static MONTHS: [&[u8]; 12] = [
+    b"JANUARY", b"FEBRUARY", b"MARCH", b"APRIL", b"MAY", b"JUNE",
+    b"JULY", b"AUGUST", b"SEPTEMBER", b"OCTOBER", b"NOVEMBER", b"DECEMBER",
+];
+static SHORT_MONTHS: [&[u8]; 12] = [
+    b"JAN", b"FEB", b"MAR", b"APR", b"MAY", b"JUN",
+    b"JUL", b"AUG", b"SEP", b"OCT", b"NOV", b"DEC",
+];
+
+fn shift_month(year: i64, month: u32, offset: i32) -> (i64, u32) {
+    let total = year * 12 + month as i64 - 1 + offset as i64;
+    (total.div_euclid(12), (total.rem_euclid(12) + 1) as u32)
+}
+
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        2 => if is_leap(year) { 29 } else { 28 },
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
+fn is_leap(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let y = year - if month <= 2 { 1 } else { 0 };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let mp = month as i64 + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+unsafe fn get(id: &[u8]) -> i32 {
+    ccp_ui_get_widget(id.as_ptr(), id.len() as u32)
+}
+
+unsafe fn set_text(widget: i32, text: &[u8]) {
+    if widget >= 0 {
+        ccp_ui_set_text(widget, text.as_ptr(), text.len() as u32);
+    }
+}
+
+fn put_u32(out: &mut [u8], value: u32) -> usize {
+    if value >= 10 {
+        out[0] = b'0' + (value / 10) as u8;
+        out[1] = b'0' + (value % 10) as u8;
+        2
+    } else {
+        out[0] = b'0' + value as u8;
+        1
+    }
+}
+
+fn put_year(out: &mut [u8], year: i64) -> usize {
+    let y = year as u32;
+    out[0] = b'0' + (y / 1000 % 10) as u8;
+    out[1] = b'0' + (y / 100 % 10) as u8;
+    out[2] = b'0' + (y / 10 % 10) as u8;
+    out[3] = b'0' + (y % 10) as u8;
+    4
+}
+
+fn copy(out: &mut [u8], src: &[u8]) -> usize {
+    out[..src.len()].copy_from_slice(src);
+    src.len()
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_data(_stream_handle: i32, _payload_ptr: u32, _len: u32) {}
+
+#[no_mangle]
+pub extern "C" fn ccp_on_destroy() {}
+
+static mut ARENA: [u8; 4 * 1024] = [0; 4 * 1024];
+static mut ARENA_TOP: usize = 0;
+static mut ARENA_LAST: usize = 0;
+
+#[no_mangle]
+pub extern "C" fn ccp_malloc(size: u32) -> u32 {
+    let size = ((size as usize) + 7) & !7;
+    unsafe {
+        if ARENA_TOP + size > ARENA.len() { return 0; }
+        ARENA_LAST = ARENA_TOP;
+        let ptr = ARENA.as_mut_ptr().add(ARENA_TOP) as u32;
+        ARENA_TOP += size;
+        ptr
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ccp_free(ptr: u32) {
+    unsafe {
+        let last_ptr = ARENA.as_mut_ptr().add(ARENA_LAST) as u32;
+        if ptr == last_ptr { ARENA_TOP = ARENA_LAST; }
+    }
+}
+
+#[panic_handler]
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    loop {}
+}
+`;
+
 /* Faithful port of the native crypto page behavior (home_ui.c):
    symbol cycle (event 101), USD/THB toggle (102), timeframe cycle (103),
    live price + 24h change with green/red color, candlestick chart drawn on a
@@ -1366,7 +1640,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
     const logicSource =
       key === "led_toggle" ? LED_TOGGLE_LOGIC_SOURCE :
       key === "clock" ? CLOCK_LOGIC_SOURCE :
-      key === "calendar" ? CLOCK_LOGIC_SOURCE : // drives the "date" label
+      key === "calendar" ? CALENDAR_LOGIC_SOURCE :
       key === "profile" ? CLOCK_LOGIC_SOURCE : // drives the big "time" label
       key === "crypto" ? CRYPTO_LOGIC_SOURCE :
       key === "weather" ? WEATHER_LOGIC_SOURCE :
@@ -1453,7 +1727,6 @@ export const useBuilder = create<BuilderState>((set, get) => ({
           ]
         : key === "calendar"
         ? [
-            { key: "title", label: "Title", type: "text" as const, default: "CALENDAR" },
             { key: "bg_color", label: "Background colour", type: "color" as const, default: "#0B0E11" },
           ]
         : key === "profile"

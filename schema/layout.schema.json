@@ -127,7 +127,7 @@
         "border_width": { "type": "integer", "minimum": 0, "maximum": 16 },
         "radius": { "type": "integer", "minimum": 0, "maximum": 100 },
         "pad": { "type": "integer", "minimum": 0, "maximum": 64 },
-        "font": { "type": "string", "description": "Built-in (montserrat_14..48) or asset id of a bundled font" },
+        "font": { "type": "string", "description": "Built-in Montserrat/DSEG clock font name or asset id of a bundled font" },
         "align": { "type": "string", "enum": ["left", "center", "right"] },
         "opa": { "type": "integer", "minimum": 0, "maximum": 255 },
         "shadow_width": { "type": "integer", "minimum": 0, "maximum": 64 },

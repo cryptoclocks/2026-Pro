@@ -2,6 +2,7 @@ import { Controller, Get, UseGuards } from "@nestjs/common";
 import type { User } from "@prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { UserGuard, CurrentUser } from "./auth.guards";
+import { catalogForSlug } from "../marketplace/catalog";
 
 @Controller("auth")
 export class AuthController {
@@ -29,7 +30,7 @@ export class AuthController {
       // entitlements are per-device: { deviceId, slug, title }
       entitlements: entitlements.map((e) => ({
         deviceId: e.deviceId,
-        slug: e.item.slug,
+        slug: catalogForSlug(e.item.slug)?.slug ?? e.item.slug,
         title: e.item.title,
         source: e.source,
         since: e.createdAt,

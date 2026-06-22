@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Header, Param, Post, StreamableFile, UseGuards } from "@nestjs/common";
 import type { User } from "@prisma/client";
-import { CurrentUser, UserGuard } from "../auth/auth.guards";
+import { AdminGuard, CurrentUser, UserGuard } from "../auth/auth.guards";
 import { PayloadsService } from "./payloads.service";
 
 @Controller()
@@ -16,6 +16,7 @@ export class PayloadsController {
 
   /** Compile page-specific Rust source to wasm32-unknown-unknown. */
   @Post("payloads/compile-wasm")
+  @UseGuards(AdminGuard)
   compileWasm(@Body() body: { source: string; moduleId?: string }) {
     return this.payloads.compileRustWasm({
       source: body.source,
@@ -64,6 +65,13 @@ export class PayloadsController {
       wasmFiles: body.wasmFiles ?? [],
       assetFiles: body.assetFiles ?? [],
     });
+  }
+
+  /** Admin rollout: push an already-published staged version to every entitled device. */
+  @Post("payloads/versions/:id/rollout")
+  @UseGuards(AdminGuard)
+  rollout(@Param("id") id: string, @CurrentUser() user: User) {
+    return this.payloads.rolloutToAllEntitledDevices(id, user);
   }
 
   /**

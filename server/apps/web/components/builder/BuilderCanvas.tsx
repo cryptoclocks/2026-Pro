@@ -159,20 +159,39 @@ function CanvasWidget({ widget, simulate }: { widget: WidgetNode; simulate: bool
 const N = (v: unknown, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 const truthy = (v: unknown) => v === true || v === 1 || v === "1" || v === "true" || v === "on";
 
-/* Exact device font sizes: ui_renderer supports montserrat_14/20/28/48 and the
-   LVGL default (montserrat_14). The artboard loads the same Montserrat face. */
+/* Clock font names encode their nominal pixel size. */
 function fontPx(style?: WidgetNode["style"]) {
-  const m = /^montserrat_(\d+)$/.exec(String(style?.font ?? ""));
+  const m = /^(?:montserrat|dseg7|dseg14)_(\d+)$/.exec(String(style?.font ?? ""));
   return m ? Number(m[1]) : 14;
 }
 
-/* LVGL line-heights (px) for the bundled fonts — these differ from CSS's default
-   ~1.2em leading, which is why text (esp. the big montserrat_80 clock) used to
-   sit lower in the artboard than on the device. Match them so the preview is
-   WYSIWYG. montserrat_80 is a cropped digits+colon face with line-height 58. */
-const LVGL_LINE_HEIGHT: Record<number, number> = { 14: 16, 20: 23, 28: 32, 48: 57, 80: 58 };
-function fontLineHeight(px: number) {
-  return LVGL_LINE_HEIGHT[px] ?? Math.round(px * 1.15);
+function fontFamily(style?: WidgetNode["style"]) {
+  const name = String(style?.font ?? "");
+  if (name.startsWith("dseg7_")) return '"CCP DSEG7", monospace';
+  if (name.startsWith("dseg14_")) return '"CCP DSEG14", monospace';
+  return '"CCP Montserrat", Montserrat, sans-serif';
+}
+
+const MONTSERRAT_LINE_HEIGHT: Record<number, number> = {
+  14: 16, 20: 23, 28: 32, 32: 22, 48: 57, 64: 47, 80: 58, 96: 69,
+  112: 81, 128: 93, 144: 104, 160: 116,
+};
+const DSEG7_LINE_HEIGHT: Record<number, number> = {
+  32: 33, 48: 49, 64: 64, 80: 81, 96: 97, 112: 112, 128: 128, 144: 144, 160: 160,
+};
+function fontLineHeight(style?: WidgetNode["style"]) {
+  const px = fontPx(style);
+  const name = String(style?.font ?? "");
+  if (name.startsWith("dseg7_")) return DSEG7_LINE_HEIGHT[px] ?? px;
+  if (name.startsWith("dseg14_")) return px === 32 ? 33 : px;
+  return MONTSERRAT_LINE_HEIGHT[px] ?? Math.round(px * 1.15);
+}
+
+function imageObjectFit(innerAlign: unknown) {
+  const mode = String(innerAlign ?? "stretch");
+  if (mode === "contain" || mode === "center" || mode === "top_left") return "contain";
+  if (mode === "cover") return "cover";
+  return "fill";
 }
 
 /** Line chart matching what lv_chart (type line) shows on the device. */
@@ -215,14 +234,20 @@ function WidgetInner({
       const txt = ov?.text ?? (p.text as string) ?? "Label";
       // size comes from the font, with an optional transform scale (device uses lv
       // transform_scale → same effect). Use LVGL's line-height (not CSS's larger
-      // leading) and vertically centre a single-line label in its box the way the
-      // firmware now does, so the big clock sits at the same height here & on-device.
+      // leading) and TOP-anchor the text, because the firmware renders labels
+      // top-left with no vertical centring — so this preview matches the device
+      // (e.g. the profile clock sits at the same height here & on-device).
       const scale = Number(w.style?.scale) > 0 ? Number(w.style?.scale) : 1;
       const px = fontPx(w.style) * scale;
-      const lh = fontLineHeight(fontPx(w.style)) * scale;
-      const singleLine = !String(txt).includes("\n");
+      const lh = fontLineHeight(w.style) * scale;
       return (
-        <span style={{ fontSize: px, lineHeight: `${lh}px`, width: "100%", alignSelf: singleLine ? "center" : "flex-start" }}>
+        <span style={{
+          fontFamily: fontFamily(w.style),
+          fontSize: px,
+          lineHeight: `${lh}px`,
+          width: "100%",
+          alignSelf: "flex-start",
+        }}>
           {txt}
         </span>
       );
@@ -235,6 +260,7 @@ function WidgetInner({
           style={{
             background: checked ? accent : "#2b3139",
             color: checked ? "#0B0E11" : undefined,
+            fontFamily: fontFamily(w.style),
             fontSize: fontPx(w.style),
             lineHeight: `${Math.max(0, w.h - 8)}px`,
           }}
@@ -250,13 +276,14 @@ function WidgetInner({
       // does the same via find_asset); fall back to the raw string as a URL
       const asset = assets.find((a) => a.id === ref || a.path === ref || a.path === `assets/${ref}`);
       const url = asset?.src ?? ref;
+      const objectFit = imageObjectFit(p.inner_align);
       if (url && (url.startsWith("/") || url.startsWith("http") || url.startsWith("data:"))) {
         // eslint-disable-next-line @next/next/no-img-element
-        return <img src={url} alt={w.id} style={{ width: "100%", height: "100%", objectFit: "contain" }} />;
+        return <img src={url} alt={w.id} style={{ width: "100%", height: "100%", objectFit }} />;
       }
       if (ref.toLowerCase().includes("logo")) {
         // eslint-disable-next-line @next/next/no-img-element
-        return <img src="/logo.png" alt="logo" style={{ width: "100%", height: "100%", objectFit: "contain" }} />;
+        return <img src="/logo.png" alt="logo" style={{ width: "100%", height: "100%", objectFit }} />;
       }
       return (
         <span className="text-[10px] text-[var(--ccp-muted)] flex flex-col items-center">

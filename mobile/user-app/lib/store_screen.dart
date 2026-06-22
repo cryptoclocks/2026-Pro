@@ -8,9 +8,14 @@ import 'ui_helpers.dart';
 import 'main.dart' show ccpAccent, ccpMuted, ccpPanel;
 
 const _icons = {
+  'alarm': Icons.alarm,
+  'candlestick_chart': Icons.candlestick_chart,
   'cloud': Icons.cloud,
   'newspaper': Icons.newspaper,
   'event': Icons.event,
+  'person': Icons.person,
+  'photo_library': Icons.photo_library,
+  'schedule': Icons.schedule,
   'trending_up': Icons.trending_up,
   'speed': Icons.speed,
   'extension': Icons.extension,
@@ -56,7 +61,9 @@ class _StoreScreenState extends State<StoreScreen> {
   String _price(Map<String, dynamic> it) {
     final cents = (it['priceCents'] as num?)?.toInt() ?? 0;
     if (cents == 0) return 'Free';
-    return '\$${(cents / 100).toStringAsFixed(2)}';
+    final major = (cents / 100).toStringAsFixed(2);
+    final currency = ((it['currency'] as String?) ?? 'thb').toLowerCase();
+    return currency == 'thb' ? '฿$major' : '\$$major';
   }
 
   Future<void> _buy(Map<String, dynamic> it) async {
@@ -122,7 +129,7 @@ class _StoreScreenState extends State<StoreScreen> {
                   children: [
                     const Padding(
                       padding: EdgeInsets.only(bottom: 8, left: 4),
-                      child: Text('Add more pages to your display',
+                      child: Text('Add pages and feature add-ons to your display',
                           style: TextStyle(color: ccpMuted)),
                     ),
                     ..._items.map((it) => Card(
@@ -148,10 +155,10 @@ class _StoreScreenState extends State<StoreScreen> {
                     const SizedBox(height: 12),
                     settingCard('How it works', const [
                       Text(
-                        '1. Buy a page here (Stripe).\n'
-                        '2. The Hub grants it to your account.\n'
-                        '3. Your display downloads it over the air and a new\n'
-                        '   swipeable page appears — no reflash needed.',
+                        '1. Buy a page or feature here (Stripe).\n'
+                        '2. Admin reviews and grants it to your display.\n'
+                        '3. Granted pages download over the air and feature\n'
+                        '   add-ons unlock on that CryptoClock.',
                         style: TextStyle(color: ccpMuted),
                       ),
                     ]),

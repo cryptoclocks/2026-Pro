@@ -20,6 +20,7 @@ server/**/.next/
 server/**/dist/
 server/**/.turbo/
 server/**/*.tsbuildinfo
+web-user/dist/
 server/apps/api/storage/
 server/storage/
 server/.env

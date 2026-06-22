@@ -2,15 +2,14 @@ import { Injectable, Logger } from "@nestjs/common";
 import Stripe from "stripe";
 import { PrismaService } from "../prisma/prisma.service";
 import { DevicesService } from "../devices/devices.service";
+import { catalogForSlug } from "../marketplace/catalog";
 
 /**
  * The money flow the platform is built around:
  *
  *   Stripe checkout.session.completed
- *     -> grant Entitlement (user x marketplace item)
- *     -> find the user's devices
- *     -> push MQTT cmd:sync so every device downloads the purchased
- *        package within seconds of payment.
+ *     -> record a paid purchase awaiting admin review
+ *     -> admin grants the entitlement to the target device from Fleet/Rights
  */
 @Injectable()
 export class BillingService {
@@ -55,7 +54,7 @@ export class BillingService {
     }
 
     const item = await this.prisma.marketplaceItem.findUnique({
-      where: { slug },
+      where: { slug: catalogForSlug(slug)?.slug ?? slug },
       include: {
         payloadRef: {
           include: { versions: { where: { status: "PUBLISHED" }, orderBy: { createdAt: "desc" }, take: 1 } },
@@ -67,30 +66,15 @@ export class BillingService {
       return;
     }
 
-    // 1) grant the entitlement to THIS device (per-CryptoClock), idempotent
-    await this.prisma.entitlement.upsert({
-      where: { deviceId_itemId: { deviceId, itemId: item.id } },
-      update: { userId, source: "PURCHASE" },
-      create: { deviceId, itemId: item.id, userId, source: "PURCHASE" },
-    });
-    this.log.log(`entitlement granted: device=${deviceId} item=${item.slug}`);
-
-    // 2) reflect entitlements into the device's settings so it self-gates,
-    //    and push the purchased page bundle if one exists.
-    await this.devices.syncEntitlements(deviceId);
-    const latest = item.payloadRef?.versions[0];
-    if (latest) {
-      const device = await this.prisma.device.findUnique({ where: { deviceId } });
-      if (device) await this.devices.assignPayload(device.id, latest.id);
-    }
+    this.log.log(`purchase pending admin grant: device=${deviceId} item=${item.slug}`);
 
     await this.prisma.auditLog.create({
       data: {
         actorUserId: userId,
         deviceId,
-        action: "purchase.fulfilled",
+        action: "purchase.pending_grant",
         target: item.slug,
-        meta: { sessionId: session.id },
+        meta: { sessionId: session.id, runtimeSlug: catalogForSlug(item.slug)?.runtimeSlug ?? item.slug },
       },
     });
   }

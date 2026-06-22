@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Montserrat } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth";
+import { MqttProvider } from "@/lib/mqtt";
 import { TopNav } from "@/components/TopNav";
 
 /* LVGL's built-in fonts are Montserrat Medium — load the same face so the
@@ -22,8 +23,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" className={montserrat.variable}>
       <body className="antialiased">
         <AuthProvider>
-          <TopNav />
-          <div className="mx-auto max-w-6xl">{children}</div>
+          <MqttProvider>
+            <TopNav />
+            <div className="mx-auto max-w-6xl">{children}</div>
+          </MqttProvider>
         </AuthProvider>
       </body>
     </html>

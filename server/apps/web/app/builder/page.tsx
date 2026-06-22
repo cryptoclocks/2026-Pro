@@ -18,6 +18,7 @@ import { Inspector } from "@/components/builder/Inspector";
 import { exportLayout, downloadLayout } from "@/components/builder/exportLayout";
 import { SimSession, base64ToBytes, getSimSession, useSim } from "@/components/builder/wasmSim";
 import { SchemaForm, withDefaults } from "@/components/SchemaForm";
+import { AdminGate } from "@/components/AdminGate";
 import { API, useAuth } from "@/lib/auth";
 
 type CompileWasmResponse = {
@@ -41,6 +42,13 @@ type BuilderPageResponse = SavedBuilderPage & {
   latest: SavedBuilderPage["latest"] & { layout: Layout };
 };
 
+type BuilderBusy = "compile" | "publish" | "load" | "rollout" | null;
+type RolloutTarget = {
+  payloadVersionId: string;
+  held: number;
+  stageOwnerEmail: string;
+};
+
 /* The official device pages. One entry per page — opening it loads the saved
    (published) version if it exists, otherwise a fresh copy of the starter
    template. This replaces the old "starter template" + "saved page" split. */
@@ -54,6 +62,14 @@ const OFFICIAL_PAGES = [
 ] as const;
 
 export default function BuilderPage() {
+  return (
+    <AdminGate>
+      <Builder />
+    </AdminGate>
+  );
+}
+
+function Builder() {
   const b = useBuilder();
   const { me, token } = useAuth();
   const [message, setMessage] = useState<string | null>(null);
@@ -63,8 +79,9 @@ export default function BuilderPage() {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [mounted, setMounted] = useState(false);
   const [logicOpen, setLogicOpen] = useState(false);
-  const [busy, setBusy] = useState<"compile" | "publish" | "load" | null>(null);
+  const [busy, setBusy] = useState<BuilderBusy>(null);
   const [savedPages, setSavedPages] = useState<SavedBuilderPage[]>([]);
+  const [rolloutTarget, setRolloutTarget] = useState<RolloutTarget | null>(null);
   const [simEpoch, setSimEpoch] = useState(0);
   const simRef = useRef<SimSession | null>(null);
 
@@ -84,7 +101,7 @@ export default function BuilderPage() {
       if (wantsWasm && !compiled) {
         useSim.getState().pushLog("sys", "compiling Rust logic for simulation…");
         try {
-          compiled = await compileLogic(state.logicSource);
+          compiled = await compileLogic(state.logicSource, token);
           state.setCompiledWasm(compiled);
           state.upsertWasmModule({ id: compiled.moduleId, path: compiled.path, memory_kb: 128 });
           useSim.getState().pushLog("sys", `compiled ${compiled.path} (${compiled.sizeBytes} bytes)`);
@@ -121,7 +138,7 @@ export default function BuilderPage() {
       simRef.current?.stop();
       simRef.current = null;
     };
-  }, [b.simulate, simEpoch]);
+  }, [b.simulate, simEpoch, token]);
 
   useEffect(() => {
     if (!token || !me?.id) {
@@ -247,6 +264,7 @@ export default function BuilderPage() {
   const onPublish = async () => {
     try {
       setBusy("publish");
+      setRolloutTarget(null);
       const layout = buildLayout();
 
       // Auto-bump the patch version when re-publishing an existing page so every
@@ -288,7 +306,7 @@ export default function BuilderPage() {
           throw new Error("This page's Rust source isn't available to compile. Open Edit Logic and paste the source, or Reset page logic.");
         }
         setMessage("Compiling page logic…");
-        compiled = await compileLogic(b.logicSource);
+        compiled = await compileLogic(b.logicSource, token);
         b.setCompiledWasm(compiled);
         b.upsertWasmModule({ id: compiled.moduleId, path: compiled.path, memory_kb: 128 });
       }
@@ -337,10 +355,19 @@ export default function BuilderPage() {
         bundleSha256: string;
         sizeBytes: number;
         pushedToDevices?: number;
+        rolloutHeldDevices?: number;
+        rolloutTotalEntitled?: number;
+        rolloutStageOwnerEmail?: string;
         marketplaceItem?: { slug: string; title: string; published: boolean };
       };
       console.debug("[builder] publish:done", published);
       await refreshSavedPages();
+      const staged = published.pushedToDevices ?? 0;
+      const held = published.rolloutHeldDevices ?? 0;
+      const stageOwnerEmail = published.rolloutStageOwnerEmail ?? "mycryptoclock@gmail.com";
+      if (held > 0) {
+        setRolloutTarget({ payloadVersionId: published.payloadVersionId, held, stageOwnerEmail });
+      }
       setMessage(
         `✓ Saved / Published "${layout.meta.name}" ${published.version}\n\n` +
           `PayloadVersion: ${published.payloadVersionId}\n` +
@@ -348,9 +375,41 @@ export default function BuilderPage() {
           `Bundle: ${published.bundleUrl}\n` +
           `SHA256: ${published.bundleSha256}\n` +
           `Size: ${published.sizeBytes} bytes\n\n` +
-          (published.pushedToDevices
-            ? `✓ Auto-updated ${published.pushedToDevices} CryptoClock${published.pushedToDevices === 1 ? "" : "s"} already entitled to this page (MQTT sync sent — they re-download within seconds, no re-grant needed).`
+          (published.rolloutTotalEntitled
+            ? `✓ Staged update sent to ${staged} admin-owned CryptoClock${staged === 1 ? "" : "s"} (${stageOwnerEmail}).\n` +
+              (held > 0
+                ? `${held} other entitled CryptoClock${held === 1 ? "" : "s"} held for manual rollout.`
+                : "No other entitled CryptoClocks are waiting.")
             : "No devices are entitled to this page yet. Grant it from Fleet → Rights and the device downloads this bundle without reflashing."),
+      );
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onRolloutAll = async () => {
+    if (!rolloutTarget) return;
+    try {
+      setBusy("rollout");
+      const res = await fetch(`${API}/api/v1/payloads/versions/${rolloutTarget.payloadVersionId}/rollout`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!res.ok) throw new Error(await readApiError(res));
+      const rolled = (await res.json()) as {
+        version: string;
+        pushedToDevices: number;
+        rolloutTotalEntitled: number;
+      };
+      setRolloutTarget(null);
+      setMessage(
+        `✓ Rolled out ${rolled.version} to ${rolled.pushedToDevices} entitled CryptoClock${rolled.pushedToDevices === 1 ? "" : "s"}.\n` +
+          `Total entitled devices: ${rolled.rolloutTotalEntitled}.`,
       );
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
@@ -366,7 +425,7 @@ export default function BuilderPage() {
         throw new Error("This older page has no saved Rust source. Paste the source or click Reset page logic before compiling.");
       }
       console.debug("[builder] compile:start", { moduleId: "logic", sourceBytes: new Blob([b.logicSource]).size });
-      const compiled = await compileLogic(b.logicSource);
+      const compiled = await compileLogic(b.logicSource, token);
       b.setCompiledWasm(compiled);
       b.upsertWasmModule({ id: compiled.moduleId, path: compiled.path, memory_kb: 128 });
       console.debug("[builder] compile:done", { path: compiled.path, sizeBytes: compiled.sizeBytes, sha256: compiled.sha256 });
@@ -476,9 +535,18 @@ export default function BuilderPage() {
       </div>
 
       {message && (
-        <pre className="text-xs whitespace-pre-wrap text-[var(--ccp-muted)] border border-[var(--ccp-border)] rounded p-2">
-          {message}
-        </pre>
+        <div className="text-xs text-[var(--ccp-muted)] border border-[var(--ccp-border)] rounded p-2 space-y-2">
+          <pre className="whitespace-pre-wrap">{message}</pre>
+          {rolloutTarget && (
+            <button
+              onClick={onRolloutAll}
+              disabled={busy !== null}
+              className="px-3 py-1.5 rounded bg-[var(--ccp-accent)] text-black font-semibold"
+            >
+              {busy === "rollout" ? "Rolling out…" : `Roll out to all CCPs (${rolloutTarget.held})`}
+            </button>
+          )}
+        </div>
       )}
 
       <DndContext sensors={sensors} onDragStart={onDragStart} onDragCancel={() => setDragLabel(null)} onDragEnd={onDragEnd}>
@@ -513,7 +581,7 @@ function LogicEditor({
   onCompile,
 }: {
   open: boolean;
-  busy: "compile" | "publish" | "load" | null;
+  busy: BuilderBusy;
   onClose: () => void;
   onCompile: () => void;
 }) {
@@ -674,10 +742,13 @@ function SimulateInspector({ onRestart }: { onRestart: () => void }) {
   );
 }
 
-async function compileLogic(source: string): Promise<CompiledWasm> {
+async function compileLogic(source: string, token: string | null): Promise<CompiledWasm> {
   const res = await fetch(`${API}/api/v1/payloads/compile-wasm`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     body: JSON.stringify({ source, moduleId: "logic" }),
   });
   if (!res.ok) throw new Error(await readApiError(res));

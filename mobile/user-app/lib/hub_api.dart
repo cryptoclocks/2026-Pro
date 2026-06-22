@@ -30,13 +30,37 @@ class HubApi {
 
   /// Entitlement slugs this specific device holds.
   static Future<List<String>> deviceEntitlements(String deviceId) async {
+    final token = await _token();
+    if (token == null) return [];
     try {
       final res = await http
-          .get(Uri.parse('$hubBaseUrl/api/v1/devices/$deviceId/entitlements'))
+          .get(Uri.parse('$hubBaseUrl/api/v1/devices/$deviceId/entitlements'),
+              headers: _headers(token))
           .timeout(const Duration(seconds: 10));
       return (jsonDecode(res.body) as List).cast<String>();
     } catch (_) {
       return [];
+    }
+  }
+
+  /// Save the display's dynamic config to the Hub too, so a later publish/grant
+  /// or reboot does not restore an older server-side copy over the local edits.
+  static Future<String?> saveDeviceSettings(
+      String deviceId, Map<String, dynamic> config) async {
+    final token = await _token();
+    if (token == null) return 'Please login first';
+    try {
+      final res = await http
+          .put(
+            Uri.parse('$hubBaseUrl/api/v1/devices/$deviceId/settings'),
+            headers: _headers(token),
+            body: jsonEncode({'config': config}),
+          )
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode >= 300) return 'HTTP ${res.statusCode}: ${res.body}';
+      return null;
+    } catch (e) {
+      return '$e';
     }
   }
 
@@ -52,6 +76,28 @@ class HubApi {
               body: jsonEncode({'slug': slug, 'deviceId': deviceId}))
           .timeout(const Duration(seconds: 15));
       return jsonDecode(res.body) as Map<String, dynamic>;
+    } catch (e) {
+      return {'error': '$e'};
+    }
+  }
+
+  /// Best-effort public metadata/stats resolver for social profile URLs.
+  static Future<Map<String, dynamic>> resolveSocial(
+      String url, String platform) async {
+    final token = await _token();
+    if (token == null) return {'error': 'Please login first'};
+    try {
+      final res = await http
+          .post(Uri.parse('$hubBaseUrl/api/v1/social/resolve'),
+              headers: _headers(token),
+              body: jsonEncode({'url': url, 'platform': platform}))
+          .timeout(const Duration(seconds: 15));
+      if (res.statusCode >= 300) {
+        return {'error': 'HTTP ${res.statusCode}: ${res.body}'};
+      }
+      final decoded = jsonDecode(res.body);
+      if (decoded is Map<String, dynamic>) return decoded;
+      return {'error': 'Unexpected response'};
     } catch (e) {
       return {'error': '$e'};
     }

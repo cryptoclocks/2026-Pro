@@ -3,16 +3,20 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
+import { useMqtt } from "@/lib/mqtt";
 
 export function TopNav() {
   const { me, signOut } = useAuth();
-  const links: [string, string][] = [
-    ["/", "Fleet"],
-    ["/builder", "Builder"],
-    ["/store", "Store"],
-  ];
+  const mqtt = useMqtt();
+  const links: [string, string][] = [];
   if (me?.isAdmin) {
-    links.push(["/users", "Users"], ["/approvals", "Approvals"]);
+    links.push(
+      ["/", "Fleet"],
+      ["/builder", "Builder"],
+      ["/store", "Store"],
+      ["/users", "Users"],
+      ["/approvals", "Approvals"],
+    );
   }
   return (
     <header className="sticky top-0 z-20 backdrop-blur border-b border-[var(--ccp-border)] bg-[var(--ccp-bg)]/80">
@@ -34,6 +38,14 @@ export function TopNav() {
           {me ? (
             <>
               {me.isAdmin && <span className="pill">Admin</span>}
+              {me.isAdmin && mqtt.state !== "disabled" && (
+                <span
+                  className={mqtt.state === "connected" ? "text-[#0ECB81]" : "text-[var(--ccp-muted)]"}
+                  title={mqtt.error ?? `MQTT ${mqtt.state}`}
+                >
+                  MQTT {mqtt.state}
+                </span>
+              )}
               <span className="text-[var(--ccp-muted)] hidden sm:inline">{me.email}</span>
               <button className="btn" onClick={signOut}>
                 Sign out

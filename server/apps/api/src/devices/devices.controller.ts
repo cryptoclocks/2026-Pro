@@ -27,8 +27,9 @@ export class DevicesController {
 
   /** Entitled item slugs for a device (device/app self-gating). */
   @Get(":hwId/entitlements")
-  entitlements(@Param("hwId") hwId: string) {
-    return this.devices.entitlementSlugs(hwId);
+  @UseGuards(UserGuard)
+  entitlements(@Param("hwId") hwId: string, @CurrentUser() user: User) {
+    return this.devices.entitlementSlugsForUser(user, hwId);
   }
 
   /** Admin: re-push a device's entitlements into its settings. */
@@ -53,6 +54,7 @@ export class DevicesController {
 
   /** Assign payload version + immediate MQTT sync push. */
   @Post(":id/assign")
+  @UseGuards(AdminGuard)
   assign(@Param("id") id: string, @Body() body: { payloadVersionId: string }) {
     return this.devices.assignPayload(id, body.payloadVersionId);
   }
@@ -65,12 +67,18 @@ export class DevicesController {
 
   /** Save settings: bumps version + pushes to the device over MQTT. */
   @Put(":hwId/settings")
-  putSettings(@Param("hwId") hwId: string, @Body() body: { config: Record<string, unknown> }) {
-    return this.devices.putSettings(hwId, body.config ?? (body as Record<string, unknown>));
+  @UseGuards(UserGuard)
+  putSettings(
+    @Param("hwId") hwId: string,
+    @CurrentUser() user: User,
+    @Body() body: { config: Record<string, unknown> },
+  ) {
+    return this.devices.putSettingsForUser(user, hwId, body.config ?? (body as Record<string, unknown>));
   }
 
   /** Generic command center endpoint (reboot, brightness, lock, ...). */
   @Post(":hwId/cmd")
+  @UseGuards(AdminGuard)
   cmd(
     @Param("hwId") hwId: string,
     @Body() body: { type: DeviceCommandType; params?: Record<string, unknown> },

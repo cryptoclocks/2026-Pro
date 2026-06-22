@@ -57,6 +57,8 @@ class DeviceApi {
     return FileListResult(json['sd_mounted'] == true, files);
   }
 
+  Uri fileUrl(String path) => _u('/api/v1/file?path=${Uri.encodeQueryComponent(path)}');
+
   Future<void> uploadFile(String path, Uint8List bytes) async {
     final res = await http
         .post(_u('/api/v1/upload?path=$path'),

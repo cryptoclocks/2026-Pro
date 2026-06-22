@@ -176,6 +176,10 @@ class DeviceController extends ChangeNotifier {
       if (userEmail != null) 'owner': {'email': userEmail},
     };
     await api.setConfig(cfg);
+    final hubError = await HubApi.saveDeviceSettings(deviceId, cfg);
+    if (hubError != null && kDebugMode) {
+      debugPrint('Hub settings sync skipped/failed for $deviceId: $hubError');
+    }
     config = cfg;
     notifyListeners();
   }

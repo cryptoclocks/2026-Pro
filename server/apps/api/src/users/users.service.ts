@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { DevicesService } from "../devices/devices.service";
+import { catalogForSlug, catalogLookupSlugs } from "../marketplace/catalog";
 
 @Injectable()
 export class UsersService {
@@ -40,7 +41,7 @@ export class UsersService {
 
   /** Admin grants a catalog item to ONE of the user's devices (per-device). */
   async grant(userId: string, deviceId: string, slug: string) {
-    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
+    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug: catalogForSlug(slug)?.slug ?? slug } });
     if (!item) throw new NotFoundException("item not found");
     await this.prisma.entitlement.upsert({
       where: { deviceId_itemId: { deviceId, itemId: item.id } },
@@ -52,10 +53,10 @@ export class UsersService {
   }
 
   async revoke(deviceId: string, slug: string) {
-    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
-    if (!item) throw new NotFoundException("item not found");
+    const items = await this.prisma.marketplaceItem.findMany({ where: { slug: { in: catalogLookupSlugs(slug) } } });
+    if (items.length === 0) throw new NotFoundException("item not found");
     await this.prisma.entitlement
-      .delete({ where: { deviceId_itemId: { deviceId, itemId: item.id } } })
+      .deleteMany({ where: { deviceId, itemId: { in: items.map((item) => item.id) } } })
       .catch(() => undefined);
     await this.devices.syncEntitlements(deviceId);
     return { ok: true };

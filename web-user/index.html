@@ -1,0 +1,647 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>CryptoClock Pro</title>
+<style>
+  :root{ --bg:#080a0d; --panel:#12161d; --panel2:#1a212c; --accent:#F0B90B; --accent2:#ffd23f; --muted:#7d8794; --line:#262e3a; --ok:#0ECB81; --err:#ff5b5b; --txt:#e9ecef; }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body{ margin:0; color:var(--txt); font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:
+      radial-gradient(1100px 420px at 50% -160px, rgba(240,185,11,.10), transparent 70%),
+      radial-gradient(700px 500px at 110% 10%, rgba(14,203,129,.06), transparent 60%),
+      var(--bg); background-attachment:fixed; }
+  a{ color:var(--accent); }
+  .wrap{ max-width:540px; margin:0 auto; min-height:100vh; display:flex; flex-direction:column; }
+  header{ position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:8px; padding:13px 16px;
+    background:rgba(8,10,13,.72); backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); border-bottom:1px solid var(--line); }
+  header .back{ cursor:pointer; color:var(--muted); font-size:26px; line-height:1; padding:0 6px; border-radius:8px; transition:.12s; }
+  header .back:hover{ color:var(--txt); background:var(--panel2); }
+  header h1{ font-size:17px; margin:0; color:var(--txt); font-weight:700; flex:1; letter-spacing:.2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  header .act{ color:var(--accent); cursor:pointer; font-size:13px; font-weight:600; padding:6px 10px; border-radius:8px; background:rgba(240,185,11,.10); }
+  header .act:hover{ background:rgba(240,185,11,.18); }
+  main{ flex:1; padding:16px 16px 80px; }
+  .panel{ background:linear-gradient(180deg, rgba(255,255,255,.025), transparent), var(--panel); border:1px solid var(--line); border-radius:16px; padding:15px; margin-bottom:12px; box-shadow:0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px -18px rgba(0,0,0,.8); }
+  .row{ display:flex; align-items:center; gap:11px; }
+  .row.tile{ cursor:pointer; transition:.14s; border-radius:12px; margin:-4px; padding:4px; }
+  .row.tile:hover{ background:rgba(255,255,255,.03); transform:translateX(2px); }
+  .row .ico{ width:42px; height:42px; border-radius:12px; background:var(--panel2); display:flex; align-items:center; justify-content:center; font-size:20px; flex:none; box-shadow:0 0 0 1px rgba(255,255,255,.04) inset; }
+  .grow{ flex:1; min-width:0; }
+  .ttl{ font-weight:650; letter-spacing:.1px; } .sub{ color:var(--muted); font-size:12.5px; }
+  .arr{ color:var(--muted); font-size:20px; }
+  label.fld{ display:block; margin:14px 0 5px; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.6px; font-weight:600; }
+  input[type=text],input[type=email],input[type=number],input[type=password],select,textarea{
+    width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--txt); border-radius:11px; padding:11px 13px; font-size:15px; outline:none; transition:.12s; }
+  input:focus,select:focus,textarea:focus{ border-color:var(--accent); box-shadow:0 0 0 3px rgba(240,185,11,.14); }
+  input[type=range]{ -webkit-appearance:none; appearance:none; height:6px; border-radius:6px; background:var(--panel2); padding:0; }
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:22px; height:22px; border-radius:50%; background:var(--accent); border:3px solid #0b0e11; cursor:pointer; box-shadow:0 2px 8px rgba(0,0,0,.5); }
+  button{ font:inherit; cursor:pointer; border-radius:11px; border:1px solid var(--line); background:var(--panel2); color:var(--txt); padding:10px 14px; transition:.12s; }
+  button:hover{ border-color:#39424f; }
+  button.primary{ background:linear-gradient(180deg, var(--accent2), var(--accent)); color:#1a1300; border:none; font-weight:800; width:100%; padding:14px; box-shadow:0 8px 22px -10px rgba(240,185,11,.55); letter-spacing:.2px; }
+  button.primary:hover{ filter:brightness(1.05); }
+  button.ghost{ background:transparent; }
+  button.danger{ color:var(--err); border-color:#5a2730; background:transparent; }
+  button:disabled{ opacity:.45; cursor:default; box-shadow:none; }
+  .switch{ position:relative; width:48px; height:28px; flex:none; }
+  .switch input{ display:none; }
+  .switch span{ position:absolute; inset:0; background:#39424f; border-radius:20px; transition:.18s; }
+  .switch span:before{ content:""; position:absolute; width:22px; height:22px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.18s; box-shadow:0 1px 3px rgba(0,0,0,.4); }
+  .switch input:checked + span{ background:linear-gradient(180deg,var(--accent2),var(--accent)); }
+  .switch input:checked + span:before{ transform:translateX(20px); }
+  .chip{ display:inline-flex; align-items:center; gap:7px; background:var(--panel2); border:1px solid var(--line); border-radius:20px; padding:7px 12px; margin:5px 5px 0 0; font-size:13px; font-weight:600; }
+  .chip b{ cursor:pointer; color:var(--muted); font-weight:400; }
+  .chip b:hover{ color:var(--err); }
+  .swatch{ width:34px; height:34px; border-radius:9px; border:2px solid var(--line); flex:none; cursor:pointer; padding:0; box-shadow:0 0 0 1px rgba(0,0,0,.3) inset; }
+  .toast{ position:fixed; left:50%; bottom:26px; transform:translateX(-50%); background:#1b2330; border:1px solid var(--line); padding:11px 18px; border-radius:12px; z-index:50; max-width:90%; box-shadow:0 12px 30px -8px rgba(0,0,0,.7); font-weight:600; animation:pop .2s ease; }
+  @keyframes pop{ from{ transform:translate(-50%,8px); opacity:0; } }
+  .err{ color:var(--err); } .ok{ color:var(--ok); }
+  .center{ flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:14px; padding:30px; }
+  .logo{ width:100px; height:100px; border-radius:28px; background:linear-gradient(160deg,#1c232e,#10141a); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:48px; box-shadow:0 18px 50px -16px rgba(240,185,11,.4), 0 0 0 1px rgba(240,185,11,.15) inset; }
+  .muted{ color:var(--muted); } .small{ font-size:13px; }
+  .divider{ display:flex; align-items:center; gap:10px; color:var(--muted); margin:16px 0; font-size:13px; }
+  .divider:before,.divider:after{ content:""; height:1px; background:var(--line); flex:1; }
+  .grid2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .spin{ width:18px; height:18px; border:2px solid #39424f; border-top-color:var(--accent); border-radius:50%; animation:sp .7s linear infinite; display:inline-block; vertical-align:middle; }
+  @keyframes sp{ to{ transform:rotate(360deg); } }
+  .thumb{ width:60px; height:60px; object-fit:cover; border-radius:10px; border:1px solid var(--line); }
+  .pill{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; background:rgba(14,203,129,.12); color:var(--ok); letter-spacing:.3px; }
+  .pill.dot:before{ content:""; width:6px; height:6px; border-radius:50%; background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  .secttl{ font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.8px; margin:0 0 10px; }
+  .savebar{ position:fixed; left:0; right:0; bottom:0; z-index:8; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:linear-gradient(180deg, transparent, rgba(8,10,13,.9)30%); pointer-events:none; }
+  .savebar > *{ pointer-events:auto; max-width:540px; margin:0 auto; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script type="module">
+import mqtt from 'mqtt';
+
+/* ===================== CONFIG ===================== *
+ * Browser-safe values are injected by Vite from VITE_* environment variables.
+ * Never put service_role keys or broker master passwords in this app. */
+const CFG = {
+  supabaseUrl: import.meta.env.VITE_SUPABASE_URL || '',
+  supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+  hubBase: import.meta.env.VITE_HUB_BASE_URL || '',
+  mqttWsUrl: import.meta.env.VITE_MQTT_WS_URL || '',
+};
+
+/* ===================== small utils ===================== */
+const $ = (h)=>{ const t=document.createElement('template'); t.innerHTML=h.trim(); return t.content.firstElementChild; };
+const el = (id)=>document.getElementById(id);
+const esc = (s)=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function toast(msg, cls=''){ const t=$(`<div class="toast ${cls}">${esc(msg)}</div>`); document.body.appendChild(t); setTimeout(()=>t.remove(), 2600); }
+const LS = { get:(k)=>localStorage.getItem(k), set:(k,v)=>localStorage.setItem(k,v), del:(k)=>localStorage.removeItem(k) };
+
+/* ===================== Supabase auth (REST + OAuth redirect) ===================== */
+const Auth = {
+  hdr(){ return { 'apikey':CFG.supabaseAnonKey, 'Content-Type':'application/json' }; },
+  email(){ return LS.get('ccp_email'); },
+  token(){ return LS.get('ccp_access_token'); },
+  save(email, tok){ LS.set('ccp_email', email||''); LS.set('ccp_access_token', tok||''); },
+  signOut(){ MqttRpc.disconnect(); LS.del('ccp_email'); LS.del('ccp_access_token'); },
+  async requestOtp(email){
+    try{ const r = await fetch(`${CFG.supabaseUrl}/auth/v1/otp`, {method:'POST', headers:this.hdr(), body:JSON.stringify({email, create_user:true})});
+      if(r.status>=400){ const m=await r.json(); return m.msg||m.error_description||('HTTP '+r.status); } return null;
+    }catch(e){ return String(e); }
+  },
+  async verifyOtp(email, code){
+    try{ const r=await fetch(`${CFG.supabaseUrl}/auth/v1/verify`, {method:'POST', headers:this.hdr(), body:JSON.stringify({type:'email', email, token:code})});
+      if(r.status>=400) return null; const j=await r.json(); const e=j.user?.email||email; this.save(e, j.access_token||''); return e;
+    }catch(_){ return null; }
+  },
+  // Google: redirect through Supabase OAuth; token comes back in the URL hash.
+  googleRedirect(){
+    const url = new URL(`${CFG.supabaseUrl}/auth/v1/authorize`);
+    url.searchParams.set('provider','google');
+    url.searchParams.set('redirect_to', location.origin + location.pathname);
+    location.assign(url.toString());
+  },
+  // Parse #access_token=... after an OAuth redirect; returns true if a session was captured.
+  async captureHash(){
+    if(!location.hash.includes('access_token=')) return false;
+    const p = new URLSearchParams(location.hash.slice(1));
+    const tok = p.get('access_token'); if(!tok) return false;
+    let email='';
+    try{ const r=await fetch(`${CFG.supabaseUrl}/auth/v1/user`, {headers:{apikey:CFG.supabaseAnonKey, Authorization:'Bearer '+tok}}); const j=await r.json(); email=j.email||''; }catch(_){}
+    this.save(email, tok);
+    history.replaceState({}, document.title, location.pathname);
+    return true;
+  },
+};
+
+/* ===================== MQTT cloud RPC ===================== */
+const MqttRpc = {
+  client:null, userId:'', pending:new Map(),
+  async connect(){
+    if(this.client?.connected) return this;
+    if(!CFG.mqttWsUrl) throw new Error('MQTT WSS URL is not configured');
+    const token=Auth.token(), userId=jwtSubject(token);
+    if(!token||!userId) throw new Error('Sign in again before connecting');
+    this.userId=userId;
+    const c=mqtt.connect(CFG.mqttWsUrl,{
+      username:'web-user:'+userId,
+      password:token,
+      clientId:'ccp-user-'+randomId(),
+      clean:true,
+      reconnectPeriod:3000,
+      connectTimeout:10000,
+      protocolVersion:4,
+    });
+    this.client=c;
+    c.on('message',(topic,bytes)=>{
+      const id=topic.split('/').pop(), p=this.pending.get(id);
+      if(!p) return;
+      this.pending.delete(id); clearTimeout(p.timer);
+      try{ const msg=JSON.parse(bytes.toString()); msg.ok===false?p.reject(new Error(msg.error||'Request failed')):p.resolve(msg.data??msg); }
+      catch(e){ p.reject(e); }
+    });
+    c.on('close',()=>{ for(const[,p]of this.pending){clearTimeout(p.timer);p.reject(new Error('MQTT disconnected'));} this.pending.clear(); });
+    await new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>reject(new Error('MQTT connection timed out')),10000);
+      c.once('connect',()=>{clearTimeout(timer);resolve();});
+      c.once('error',(e)=>{clearTimeout(timer);reject(e);});
+    });
+    await new Promise((resolve,reject)=>c.subscribe(`ccp/web/user/${userId}/response/#`,{qos:1},e=>e?reject(e):resolve()));
+    return this;
+  },
+  disconnect(){ this.client?.end(true); this.client=null; this.userId=''; },
+  request(operation,deviceId,payload={},timeoutMs=12000){
+    if(!this.client?.connected||!this.userId) return Promise.reject(new Error('MQTT gateway is not connected'));
+    const id=randomId(), topic=`ccp/web/user/${this.userId}/request/${id}`;
+    const body=JSON.stringify({id,operation,deviceId,payload,sentAt:new Date().toISOString()});
+    return new Promise((resolve,reject)=>{
+      const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error('MQTT request timed out'));},timeoutMs);
+      this.pending.set(id,{resolve,reject,timer});
+      this.client.publish(topic,body,{qos:1},e=>{if(e){clearTimeout(timer);this.pending.delete(id);reject(e);}});
+    });
+  }
+};
+function randomId(){ return crypto.randomUUID?.().replaceAll('-','').slice(0,20)||Math.random().toString(36).slice(2,14); }
+function jwtSubject(token){
+  try{ const p=token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'); return JSON.parse(atob(p.padEnd(Math.ceil(p.length/4)*4,'='))).sub||''; }
+  catch(_){ return ''; }
+}
+
+/* ===================== Device transports ===================== */
+class DeviceApi {
+  constructor(host){ this.host = host.replace(/^https?:\/\//,'').replace(/\/$/,''); this.mode='lan'; this.supportsFiles=true; }
+  u(p){ return `http://${this.host}${p}`; }
+  async info(){ const r=await tfetch(this.u('/api/v1/info'), {}, 6000); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
+  async getConfig(){ const r=await tfetch(this.u('/api/v1/config'), {}, 6000); const t=await r.text(); return t?JSON.parse(t):{}; }
+  async setConfig(cfg){ const r=await fetch(this.u('/api/v1/config'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)}); if(!r.ok) throw new Error('HTTP '+r.status); }
+  async setBrightness(v){ await fetch(this.u('/api/v1/brightness'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({value:v})}); }
+  identify(){ return fetch(this.u('/api/v1/identify'), {method:'POST'}); }
+  wifiReset(){ return fetch(this.u('/api/v1/wifi/reset'), {method:'POST'}); }
+  // NB: send paths RAW (literal slashes) — the firmware's query parser doesn't
+  // URL-decode, so an encoded %2F would fail its "must be under pages/" check.
+  async listFiles(dir){ const r=await fetch(this.u('/api/v1/files?dir='+dir)); const j=await r.json(); return {sd:j.sd_mounted===true, files:(j.files||[]).map(f=>({name:f.name,size:f.size}))}; }
+  fileUrl(path){ return this.u('/api/v1/file?path='+path); }
+  async upload(path, bytes){ const r=await fetch(this.u('/api/v1/upload?path='+path), {method:'POST', headers:{'Content-Type':'application/octet-stream'}, body:bytes}); if(!r.ok) throw new Error('HTTP '+r.status+': '+await r.text()); }
+  async del(path){ await fetch(this.u('/api/v1/delete'), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path})}); }
+}
+
+class CloudDeviceApi {
+  constructor(rpc,deviceId){ this.rpc=rpc; this.deviceId=deviceId; this.mode='cloud'; this.supportsFiles=false; }
+  async info(){ const d=await this.rpc.request('device.info',this.deviceId); return {...d,device_id:d.device_id||this.deviceId}; }
+  async getConfig(){ const d=await this.rpc.request('device.settings.get',this.deviceId); return d.config||d; }
+  async setConfig(config){ await this.rpc.request('device.settings.put',this.deviceId,{config}); }
+  async setBrightness(value){ await this.rpc.request('device.command',this.deviceId,{type:'brightness',params:{value}}); }
+  async identify(){ await this.rpc.request('device.command',this.deviceId,{type:'identify'}); }
+  async wifiReset(){ await this.rpc.request('device.command',this.deviceId,{type:'wifi_reset'}); }
+  fileUrl(){ return ''; }
+  async listFiles(){ throw new Error('Photo files are managed locally from the mobile app'); }
+  async upload(){ throw new Error('Photo uploads require the mobile app on the same WiFi'); }
+  async del(){ throw new Error('Photo files are managed locally from the mobile app'); }
+}
+
+/* ===================== Hub API (cloud) ===================== */
+function tfetch(url, opts={}, ms=8000){ const ac=new AbortController(); const t=setTimeout(()=>ac.abort(), ms); return fetch(url, {...opts, signal:ac.signal}).finally(()=>clearTimeout(t)); }
+/* Centre-crop an image File to a square and re-encode as a `size`×`size` PNG (the
+ * device wants small fixed-size assets — same as the Flutter app's avatar flow). */
+function imgToSquarePng(file, size){
+  return new Promise((res, rej)=>{ const img=new Image();
+    img.onload=()=>{ const s=Math.min(img.width, img.height), sx=(img.width-s)/2, sy=(img.height-s)/2;
+      const cv=document.createElement('canvas'); cv.width=cv.height=size; const cx=cv.getContext('2d');
+      cx.drawImage(img, sx, sy, s, s, 0, 0, size, size);
+      cv.toBlob(async b=>{ if(!b) return rej('encode failed'); res(new Uint8Array(await b.arrayBuffer())); }, 'image/png');
+      URL.revokeObjectURL(img.src); };
+    img.onerror=()=>rej('not a valid image'); img.src=URL.createObjectURL(file); });
+}
+const Hub = {
+  async catalog(){ try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/items`); return await r.json(); }catch(_){ return []; } },
+  async entitlements(deviceId){ const t=Auth.token(); if(!t)return[]; try{ const r=await tfetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/entitlements`,{headers:{'Authorization':'Bearer '+t}}); return await r.json(); }catch(_){ return []; } },
+  async checkout(slug, deviceId){ const t=Auth.token(); if(!t) return {error:'Please login first'};
+    try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/checkout`, {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+t}, body:JSON.stringify({slug, deviceId})}, 15000); return await r.json(); }catch(e){ return {error:String(e)}; } },
+  async resolveSocial(url, platform){ const t=Auth.token(); if(!t) return {error:'Please login first'};
+    try{ const r=await tfetch(`${CFG.hubBase}/api/v1/social/resolve`, {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+t}, body:JSON.stringify({url, platform})}, 15000); if(r.status>=300) return {error:'HTTP '+r.status}; return await r.json(); }catch(e){ return {error:String(e)}; } },
+  async requestFeature(deviceId, page, feature){ const t=Auth.token(); if(!t) return 'Please login first';
+    try{ const r=await tfetch(`${CFG.hubBase}/api/v1/me/feature-requests`, {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+t}, body:JSON.stringify({deviceId, page, feature, detail:{}})}, 15000); return r.status>=300?('HTTP '+r.status):null; }catch(e){ return String(e); } },
+};
+
+/* Locked add-on UI (paid feature this device doesn't hold yet): title/price/desc +
+ * Request-approval and Unlock buttons. id-prefixed so handlers can bind. */
+function lockedFeature(c, slug, page, feature){
+  const item=c.catalogItem(slug)||{}; const cents=item.priceCents||0; const price=cents===0?'Free':`$${(cents/100).toFixed(2)}`;
+  return `<div class="panel" style="border-color:#3a3320">
+    <div class="row"><span style="font-size:16px">🔒</span><div class="grow ttl">${esc(item.title||'Locked feature')}</div><div style="color:var(--accent);font-weight:700">${price}</div></div>
+    <div class="sub" style="margin:6px 0 10px">${esc(item.description||'This feature is locked on this CryptoClock.')}</div>
+    <div class="grid2"><button data-req="${esc(page)}|${esc(feature)}">Request approval</button><button class="primary" style="width:auto;padding:10px" data-buy="${esc(slug)}">Unlock ${price}</button></div></div>`;
+}
+function bindLocked(root, c){
+  root.querySelectorAll('[data-req]').forEach(b=>b.onclick=async()=>{ const[pg,ft]=b.dataset.req.split('|'); b.disabled=true; const e=await Hub.requestFeature(c.deviceId,pg,ft); toast(e?('Failed: '+e):'Sent to admin for approval', e?'err':'ok'); b.disabled=false; });
+  root.querySelectorAll('[data-buy]').forEach(b=>b.onclick=async()=>{ b.disabled=true; const r=await Hub.checkout(b.dataset.buy,c.deviceId); if(r.url) location.href=r.url; else { toast(r.error||'Store not configured','err'); b.disabled=false; } });
+}
+
+/* ===================== DeviceController (mirror of the Flutter model) ===================== */
+const NATIVE_TITLES = { clock:'Clock', crypto:'Crypto', slideshow:'Photo slideshow' };
+const ALL_PAGES = ['clock','crypto','slideshow'];
+const MAX_PAGES = 5;
+class Ctrl {
+  constructor(api, info){ this.api=api; this.info=info; this.config={}; this.brightness=(info.brightness??80); this.entitlements=[]; this.catalog=[]; }
+  get deviceId(){ return this.info.device_id||'device'; }
+  async load(){ this.config=await this.api.getConfig(); this.entitlements=await Hub.entitlements(this.deviceId); this.catalog=await Hub.catalog(); }
+  has(slug){ return this.entitlements.includes(slug); }
+  catalogItem(slug){ return this.catalog.find(c=>c.slug===slug||c.runtimeSlug===slug)||null; }
+  section(k){ return Object.assign({}, this.config[k]||{}); }
+  get enabledPages(){ return (this.config.pages||ALL_PAGES).slice(); }
+  get availablePages(){
+    const pages=[...ALL_PAGES];
+    for(const c of this.catalog){ const ps=c.slug, rs=c.runtimeSlug||ps;
+      if(c.kind==='PAGE'&&ps&&rs&&this.entitlements.includes(ps)&&!pages.includes(rs)) pages.push(rs); }
+    for(const p of this.enabledPages) if(!pages.includes(p)) pages.push(p);
+    return pages;
+  }
+  pageTitle(slug){ if(NATIVE_TITLES[slug]) return NATIVE_TITLES[slug]; const t=this.catalogItem(slug)?.title; if(t) return t; return slug? slug[0].toUpperCase()+slug.slice(1):slug; }
+  get pagesFull(){ return this.enabledPages.length>=MAX_PAGES; }
+  get symbols(){ return this.section('crypto').symbols || ['BTCUSDT','ETHUSDT','BNBUSDT','DOGEUSDT']; }
+  patch(sec,key,val){ const s=this.section(sec); s[key]=val; this.config[sec]=s; }
+  setTop(key,val){ this.config[key]=val; }
+  setPageEnabled(page,on){ let p=this.enabledPages.slice();
+    if(on){ if(p.includes(page)) return true; if(p.length>=MAX_PAGES) return false; p.push(page); }
+    else { if(p.length<=1) return true; p=p.filter(x=>x!==page); }
+    this.config.pages=p; return true; }
+  movePage(slug,dir){ const p=this.enabledPages.slice(); const i=p.indexOf(slug); const j=i+dir; if(i<0||j<0||j>=p.length) return; [p[i],p[j]]=[p[j],p[i]]; this.config.pages=p; }
+  async save(){ const cfg=Object.assign({}, this.config, {pages:this.enabledPages, brightness:Math.round(this.brightness)}); const e=Auth.email(); if(e) cfg.owner={email:e}; await this.api.setConfig(cfg); this.config=cfg; }
+}
+
+/* ===================== UI helpers ===================== */
+function header(title, back, action){
+  return `<header>${back?`<div class="back" data-back>‹</div>`:''}<h1>${esc(title)}</h1>${action||''}</header>`;
+}
+function tile(ico,t,sub,attr='',color=''){ const cs=color?`style="background:${color}22;color:${color};box-shadow:0 0 0 1px ${color}33 inset"`:''; return `<div class="panel" style="padding:13px"><div class="row tile" ${attr}><div class="ico" ${cs}>${ico}</div><div class="grow"><div class="ttl">${esc(t)}</div><div class="sub">${esc(sub)}</div></div><div class="arr">›</div></div></div>`; }
+function field(label, id, val, type='text'){ return `<label class="fld">${esc(label)}</label><input id="${id}" type="${type}" value="${esc(val??'')}">`; }
+function colorField(label, id, val){ const v=val||'#000000'; return `<label class="fld">${esc(label)}</label><div class="row"><input class="grow" id="${id}" type="text" value="${esc(v)}"><button class="swatch" style="background:${esc(v)}" data-color="${id}"></button></div>`; }
+function toggleRow(label, id, on){ return `<div class="row" style="margin:10px 0"><div class="grow">${esc(label)}</div><label class="switch"><input type="checkbox" id="${id}" ${on?'checked':''}><span></span></label></div>`; }
+function selectRow(label, id, val, opts){ return `<label class="fld">${esc(label)}</label><select id="${id}">${opts.map(o=>{const[v,t]=Array.isArray(o)?o:[o,o]; return `<option value="${esc(v)}" ${v===val?'selected':''}>${esc(t)}</option>`;}).join('')}</select>`; }
+function bindColors(root){ root.querySelectorAll('[data-color]').forEach(b=>{ b.onclick=()=>{ const inp=el(b.dataset.color); const c=$(`<input type="color" value="${/^#([0-9a-f]{6})$/i.test(inp.value)?inp.value:'#000000'}">`); c.style.position='fixed'; c.style.opacity=0; document.body.appendChild(c); c.oninput=()=>{ inp.value=c.value.toUpperCase(); b.style.background=c.value; }; c.onchange=()=>c.remove(); c.click(); }; }); }
+
+/* ===================== App state + router ===================== */
+const App = { ctrl:null, route:'gate' };
+function render(html){ el('app').innerHTML = html; const a=el('app'); a.querySelectorAll('[data-back]').forEach(b=>b.onclick=()=>history.back()); bindColors(a); }
+function go(route, push=true){ App.route=route; if(push) history.pushState({route}, ''); draw(); }
+window.onpopstate = ()=>{ draw(); };
+
+/* ---------- views ---------- */
+async function draw(){
+  const r = App.route;
+  if(r==='gate') return drawGate();
+  if(r==='welcome') return drawWelcome();
+  if(r==='login') return drawLogin();
+  if(r==='connect') return drawConnect();
+  if(r==='device') return drawDevice();
+  if(r==='system') return drawSystem();
+  if(r==='clock') return drawClock();
+  if(r==='crypto') return drawCrypto();
+  if(r==='profile') return drawProfile();
+  if(r==='photos') return drawPhotos();
+  if(r==='weather') return drawWeather();
+  if(r==='calendar') return drawCalendar();
+  if(r==='store') return drawStore();
+}
+
+function drawGate(){ App.route = Auth.email() ? 'connect' : 'welcome'; draw(); }
+
+function drawWelcome(){
+  render(`<div class="center">
+    <div class="logo">⌚</div>
+    <h1 style="color:var(--accent);margin:0;font-size:28px">CryptoClock Pro</h1>
+    <div class="muted">Set up and control your crypto display.<br>Sign in to manage your CryptoClock.</div>
+    <button class="primary" id="cta" style="max-width:320px">Sign in to get started</button>
+  </div>`);
+  el('cta').onclick=()=>go('login');
+}
+
+function drawLogin(){
+  let sent=false;
+  const view=()=>{ render(`${header('Login', true)}<main>
+    <div class="center" style="padding:6px 0 18px"><div class="logo" style="width:60px;height:60px;font-size:28px">🔒</div>
+      <div class="muted small">Login to manage your CryptoClock</div></div>
+    ${!sent?`<button id="google" style="width:100%">Sign in with Google</button><div class="divider">or</div>`:''}
+    ${field('Email','email', el('email')?.value||'', 'email')}
+    ${sent?field('6-digit code from your email','code','','number'):''}
+    <div id="err" class="err small" style="margin-top:8px"></div>
+    <div style="margin-top:14px"><button class="primary" id="go">${sent?'Verify code':'Send code to email'}</button></div>
+    ${sent?`<button class="ghost" id="diff" style="width:100%;margin-top:8px;color:var(--muted)">Use a different email</button>`:''}
+  </main>`);
+    if(!sent) el('google').onclick=()=>Auth.googleRedirect();
+    el('go').onclick=onGo; if(sent) el('diff').onclick=()=>{sent=false;view();};
+  };
+  async function onGo(){
+    const err=el('err'); err.textContent='';
+    if(!sent){ const email=el('email').value.trim(); if(!email.includes('@')){ err.textContent='Enter a valid email'; return; }
+      el('go').disabled=true; el('go').textContent='Please wait...'; const e=await Auth.requestOtp(email);
+      el('go').disabled=false; if(e){ err.textContent=e; el('go').textContent='Send code to email'; } else { sent=true; view(); }
+    } else { const email=el('email').value.trim(), code=el('code').value.trim();
+      el('go').disabled=true; el('go').textContent='Please wait...'; const ok=await Auth.verifyOtp(email,code);
+      if(ok){ toast('Signed in','ok'); go('connect'); } else { err.textContent='Wrong or expired code — try again'; el('go').disabled=false; el('go').textContent='Verify code'; } }
+  }
+  view();
+}
+
+function drawConnect(){
+  const cloudMode=location.protocol==='https:'&&!!CFG.mqttWsUrl;
+  render(`${header('CryptoClock Pro', false, `<div class="act" id="out">Sign out</div>`)}<main>
+    <div class="panel"><div class="sub" style="margin-bottom:8px">${cloudMode?'Enter the CryptoClock device ID assigned to your account. Commands and settings use the secure MQTT gateway.':"Enter your display's IP address. Local mode works only on the same WiFi over HTTP."}</div>
+      <div class="row"><input class="grow" id="ip" type="text" placeholder="${cloudMode?'ccp-xxxxxxxxxxxx':'192.168.1.x'}" value="${esc(LS.get(cloudMode?'ccp_last_device':'ccp_last_ip')||'')}"><button class="primary" id="connect" style="width:auto">Connect</button></div>
+      <div id="cerr" class="err small" style="margin-top:8px"></div>
+    </div>
+    <div class="sub" style="text-align:center;margin-top:8px">Signed in as ${esc(Auth.email()||'')}</div>
+    <div class="panel" style="margin-top:14px"><div class="sub">New device? Join its WiFi <b>CCP-Setup-XXXX</b> and open <b>http://192.168.4.1</b> to set up WiFi first.</div></div>
+  </main>`);
+  el('out').onclick=()=>{ Auth.signOut(); go('welcome'); };
+  el('connect').onclick=async()=>{
+    const ip=el('ip').value.trim(); if(!ip) return;
+    const b=el('connect'); b.disabled=true; b.textContent='...'; el('cerr').textContent='';
+    try{ const api=cloudMode?new CloudDeviceApi(await MqttRpc.connect(),ip):new DeviceApi(ip); const info=await api.info(); LS.set(cloudMode?'ccp_last_device':'ccp_last_ip', ip);
+      App.ctrl=new Ctrl(api, info); await App.ctrl.load(); go('device');
+    }catch(e){ el('cerr').textContent=cloudMode?'Cannot reach this device through the MQTT gateway. ('+e+')':'Cannot reach device at '+ip+' — use local HTTP and the same WiFi. ('+e+')'; b.disabled=false; b.textContent='Connect'; }
+  };
+}
+
+function drawDevice(){
+  const c=App.ctrl; if(!c) return go('connect',false);
+  const has=(s)=>c.has(s);
+  const info=c.info||{};
+  render(`${header('My CryptoClock', true, `<div class="act" id="idf">Identify</div>`)}<main>
+    <div class="panel" style="display:flex;align-items:center;gap:13px">
+      <div class="ico" style="width:46px;height:46px;font-size:24px;background:rgba(240,185,11,.14);color:var(--accent)">⌚</div>
+      <div class="grow"><div class="ttl">${esc(c.deviceId)}</div>
+        <div class="sub" style="margin-top:3px">${esc(info.model||'display')} · fw ${esc(info.fw||'?')}</div></div>
+      <span class="pill dot">ONLINE</span></div>
+    ${tile('⚙️','System','Pages, brightness, mode, WiFi',`data-go="system"`,'#5b8def')}
+    ${tile('👤','Profile','Photo, name, colours, social',`data-go="profile"`,'#b06ef0')}
+    ${tile('🕒','Clock','24/12h, date, colours, alarm',`data-go="clock"`,'#00D1FF')}
+    ${tile('📈','Crypto','Coins, chart, alerts',`data-go="crypto"`,'#0ECB81')}
+    ${tile('🖼️','Photo slideshow','Upload, order, effect',`data-go="photos"`,'#FF9500')}
+    ${tile('⛅','Weather','City, PM2.5/PM10, background',`data-go="weather"`,'#38bdf8')}
+    ${tile('📅','Calendar','Title, background',`data-go="calendar"`,'#ff5ba0')}
+    <div class="panel" style="padding:13px;background:linear-gradient(180deg,rgba(240,185,11,.10),transparent),var(--panel);border-color:rgba(240,185,11,.35)"><div class="row tile" data-go="store"><div class="ico" style="background:rgba(240,185,11,.18);color:var(--accent)">🛒</div><div class="grow"><div class="ttl" style="color:var(--accent)">Store</div><div class="sub">Unlock more pages & features</div></div><div class="arr">›</div></div></div>
+  </main>`);
+  el('idf').onclick=()=>{ c.api.identify(); toast('Beep + flash sent'); };
+  el('app').querySelectorAll('[data-go]').forEach(t=>t.onclick=()=>go(t.dataset.go));
+}
+
+/* ---- a settings page scaffold with a Save bar ---- */
+function settingsPage(title, bodyHtml, collect){
+  const c=App.ctrl;
+  render(`${header(title, true, `<div class="act" id="save">Save</div>`)}<main>${bodyHtml}</main>
+    <div class="savebar"><button class="primary" id="saveBtn">Save to display</button></div>`);
+  async function doSave(){
+    collect(c); const b=el('saveBtn'); b.disabled=true; b.textContent='Saving...';
+    try{ await c.save(); toast('Saved — display reloading','ok'); }
+    catch(e){ toast('Save failed: '+e,'err'); }
+    b.disabled=false; b.textContent='Save to display';
+  }
+  el('save').onclick=doSave; el('saveBtn').onclick=doSave;
+}
+
+function drawSystem(){
+  const c=App.ctrl; const dyn=c.config.display_mode==='dynamic';
+  const enabled=c.enabledPages, avail=c.availablePages;
+  const rotation=enabled.map((p,i)=>`<div class="row" style="margin:8px 0"><div class="grow">${esc(c.pageTitle(p))}</div>
+      <button data-mv="${p}|-1" ${i===0?'disabled':''}>↑</button><button data-mv="${p}|1" ${i===enabled.length-1?'disabled':''}>↓</button>
+      <label class="switch"><input type="checkbox" data-pg="${p}" checked><span></span></label></div>`).join('');
+  const more=avail.filter(p=>!enabled.includes(p)).map(p=>`<div class="row" style="margin:8px 0"><div class="grow muted">${esc(c.pageTitle(p))}</div>
+      <label class="switch"><input type="checkbox" data-pg="${p}"><span></span></label></div>`).join('');
+  settingsPage('System', `
+    <div class="panel"><div class="ttl" style="margin-bottom:6px">Pages in rotation <span class="sub">(${enabled.length}/${MAX_PAGES})</span></div>
+      ${rotation}${more?`<div class="divider">available</div>${more}`:''}</div>
+    <div class="panel">${selectRow('Display mode','dmode', dyn?'dynamic':'static', [['static','Static — swipe to change'],['dynamic','Dynamic — auto-rotate']])}
+      <div id="delayWrap" style="${dyn?'':'display:none'}">${field('Auto-rotate seconds','pdelay', c.config.page_delay_s??10, 'number')}</div></div>
+    <div class="panel"><label class="fld">Brightness</label><input type="range" min="5" max="100" value="${Math.round(c.brightness)}" id="bright" style="width:100%"><div class="sub" id="bval">${Math.round(c.brightness)}%</div></div>
+    <div class="panel"><div class="row"><div class="grow"><div class="ttl">WiFi</div><div class="sub">Reset & re-provision</div></div><button class="danger" id="wifi">Reset WiFi</button></div></div>
+  `, (cc)=>{ cc.setTop('display_mode', el('dmode').value); cc.setTop('page_delay_s', parseInt(el('pdelay').value)||10); });
+  el('app').querySelectorAll('[data-pg]').forEach(t=>t.onchange=()=>{ if(!c.setPageEnabled(t.dataset.pg, t.checked)){ t.checked=false; toast('Rotation is full ('+MAX_PAGES+' max)','err'); } else drawSystem(); });
+  el('app').querySelectorAll('[data-mv]').forEach(b=>b.onclick=()=>{ const[p,d]=b.dataset.mv.split('|'); c.movePage(p,parseInt(d)); drawSystem(); });
+  el('dmode').onchange=()=>{ el('delayWrap').style.display = el('dmode').value==='dynamic'?'':'none'; };
+  const br=el('bright'); br.oninput=()=>{ el('bval').textContent=br.value+'%'; c.brightness=parseInt(br.value); }; br.onchange=()=>c.api.setBrightness(parseInt(br.value));
+  el('wifi').onclick=()=>{ if(confirm('Reset WiFi? The display reboots into its setup portal.')){ c.api.wifiReset(); toast('Resetting WiFi…'); } };
+}
+
+const CLOCK_THEMES={ Cyan:{time:'#00D1FF',sec:'#FF9500',date:'#848E9C',bg:'#0B0E11'}, Gold:{time:'#F0B90B',sec:'#FF9500',date:'#848E9C',bg:'#0B0E11'}, Mint:{time:'#0ECB81',sec:'#A0F0D0',date:'#7A8A85',bg:'#06120E'}, Neon:{time:'#FF2E97',sec:'#00E5FF',date:'#9A6A8A',bg:'#0A0014'}, Mono:{time:'#FFFFFF',sec:'#BBBBBB',date:'#888888',bg:'#000000'} };
+const DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+function daysLabel(d){ d=d||[]; if(!d.length)return'Once'; if(d.length===7)return'Every day'; if(JSON.stringify([...d].sort())===JSON.stringify([1,2,3,4,5]))return'Weekdays'; return [...d].sort().map(n=>DOW[n-1]).join(' '); }
+function drawClock(){
+  const c=App.ctrl, s=c.section('clock');
+  const alarms=(s.alarms||[]).map(a=>typeof a==='object'?a:{});
+  const alarmsPanel = c.has('clock-alarm') ? `
+    <div class="panel"><div class="ttl" style="margin-bottom:8px">Alarm <span class="sub">(${alarms.length}/8)</span></div>
+      <div>${alarms.length?alarms.map((a,i)=>`<div class="row" style="margin:9px 0"><div class="grow"><div class="ttl">${esc(a.time||'--:--')}${a.label?' · '+esc(a.label):''}</div><div class="sub">${esc(daysLabel(a.days))}</div></div><label class="switch"><input type="checkbox" data-aen="${i}" ${a.enabled!==false?'checked':''}><span></span></label><button class="danger" data-adel="${i}">✕</button></div>`).join(''):'<div class="muted small">No alarms yet.</div>'}</div>
+      <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:12px">
+        <div class="row" style="gap:8px"><input id="am_time" type="time" value="07:00" style="width:auto"><input id="am_label" type="text" placeholder="Label (optional)" class="grow"></div>
+        <div id="am_days" style="margin-top:8px">${DOW.map((d,i)=>`<span class="chip" data-day="${i+1}" style="cursor:pointer;user-select:none">${d}</span>`).join('')}</div>
+        <button id="am_add" style="width:100%;margin-top:10px">＋ Add alarm</button></div></div>`
+    : lockedFeature(c,'clock-alarm','clock','alarm');
+  settingsPage('Clock', `
+    <div class="panel">${toggleRow('24-hour time','c24', s.format_24h!==false)}
+      ${toggleRow('Show seconds','csec', s.show_seconds!==false)}
+      ${toggleRow('Show date','cdate', s.show_date!==false)}
+      ${toggleRow('Show logo','clogo', s.show_logo===true)}
+      ${selectRow('Date format','cdfmt', s.date_format||'D MMM YYYY', ['D MMM YYYY','DD/MM/YYYY','MM/DD/YYYY','YYYY-MM-DD'])}
+      ${field('Timezone offset (minutes)','ctz', s.tz_offset_min??420, 'number')}</div>
+    <div class="panel">${selectRow('Theme preset','ctheme','', [['','— custom —'],...Object.keys(CLOCK_THEMES)])}
+      ${colorField('Time colour','ctimec', s.time_color||'#00D1FF')}
+      ${colorField('Seconds colour','csecc', s.sec_color||'#FF9500')}
+      ${colorField('Date colour','cdatec', s.date_color||'#848E9C')}
+      ${colorField('Background','cbg', s.bg_color||'#0B0E11')}</div>
+    ${alarmsPanel}
+  `, (c)=>{ c.patch('clock','format_24h',el('c24').checked); c.patch('clock','show_seconds',el('csec').checked); c.patch('clock','show_date',el('cdate').checked); c.patch('clock','show_logo',el('clogo').checked); c.patch('clock','date_format',el('cdfmt').value); c.patch('clock','tz_offset_min',parseInt(el('ctz').value)||420); c.patch('clock','time_color',el('ctimec').value); c.patch('clock','sec_color',el('csecc').value); c.patch('clock','date_color',el('cdatec').value); c.patch('clock','bg_color',el('cbg').value); });
+  el('ctheme').onchange=()=>{ const t=CLOCK_THEMES[el('ctheme').value]; if(!t) return; el('ctimec').value=t.time; el('csecc').value=t.sec; el('cdatec').value=t.date; el('cbg').value=t.bg; el('app').querySelectorAll('[data-color]').forEach(b=>{ b.style.background=el(b.dataset.color).value; }); };
+  bindLocked(el('app'), c);
+  const nd=new Set();
+  el('app').querySelectorAll('[data-day]').forEach(ch=>ch.onclick=()=>{ const n=+ch.dataset.day; if(nd.has(n)){ nd.delete(n); ch.style.background=''; ch.style.color=''; } else { nd.add(n); ch.style.background='rgba(240,185,11,.22)'; ch.style.color='var(--accent)'; } });
+  if(el('am_add')) el('am_add').onclick=()=>{ if(alarms.length>=8) return toast('Max 8 alarms','err'); c.patch('clock','alarms',[...alarms,{time:el('am_time').value,label:el('am_label').value.trim(),days:[...nd].sort((a,b)=>a-b),enabled:true,sound:'beep'}]); drawClock(); };
+  el('app').querySelectorAll('[data-aen]').forEach(t=>t.onchange=()=>{ const i=+t.dataset.aen; c.patch('clock','alarms',alarms.map((a,x)=>x===i?{...a,enabled:t.checked}:a)); });
+  el('app').querySelectorAll('[data-adel]').forEach(b=>b.onclick=()=>{ c.patch('clock','alarms',alarms.filter((_,i)=>i!==+b.dataset.adel)); drawClock(); });
+}
+
+function drawCrypto(){
+  const c=App.ctrl, s=c.section('crypto');
+  const COINS=['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','LINKUSDT','TONUSDT','TRXUSDT','DOTUSDT'];
+  const chips=c.symbols.map(sy=>`<span class="chip">${esc(sy.replace('USDT',''))} <b data-rm="${esc(sy)}">✕</b></span>`).join('');
+  const addable=COINS.filter(x=>!c.symbols.includes(x));
+  const alerts=(s.alerts||[]).map(a=>typeof a==='object'?a:{});
+  const alertsPanel = c.has('crypto-alerts') ? `
+    <div class="panel"><div class="ttl" style="margin-bottom:8px">Price alerts <span class="sub">(${alerts.length}/8)</span></div>
+      <div>${alerts.length?alerts.map((a,i)=>`<div class="row" style="margin:7px 0"><div class="grow">${esc((a.symbol||'').replace('USDT',''))} · <b style="color:${a.dir==='below'?'#ff7a7a':'#0ECB81'}">${a.dir==='below'?'↓ below':'↑ above'}</b> ${esc(a.price)}</div><button class="danger" data-dal="${i}">✕</button></div>`).join(''):'<div class="muted small">No alerts yet.</div>'}</div>
+      <div class="row" style="margin-top:10px;gap:6px"><select id="al_sym" class="grow">${c.symbols.map(x=>`<option value="${esc(x)}">${esc(x.replace('USDT',''))}</option>`).join('')}</select>
+        <select id="al_dir" style="width:auto"><option value="above">↑ above</option><option value="below">↓ below</option></select>
+        <input id="al_price" type="number" placeholder="price" style="width:88px"><button id="al_add" style="width:auto">Add</button></div></div>`
+    : lockedFeature(c,'crypto-alerts','crypto','alerts');
+  settingsPage('Crypto', `
+    <div class="panel"><div class="ttl" style="margin-bottom:6px">Coins <span class="sub">(${c.symbols.length})</span></div>
+      <div id="chips">${chips||'<span class="muted small">none</span>'}</div>
+      <div class="row" style="margin-top:10px"><select class="grow" id="addsym">${addable.map(x=>`<option>${x}</option>`).join('')}</select><button id="addbtn" style="width:auto">＋ Add</button></div></div>
+    <div class="panel">${selectRow('Style','cstyle', s.style||'chart', [['chart','price + graph'],['big','big price']])}
+      ${selectRow('Timeframe','ctf', s.timeframe||'15m', ['1m','5m','15m','1h','4h','1d'])}
+      ${selectRow('Currency','ccur', s.currency||'USD', ['USD','THB'])}
+      ${field('Refresh seconds','cfetch', s.fetch_interval_s??10, 'number')}</div>
+    ${alertsPanel}
+  `, (cc)=>{ cc.patch('crypto','style',el('cstyle').value); cc.patch('crypto','timeframe',el('ctf').value); cc.patch('crypto','currency',el('ccur').value); cc.patch('crypto','fetch_interval_s',parseInt(el('cfetch').value)||10); });
+  el('addbtn').onclick=()=>{ const v=el('addsym').value; if(v&&!c.symbols.includes(v)){ c.patch('crypto','symbols',[...c.symbols,v]); drawCrypto(); } };
+  el('app').querySelectorAll('[data-rm]').forEach(b=>b.onclick=()=>{ c.patch('crypto','symbols', c.symbols.filter(x=>x!==b.dataset.rm)); drawCrypto(); });
+  bindLocked(el('app'), c);
+  if(el('al_add')) el('al_add').onclick=()=>{ const price=parseFloat(el('al_price').value); if(!price||price<=0) return toast('Enter a price','err'); if(alerts.length>=8) return toast('Max 8 alerts','err'); c.patch('crypto','alerts',[...alerts,{symbol:el('al_sym').value,dir:el('al_dir').value,price}]); drawCrypto(); };
+  el('app').querySelectorAll('[data-dal]').forEach(b=>b.onclick=()=>{ c.patch('crypto','alerts',alerts.filter((_,i)=>i!==+b.dataset.dal)); drawCrypto(); });
+}
+
+function drawProfile(){
+  const c=App.ctrl, s=c.section('profile');
+  const social=(plat,label,url,fol,fwg,sec)=>`<div class="panel"><div class="ttl" style="margin-bottom:6px">${label}</div>
+    ${field('Profile URL','p_'+plat+'_url', s[plat+'_url']||'')}
+    <div class="grid2">${field('Followers','p_'+plat+'_fol', s[plat+'_followers']||'')}${field('Following','p_'+plat+'_fwg', s[plat+'_following']||'')}</div>
+    ${field('Secondary label','p_'+plat+'_sec', s[plat+'_secondary_label']||'')}</div>`;
+  const avSrc = c.api.supportsFiles&&s.avatar ? c.api.fileUrl(s.avatar)+'&t='+Date.now() : '';
+  const avPanel = `<div class="panel"><div class="row">
+    <div id="avwrap" style="width:64px;height:64px;border-radius:16px;overflow:hidden;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:30px;flex:none;box-shadow:0 0 0 1px rgba(255,255,255,.05) inset">${avSrc?`<img src="${avSrc}" style="width:100%;height:100%;object-fit:cover">`:'👤'}</div>
+    <div class="grow"><div class="ttl">Profile photo</div><div class="sub">${c.api.supportsFiles?'Square · auto-resized to 132×132 PNG':'Upload from the mobile app on the same WiFi'}</div></div>
+    ${c.api.supportsFiles?'<button id="avup" style="width:auto">Upload</button>':''}</div>
+    <input type="file" id="avfile" accept="image/*" style="display:none"></div>`;
+  settingsPage('Profile', `${avPanel}
+    <div class="panel">${toggleRow('Show this page', 'p_show', s.show!==false)}
+      ${field('Name','p_name', s.name||'')}${field('Nickname','p_nick', s.nickname||'')}
+      ${field('Role','p_role', s.role||'')}${field('Motto','p_motto', s.motto||'')}${field('Company','p_company', s.company||'')}</div>
+    <div class="panel"><div class="secttl">Colours</div>
+      ${colorField('Name','p_namec', s.name_color||'#F0B90B')}${colorField('Role','p_rolec', s.role_color||'#848E9C')}
+      ${colorField('Company','p_compc', s.company_color||'#848E9C')}${colorField('Verify badge','p_verc', s.verify_color||'#00D1FF')}
+      ${colorField('Background','p_bgc', s.bg_color||'#0B0E11')}</div>
+    ${social('fb','Facebook')}${social('yt','YouTube')}${social('tt','TikTok')}${social('ig','Instagram')}
+    <button id="resolveSoc" style="width:100%">⟳ Auto-fill follower counts from URLs</button>
+  `, (c)=>{ const g=(id)=>el(id).value.trim();
+    c.patch('profile','show',el('p_show').checked);
+    c.patch('profile','name',g('p_name')); c.patch('profile','nickname',g('p_nick')); c.patch('profile','role',g('p_role')); c.patch('profile','motto',g('p_motto')); c.patch('profile','company',g('p_company'));
+    c.patch('profile','name_color',g('p_namec')); c.patch('profile','role_color',g('p_rolec')); c.patch('profile','company_color',g('p_compc')); c.patch('profile','verify_color',g('p_verc')); c.patch('profile','bg_color',g('p_bgc'));
+    for(const p of ['fb','yt','tt','ig']){ c.patch('profile',p+'_url',g('p_'+p+'_url')); c.patch('profile',p+'_followers',g('p_'+p+'_fol')); c.patch('profile',p+'_following',g('p_'+p+'_fwg')); c.patch('profile',p+'_secondary_label',g('p_'+p+'_sec')); }
+  });
+  if(el('avup')) el('avup').onclick=()=>el('avfile').click();
+  if(el('avfile')) el('avfile').onchange=async()=>{ const f=el('avfile').files[0]; if(!f) return;
+    el('avup').disabled=true; el('avup').textContent='…'; toast('Uploading photo…');
+    try{ const png=await imgToSquarePng(f, 132); await c.api.upload('pages/profile/assets/avatar.png', png);
+      c.patch('profile','avatar','pages/profile/assets/avatar.png');
+      const url=c.api.fileUrl('pages/profile/assets/avatar.png')+'&t='+Date.now();
+      el('avwrap').innerHTML=`<img src="${url}" style="width:100%;height:100%;object-fit:cover">`;
+      toast('Photo uploaded — press Save to apply','ok');
+    }catch(e){ toast('Upload failed: '+e,'err'); }
+    el('avup').disabled=false; el('avup').textContent='Upload'; };
+  el('resolveSoc').onclick=async()=>{ const map={fb:'facebook',yt:'youtube',tt:'tiktok',ig:'instagram'};
+    const todo=Object.keys(map).filter(p=>el('p_'+p+'_url').value.trim());
+    if(!todo.length) return toast('Add at least one social URL first','err');
+    const b=el('resolveSoc'); b.disabled=true; b.textContent='Fetching…'; let n=0;
+    for(const p of todo){ const d=await Hub.resolveSocial(el('p_'+p+'_url').value.trim(), map[p]);
+      if(d.error){ toast(p.toUpperCase()+': '+d.error,'err'); continue; }
+      el('p_'+p+'_fol').value=(d.followers??d.likes??'')+''; el('p_'+p+'_fwg').value=(d.secondaryValue??d.following??d.talkingAbout??'')+''; n++; }
+    b.disabled=false; b.textContent='⟳ Auto-fill follower counts from URLs'; if(n) toast('Updated '+n+' — press Save','ok'); };
+}
+
+async function drawPhotos(){
+  const c=App.ctrl, s=c.section('slideshow');
+  if(!c.api.supportsFiles){
+    return settingsPage('Photo slideshow', `
+      <div class="panel">${selectRow('Order','ph_order', s.order||'upload', [['upload','Upload order'],['name','By name'],['random','Random']])}
+        ${selectRow('Effect','ph_effect', s.effect||'fade', ['fade','slide','none'])}
+        ${field('Seconds per photo','ph_int', s.interval_s??6, 'number')}</div>
+      <div class="panel sub">Photo files stay on the display SD card. Upload, delete, and reorder files from the mobile app while on the same WiFi.</div>
+    `,(cc)=>{cc.patch('slideshow','order',el('ph_order').value);cc.patch('slideshow','effect',el('ph_effect').value);cc.patch('slideshow','interval_s',parseInt(el('ph_int').value)||6);});
+  }
+  render(`${header('Photo slideshow', true, `<div class="act" id="save">Save</div>`)}<main>
+    <div class="panel">${selectRow('Order','ph_order', s.order||'upload', [['upload','Upload order'],['name','By name'],['random','Random']])}
+      ${selectRow('Effect','ph_effect', s.effect||'fade', ['fade','slide','none'])}
+      ${field('Seconds per photo','ph_int', s.interval_s??6, 'number')}
+      <button class="primary" id="saveBtn" style="margin-top:12px">Save settings</button></div>
+    <div class="panel"><div class="row"><div class="grow ttl">Photos</div><button id="addphoto" style="width:auto">＋ Upload</button></div>
+      <input type="file" id="file" accept="image/png,image/jpeg" style="display:none">
+      <div id="files" class="sub" style="margin-top:10px">Loading…</div></div>
+  </main>`);
+  const collect=()=>{ c.patch('slideshow','order',el('ph_order').value); c.patch('slideshow','effect',el('ph_effect').value); c.patch('slideshow','interval_s',parseInt(el('ph_int').value)||6); };
+  const save=async()=>{ collect(); try{ await c.save(); toast('Saved','ok'); }catch(e){ toast('Save failed: '+e,'err'); } };
+  el('save').onclick=save; el('saveBtn').onclick=save;
+  async function refresh(){
+    try{ const r=await c.api.listFiles('pages/slideshow/assets');
+      if(!r.sd){ el('files').innerHTML='<span class="err">No SD card in the display.</span>'; return; }
+      if(!r.files.length){ el('files').innerHTML='No photos yet — tap Upload.'; return; }
+      el('files').innerHTML='<div class="grid2">'+r.files.map(f=>`<div class="row"><img class="thumb" src="${c.api.fileUrl('pages/slideshow/assets/'+f.name)}"><div class="grow small">${esc(f.name)}<br><span class="muted">${(f.size/1024|0)} KB</span></div><button class="danger" data-del="${esc(f.name)}">✕</button></div>`).join('')+'</div>';
+      el('files').querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{ await c.api.del('pages/slideshow/assets/'+b.dataset.del); toast('Deleted'); refresh(); });
+    }catch(e){ el('files').innerHTML='<span class="err">Cannot list files: '+esc(String(e))+'</span>'; }
+  }
+  el('addphoto').onclick=()=>el('file').click();
+  el('file').onchange=async()=>{ const f=el('file').files[0]; if(!f) return; toast('Uploading '+f.name+'…');
+    try{ const buf=new Uint8Array(await f.arrayBuffer()); const name=f.name.replace(/[^a-zA-Z0-9._-]/g,'_'); await c.api.upload('pages/slideshow/assets/'+name, buf); toast('Uploaded','ok'); refresh(); }
+    catch(e){ toast('Upload failed: '+e,'err'); } };
+  refresh();
+}
+
+function drawWeather(){
+  const c=App.ctrl, s=c.section('weather');
+  const GIFPATH='pages/weather/assets/bg.gif';
+  const opts=[['auto','Auto by weather'],['clear','Clear'],['cloudy','Cloudy'],['rain','Rain'],['snow','Snow'],['none','None'],[GIFPATH,'Custom uploaded GIF']];
+  settingsPage('Weather', `
+    <div class="panel">${field('City','w_city', s.city||'Bangkok')}
+      ${toggleRow('Show PM2.5 / PM10 air quality','w_pm', s.show_pm===true)}
+      ${selectRow('Background animation','w_gif', s.bg_gif||'auto', opts)}
+      <div class="row" style="margin-top:10px"><div class="grow sub">${c.api.supportsFiles?'Or upload your own animated .gif':'Custom GIF uploads use the mobile app on the same WiFi'}</div>${c.api.supportsFiles?'<button id="wgifup" style="width:auto">Upload .gif</button>':''}</div>
+      <input type="file" id="wgiffile" accept="image/gif" style="display:none">
+      ${colorField('Background colour','w_bg', s.bg_color||'#0B0E11')}</div>
+  `, (cc)=>{ cc.patch('weather','city',el('w_city').value.trim()); cc.patch('weather','show_pm',el('w_pm').checked); cc.patch('weather','bg_gif',el('w_gif').value); cc.patch('weather','bg_color',el('w_bg').value); });
+  if(el('wgifup')) el('wgifup').onclick=()=>el('wgiffile').click();
+  if(el('wgiffile')) el('wgiffile').onchange=async()=>{ const f=el('wgiffile').files[0]; if(!f) return;
+    if(!/\.gif$/i.test(f.name) && f.type!=='image/gif'){ toast('Please pick a .gif file','err'); return; }
+    el('wgifup').disabled=true; el('wgifup').textContent='…'; toast('Uploading GIF…');
+    try{ const bytes=new Uint8Array(await f.arrayBuffer()); await c.api.upload(GIFPATH, bytes);
+      el('w_gif').value=GIFPATH; toast('GIF uploaded — press Save to apply','ok');
+    }catch(e){ toast('Upload failed: '+e,'err'); }
+    el('wgifup').disabled=false; el('wgifup').textContent='Upload .gif'; };
+}
+
+function drawCalendar(){
+  const s=App.ctrl.section('calendar');
+  settingsPage('Calendar', `
+    <div class="panel">${field('Title','cal_title', s.title||'CALENDAR')}
+      ${colorField('Background colour','cal_bg', s.bg_color||'#0B0E11')}</div>
+  `, (c)=>{ c.patch('calendar','title',el('cal_title').value.trim()); c.patch('calendar','bg_color',el('cal_bg').value); });
+}
+
+async function drawStore(){
+  const c=App.ctrl;
+  render(`${header('Store', true)}<main><div id="items"><div class="center"><span class="spin"></span></div></div></main>`);
+  const items=(c.catalog||[]).filter(i=>i.priceCents!=null);
+  const list = items.length? items.map(i=>{ const owned=c.has(i.slug); const price=i.priceCents===0?'Free':`$${(i.priceCents/100).toFixed(2)}`;
+    return `<div class="panel"><div class="row"><div class="grow"><div class="ttl">${esc(i.title||i.slug)} <span class="sub">${esc(i.kind||'')}</span></div><div class="sub">${esc(i.description||'')}</div></div>
+      ${owned?'<span class="ok">✓ Owned</span>':`<button data-buy="${esc(i.slug)}" style="width:auto">${price}</button>`}</div></div>`;
+  }).join('') : '<div class="panel sub">No store items available.</div>';
+  el('items').innerHTML=list;
+  el('items').querySelectorAll('[data-buy]').forEach(b=>b.onclick=async()=>{ b.disabled=true; b.textContent='…';
+    const res=await Hub.checkout(b.dataset.buy, c.deviceId);
+    if(res.url){ location.href=res.url; } else if(res.configured===false){ toast('Store not configured (Stripe keys missing)','err'); b.disabled=false; b.textContent='Buy'; } else { toast(res.error||'Checkout failed','err'); b.disabled=false; b.textContent='Buy'; }
+  });
+}
+
+/* ===================== boot ===================== */
+(async function(){
+  await Auth.captureHash(); // handle Google OAuth return
+  draw();
+})();
+</script>
+</body>
+</html>

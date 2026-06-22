@@ -116,11 +116,27 @@ class _SlideshowManagerState extends State<SlideshowManager> {
                   },
                   itemBuilder: (_, i) {
                     final name = _files[i];
+                    final url = widget.api.fileUrl('$_dir/$name').toString();
                     return Card(
                       key: ValueKey(name),
                       color: ccpPanel,
                       child: ListTile(
-                        leading: const Icon(Icons.image, color: ccpAccent),
+                        leading: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: SizedBox(
+                            width: 72,
+                            height: 48,
+                            child: Image.network(
+                              url,
+                              fit: BoxFit.cover,
+                              errorBuilder: (_, __, ___) => Container(
+                                color: Colors.black26,
+                                alignment: Alignment.center,
+                                child: const Icon(Icons.image_not_supported, size: 18, color: ccpMuted),
+                              ),
+                            ),
+                          ),
+                        ),
                         title: Text(name),
                         subtitle: Text('position ${i + 1}',
                             style: const TextStyle(color: ccpMuted)),

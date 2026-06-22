@@ -18,6 +18,7 @@ import type { DataSourceConfig } from "./store";
 
 export type SimOverride = {
   text?: string;
+  data?: string;
   src?: string;
   value?: number;
   series?: number[];
@@ -470,6 +471,8 @@ export class SimSession {
         if (b.prop === "text") {
           const text = b.format ? b.format.replace("%s", String(raw)) : String(raw);
           useSim.getState().patchOverride(w.id, { text });
+        } else if (b.prop === "data") {
+          useSim.getState().patchOverride(w.id, { data: String(raw) });
         } else if (b.prop === "value") {
           useSim.getState().patchOverride(w.id, { value: Number(raw) || 0 });
         } else if (b.prop === "series" && Array.isArray(raw)) {

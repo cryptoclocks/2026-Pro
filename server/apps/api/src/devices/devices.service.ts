@@ -5,6 +5,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { MqttBridgeService } from "../mqtt/mqtt-bridge.service";
 import type { SyncCommandParams } from "@ccp/shared";
 import type { User } from "@prisma/client";
+import { expandedEntitlementSlugs, runtimeSlugForCatalogSlug, catalogForSlug, catalogLookupSlugs, isRetiredStoreSlug } from "../marketplace/catalog";
 
 @Injectable()
 export class DevicesService {
@@ -80,7 +81,7 @@ export class DevicesService {
         jsonSafe({
           ...d,
           entitlements: ents.map((e) => ({
-            slug: e.item.slug,
+            slug: catalogForSlug(e.item.slug)?.slug ?? e.item.slug,
             title: e.item.title,
             kind: e.item.kind,
             source: e.source,
@@ -139,18 +140,32 @@ export class DevicesService {
     return { version: device.settingsVersion, config: device.settings };
   }
 
+  async putSettingsForUser(user: Pick<User, "id" | "role">, hwDeviceId: string, config: Record<string, unknown>) {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    return this.putSettings(hwDeviceId, config);
+  }
+
+  async entitlementSlugsForUser(user: Pick<User, "id" | "role">, hwDeviceId: string) {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    return this.entitlementSlugs(hwDeviceId);
+  }
+
   async putSettings(hwDeviceId: string, config: Record<string, unknown>) {
     const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
     if (!device) {
       throw new NotFoundException("device not found");
     }
+    const merged = mergeSettings(
+      isPlainObject(device.settings) ? device.settings : {},
+      isPlainObject(config) ? config : {},
+    );
     const updated = await this.prisma.device.update({
       where: { id: device.id },
-      data: { settings: config as object, settingsVersion: device.settingsVersion + 1 },
+      data: { settings: merged as object, settingsVersion: device.settingsVersion + 1 },
     });
     this.mqtt.sendCommand(hwDeviceId, "settings", {
       version: updated.settingsVersion,
-      config,
+      config: merged,
     });
     return { version: updated.settingsVersion, config: updated.settings };
   }
@@ -160,7 +175,7 @@ export class DevicesService {
     const [device, item] = await Promise.all([
       this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } }),
       this.prisma.marketplaceItem.findUnique({
-        where: { slug },
+        where: { slug: catalogForSlug(slug)?.slug ?? slug },
         include: {
           payloadRef: {
             include: {
@@ -189,11 +204,11 @@ export class DevicesService {
   }
 
   async revokeItem(hwDeviceId: string, slug: string) {
-    const item = await this.prisma.marketplaceItem.findUnique({ where: { slug } });
-    if (!item) throw new NotFoundException("item not found");
+    const items = await this.prisma.marketplaceItem.findMany({ where: { slug: { in: catalogLookupSlugs(slug) } } });
+    if (items.length === 0) throw new NotFoundException("item not found");
     this.logger.debug(`revokeItem device=${hwDeviceId} slug=${slug}`);
     await this.prisma.entitlement
-      .delete({ where: { deviceId_itemId: { deviceId: hwDeviceId, itemId: item.id } } })
+      .deleteMany({ where: { deviceId: hwDeviceId, itemId: { in: items.map((item) => item.id) } } })
       .catch(() => undefined);
     return this.syncEntitlements(hwDeviceId);
   }
@@ -204,7 +219,7 @@ export class DevicesService {
       where: { deviceId: hwDeviceId },
       include: { item: true },
     });
-    return ents.map((e) => e.item.slug);
+    return expandedEntitlementSlugs(ents.map((e) => e.item.slug).filter((slug) => !isRetiredStoreSlug(slug)));
   }
 
   /**
@@ -218,19 +233,36 @@ export class DevicesService {
       where: { deviceId: hwDeviceId },
       include: { item: true },
     });
-    const cfg = ((device.settings as Record<string, unknown>) ?? {});
-    cfg.entitlements = ents.map((e) => e.item.slug);
+    const cfg = { ...((device.settings as Record<string, unknown>) ?? {}) };
+    const activeEntitlementSlugs = ents.map((e) => e.item.slug).filter((slug) => !isRetiredStoreSlug(slug));
+    cfg.entitlements = expandedEntitlementSlugs(activeEntitlementSlugs);
 
     // PAGE rights also enter/leave the swipe rotation (settings.pages).
     // Native ids stay untouched; entitled package pages are appended, revoked ones removed.
     const NATIVE = new Set(["clock", "crypto", "slideshow"]);
-    const entitledPages = ents.filter((e) => e.item.kind === "PAGE").map((e) => e.item.slug);
+    const entitledPages = ents
+      .filter((e) => e.item.kind === "PAGE" && !isRetiredStoreSlug(e.item.slug))
+      .map((e) => runtimeSlugForCatalogSlug(e.item.slug));
     const pages = Array.isArray(cfg.pages) ? (cfg.pages as string[]) : ["clock", "crypto", "slideshow"];
     const kept = pages.filter((p) => NATIVE.has(p) || entitledPages.includes(p));
     for (const slug of entitledPages) if (!kept.includes(slug)) kept.push(slug);
     cfg.pages = kept;
 
     return this.putSettings(hwDeviceId, cfg);
+  }
+
+  private async assertCanManageDevice(user: Pick<User, "id" | "role">, hwDeviceId: string) {
+    const isAdmin = user.role === "ADMIN" || user.role === "SUPER_ADMIN";
+    const device = await this.prisma.device.findUnique({
+      where: { deviceId: hwDeviceId },
+      select: { ownerId: true },
+    });
+    if (!device) {
+      throw new NotFoundException("device not found");
+    }
+    if (!isAdmin && device.ownerId !== user.id) {
+      throw new BadRequestException("device is not owned by this user");
+    }
   }
 }
 
@@ -247,4 +279,19 @@ function jsonSafe<T>(value: T): T {
     ) as T;
   }
   return value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeSettings(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    const current = out[key];
+    out[key] = isPlainObject(current) && isPlainObject(value)
+      ? mergeSettings(current, value)
+      : value;
+  }
+  return out;
 }

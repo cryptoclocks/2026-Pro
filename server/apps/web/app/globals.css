@@ -1,5 +1,29 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "CCP Montserrat";
+  src: url("/fonts/ccp/Montserrat-Medium.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "CCP DSEG7";
+  src: url("/fonts/ccp/DSEG7Modern-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "CCP DSEG14";
+  src: url("/fonts/ccp/DSEG14Modern-Regular.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 :root {
   --ccp-bg: #0a0f0e;
   --ccp-panel: #111917;
