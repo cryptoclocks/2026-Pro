@@ -66,6 +66,7 @@ function Fleet() {
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<Device | null>(null);
   const [rights, setRights] = useState<Device | null>(null);
+  const [provisioning, setProvisioning] = useState(false);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -99,7 +100,8 @@ function Fleet() {
             Manage every display: status, owner, settings, commands, and per-device rights.
           </p>
         </div>
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-center">
+          <button className="btn btn-primary" onClick={() => setProvisioning(true)}>+ Provision device</button>
           <Stat label="Devices" value={`${devices.length}`} />
           <Stat label="Online" value={`${online}`} accent />
         </div>
@@ -132,7 +134,88 @@ function Fleet() {
       {rights && (
         <RightsModal device={rights} catalog={catalog} token={token} onClose={() => setRights(null)} onChanged={load} />
       )}
+      {provisioning && (
+        <ProvisionModal token={token} onClose={() => setProvisioning(false)} onDone={load} />
+      )}
     </main>
+  );
+}
+
+/** Admin provisions a new device by cable at sale: assigns the next CCP serial,
+    stores buyer details + MAC, and returns the deviceId + claim code + token. */
+function ProvisionModal({ token, onClose, onDone }: { token: string | null; onClose: () => void; onDone: () => void }) {
+  const [f, setF] = useState<Record<string, string>>({
+    mac: "", buyerEmail: "", firstname: "", lastname: "", position: "", company: "",
+    customerName: "", ssid: "", pass: "", oldssid: "", coin1: "", coin2: "", ads: "", permission: "1",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [result, setResult] = useState<{ deviceId: string; token: string; claimCode: string } | null>(null);
+  const set = (k: string, v: string) => setF((s) => ({ ...s, [k]: v }));
+
+  const submit = async () => {
+    if (!f.mac.trim()) { setErr("MAC address is required"); return; }
+    setBusy(true); setErr(null);
+    try {
+      const body = { ...f, permission: f.permission ? Number(f.permission) : undefined };
+      const r = await api("/api/v1/devices/provision", token, { method: "POST", body: JSON.stringify(body) }) as { deviceId: string; token: string; claimCode: string };
+      setResult(r);
+      onDone();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Provision failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (result) {
+    return (
+      <Modal title="Device provisioned ✓" onClose={onClose}>
+        <p className="text-xs text-[var(--ccp-muted)] mb-3">
+          Boot the device on this MAC — it picks up this id. Give the claim code to the buyer to bind it to their account.
+        </p>
+        <Field label="Device ID"><input readOnly className="input w-full font-mono" value={result.deviceId} /></Field>
+        <Field label="Claim code (buyer enters / scans QR)"><input readOnly className="input w-full font-mono" value={result.claimCode} /></Field>
+        <Field label="Device token (provisioned to NVS)"><input readOnly className="input w-full font-mono text-xs" value={result.token} /></Field>
+        <button className="btn btn-primary w-full mt-2" onClick={onClose}>Done</button>
+      </Modal>
+    );
+  }
+
+  const text = (k: string, label: string, ph = "") => (
+    <Field label={label}><input className="input w-full" value={f[k]} onChange={(e) => set(k, e.target.value)} placeholder={ph} /></Field>
+  );
+
+  return (
+    <Modal title="Provision new device" onClose={onClose}>
+      <p className="text-xs text-[var(--ccp-muted)] mb-4">
+        Assigns the next CCP serial and records the buyer. Connect the new device by cable; it joins as that id on boot.
+      </p>
+      <Field label="MAC address (required)">
+        <input className="input w-full font-mono" value={f.mac} onChange={(e) => set("mac", e.target.value)} placeholder="98:3D:AE:E9:14:78" />
+      </Field>
+      <div className="grid grid-cols-2 gap-3">{text("firstname", "First name")}{text("lastname", "Last name")}</div>
+      <div className="grid grid-cols-2 gap-3">{text("position", "Position / Role")}{text("company", "Company")}</div>
+      {text("customerName", "Name of customer (device label)")}
+      {text("buyerEmail", "Buyer Gmail (optional — auto-binds owner)", "buyer@gmail.com")}
+      <div className="grid grid-cols-2 gap-3">{text("ssid", "WiFi SSID")}{text("pass", "WiFi password")}</div>
+      {text("oldssid", "Old SSID (optional)")}
+      <div className="grid grid-cols-2 gap-3">{text("coin1", "Coin 1", "BTCUSDT")}{text("coin2", "Coin 2", "ETHUSDT")}</div>
+      <div className="grid grid-cols-2 gap-3">
+        {text("ads", "Ads")}
+        <Field label="Permission">
+          <select className="select w-full" value={f.permission} onChange={(e) => set("permission", e.target.value)}>
+            <option value="1">Active (1)</option>
+            <option value="0">Locked (0)</option>
+          </select>
+        </Field>
+      </div>
+      {err && <div className="text-sm text-[var(--ccp-red)] mb-2">{err}</div>}
+      <div className="flex gap-2 mt-3">
+        <button className="btn btn-primary flex-1" disabled={busy} onClick={submit}>{busy ? "Provisioning…" : "Provision"}</button>
+        <button className="btn" onClick={onClose}>Cancel</button>
+      </div>
+    </Modal>
   );
 }
 
@@ -207,6 +290,22 @@ function RightsModal({ device, catalog, token, onClose, onChanged }: {
 }) {
   const [owned, setOwned] = useState<string[]>((device.entitlements ?? []).map((e) => e.slug));
   const [busy, setBusy] = useState(false);
+  const [ownerEmail, setOwnerEmail] = useState("");
+  const [ownerBusy, setOwnerBusy] = useState(false);
+
+  const assignOwner = async () => {
+    if (!ownerEmail.trim()) return;
+    setOwnerBusy(true);
+    try {
+      await api(`/api/v1/devices/${device.deviceId}/assign-owner`, token, {
+        method: "POST", body: JSON.stringify({ email: ownerEmail.trim() }),
+      });
+      onChanged();
+      onClose();
+    } finally {
+      setOwnerBusy(false);
+    }
+  };
 
   const toggle = async (slug: string, has: boolean) => {
     setBusy(true);
@@ -249,6 +348,14 @@ function RightsModal({ device, catalog, token, onClose, onChanged }: {
       <p className="text-xs text-[var(--ccp-muted)] mb-3">
         Rights attach to this specific CryptoClock. Granting pushes it to the device instantly.
       </p>
+      <div className="mb-3 pb-3 border-b border-[var(--ccp-border)]/40">
+        <div className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)] mb-1">Owner</div>
+        <div className="text-xs text-[var(--ccp-muted)] mb-1.5">Current: {device.owner?.email ?? "unclaimed"}</div>
+        <div className="flex gap-2">
+          <input className="input flex-1" placeholder="buyer@gmail.com" value={ownerEmail} onChange={(e) => setOwnerEmail(e.target.value)} />
+          <button className="btn" disabled={ownerBusy || !ownerEmail.trim()} onClick={assignOwner}>{ownerBusy ? "…" : "Assign"}</button>
+        </div>
+      </div>
       {pages.length > 0 && (
         <>
           <div className="text-[10px] uppercase tracking-wide text-[var(--ccp-muted)] mt-1 mb-1">Pages</div>
