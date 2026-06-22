@@ -38,10 +38,13 @@ re-flash/re-provision.
     permission,active, coin1,coin2, customerName, ads}` →
   1. `deviceId = nextDeviceId()`
   2. upsert owner `User` by `buyerEmail` (shell row if not signed-in yet)
-  3. `device.create({deviceId, mac, ownerId, name:customerName, tokenHash,
-     settings:{coin1,coin2,ads,permission,...buyer fields}})`
-  4. grant default page entitlements (clock/crypto/slideshow/weather/profile/calendar)
-  5. return `{deviceId, token}` (admin pushes to the device's local /provision)
+  3. generate `claimCode` (e.g. nanoid 8) → store on Device (`claimCode` column)
+  4. `device.create({deviceId, mac, claimCode, ownerId:null|byEmail,
+     name:customerName, tokenHash, settings:{coin1,coin2,ads,permission,...}})`
+     — ownerId stays null unless E2 email pre-bind applies
+  5. grant default page entitlements (clock/crypto/slideshow/weather/profile/calendar)
+  6. return `{deviceId, token, claimCode}` — admin pushes deviceId+token to the
+     device's local /provision, and shows claimCode + QR (`CCP…|code`) to give the buyer
 - **Relax device-id validation**: claim/route regex currently
   `/^ccp-[0-9a-f]{12}$/` → also accept `/^CCP\d{6}$/`. Grep for that regex +
   `deviceId` param validators and update.
@@ -66,19 +69,38 @@ re-flash/re-provision.
   4. `POST http://<device-ip>/api/v1/provision {deviceId, token, ssid, pass}`
   5. device reboots → online as `CCP000007`, already in DB → works immediately
 
-## E. USER ↔ deviceId BINDING (the key question)
-Two paths, both end at `device.ownerId = <the Gmail user>`:
-1. **Pre-bind at provision (primary)** — admin enters the buyer's **Gmail** in
-   the provision form → API upserts a `User` by that email and sets
-   `device.ownerId`. When the buyer logs in with that Gmail, the auth layer must
-   **reconcile by email** (match the existing shell User, attach the Supabase
-   `sub`) so they instantly own the device. ⚠️ VERIFY `auth` upserts/matches
-   User by email, not only by Supabase `sub` — adjust if needed.
-2. **Self-claim (fallback)** — buyer logs in, web-user shows "Enter CryptoClock
-   ID + claim code" → `POST /devices/claim {deviceId, code}` (existing
-   `claimByUser`) → binds. Use for devices sold without pre-bind.
-- web-user already keys everything off the entered deviceId; after binding,
-  `GET /devices/:id/entitlements` + ownership checks pass.
+## E. USER ↔ deviceId BINDING  (REVISED 2026-06-23 per owner)
+Rules:
+- **1 user → many devices**; **1 device → exactly ONE owner** who alone can change
+  settings (`Device.ownerId` single — schema already enforces this). A second
+  user claiming an owned device must be **blocked** (transfer only via admin or
+  an explicit release).
+- Admin usually does NOT know the buyer's email (Shopee etc.), so **self-claim is
+  PRIMARY**, email pre-bind is only a bonus for cashlessthailand.com logged-in
+  buyers.
+
+**E1. Self-claim (PRIMARY)** — after Gmail login, web-user offers:
+  - **type** the CryptoClock id + claim code, OR
+  - **scan QR** with the phone camera (web-user opens camera when on mobile;
+    use `BarcodeDetector` with a jsQR fallback). QR encodes `CCP000007|<code>`.
+  → `POST /devices/claim {deviceId, code}` → `claimByUser`. **Harden
+  `claimByUser`**: verify `code === device.claimCode` AND reject if
+  `device.ownerId` is already set to a different user (return 409). The
+  `claimCode` is generated at provision (step B.4) and shown as text+QR
+  (on the box / device screen / admin web).
+
+**E2. Email pre-bind (optional)** — if admin knows the buyer Gmail (bought while
+  logged in on cashlessthailand.com), provision can set `ownerId` by email.
+  ⚠️ Requires the auth layer to reconcile a User by **email** on Gmail login
+  (match shell row, attach Supabase `sub`) — VERIFY in `auth` and adjust.
+
+**E3. Admin bind/transfer** — admin web can view every device and set/transfer
+  `ownerId` (by user email or user id). New `POST /devices/:hwId/assign-owner`
+  (AdminGuard) `{email|userId}` → upsert user + set ownerId (overrides E1 lock).
+
+- web-user keys off the entered/scanned deviceId; after binding,
+  `GET /devices/:id/entitlements` + ownership checks pass. Non-owners may view
+  but not save settings (enforce via `assertCanManageDevice`).
 
 ## F. Migration of the existing test device
 `ccp-983daee91478` → provision to get `CCP000001`, re-flash firmware (B), device
