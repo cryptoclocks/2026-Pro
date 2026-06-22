@@ -18,6 +18,14 @@ esp_err_t device_security_init(void);
 /** Stable device id, e.g. "ccp-a1b2c3d4e5f6". */
 const char *device_security_id(void);
 
+/** WiFi STA MAC as "AA:BB:CC:DD:EE:FF" (uppercase) — used to build the encId
+ *  plaintext "<deviceId>-<MAC>" that Node-RED mirrors. */
+void device_security_mac_str(char *buf, size_t len);
+
+/** Admin provisioning: persist the assigned serial (e.g. "CCP000007") + device
+ *  token, overriding the MAC-derived fallback. Caller reboots to apply. */
+esp_err_t device_security_set_provision(const char *device_id, const char *token);
+
 /** Device token (MQTT password / API bearer). Empty until claimed. */
 esp_err_t device_security_get_token(char *buf, size_t len);
 esp_err_t device_security_set_token(const char *token);

@@ -30,6 +30,7 @@
 #include "audio_engine.h"
 #include "ota_manager.h"
 #include "device_security.h"
+#include "cc_aes.h"
 #include "sys_monitor.h"
 #include "home_ui.h"
 #include "dbg_console.h"
@@ -94,22 +95,32 @@ static void load_active_or_recovery(void)
     }
     /* purchased package (layout+wasm) loads alongside the built-in suite;
      * home_ui adopts its screen as an extra swipe page (settings.pages) */
+    char pkg[64] = "";
+    sync_manager_active_id(pkg, sizeof(pkg));
     char dir[220];
     sync_manager_active_dir(dir, sizeof(dir));
     bool pkg_loaded = false;
-    if (dir[0] && ui_renderer_load_dir(dir) == ESP_OK) {
-        subscribe_layout_streams();
-        wasm_engine_load_modules();
-        pkg_loaded = true;
+    if (dir[0]) {
+        esp_err_t err = ui_renderer_load_dir(dir);
+        if (err == ESP_OK) {
+            subscribe_layout_streams();
+            wasm_engine_load_modules();
+            pkg_loaded = true;
+        } else {
+            ESP_LOGE(TAG, "failed to load active package %s from %s: %s",
+                     pkg, dir, esp_err_to_name(err));
+        }
     }
-    home_ui_show_home();
     if (pkg_loaded) {
-        /* page list was enumerated before the package existed — rebuild so
-         * the purchased page joins the rotation */
+        /* Rebuild before showing page 0. Calling show_home() first would see
+         * loaded_pkg_slug unset and enqueue a duplicate lazy package swap,
+         * deleting the renderer's active screen while LVGL is drawing it. */
         home_ui_reload();
         /* feed the page its saved settings now (settings.<slug>) so bindings
          * show stored values immediately, not just after the next change */
         schedule_saved_page_settings_replay();
+    } else {
+        home_ui_show_home();
     }
 }
 
@@ -520,9 +531,24 @@ static void start_online_services(void)
     char broker[128] = DEFAULT_BROKER_URI;
     storage_kv_get_str("conn", "broker", broker, sizeof(broker));
 
+    /* Encrypted clientId/topic id (legacy AESLib scheme): encId = aes("<id>-<MAC>").
+     * Plaintext is "<deviceId>-<MAC uppercase colon>" e.g. CCP000007-5C:01:3B:66:D8:70,
+     * matching the legacy ESP32 + Node-RED decoder. Deterministic, so the server
+     * derives the same value. On failure fall back to plaintext so it still connects. */
+    static char client_id[160];
+    char mac_str[18];
+    device_security_mac_str(mac_str, sizeof(mac_str));
+    char id_plain[48];
+    snprintf(id_plain, sizeof(id_plain), "%s-%s", device_security_id(), mac_str);
+    if (cc_aes_encrypt_hex(id_plain, client_id, sizeof(client_id)) <= 0) {
+        ESP_LOGW(TAG, "clientId encrypt failed — using plaintext device id");
+        client_id[0] = '\0';
+    }
+
     const conn_config_t cfg = {
         .broker_uri = broker,
         .device_id = device_security_id(),
+        .client_id = client_id,
         .password = token,
         .on_cmd = on_cmd,
         .on_data = on_data,
