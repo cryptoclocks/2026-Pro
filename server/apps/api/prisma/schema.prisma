@@ -6,8 +6,12 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // Runtime connection. In production this is the Supabase pooler (port 6543).
+  url       = env("DATABASE_URL")
+  // Migrations need a direct session (not pgbouncer). Locally set this equal to
+  // DATABASE_URL; in production point it at the Supabase direct port (5432).
+  directUrl = env("DIRECT_URL")
 }
 
 enum Role {

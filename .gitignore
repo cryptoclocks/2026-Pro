@@ -27,7 +27,10 @@ server/.env
 server/**/.env
 server/**/.env.local
 server/**/.env*.local
+server/.env.prod
+server/**/.env.prod
 !server/.env.example
+!server/.env.prod.example
 
 # mobile app secrets (Supabase keys) — never commit
 mobile/**/lib/secrets.dart

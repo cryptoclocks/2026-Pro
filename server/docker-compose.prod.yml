@@ -1,0 +1,24 @@
+# Production stack for the Hub API on the OCI VM.
+# Only the API runs here — Postgres is Supabase (managed), payloads live on a
+# local volume, and the MQTT broker (EMQX/Node-RED) already runs on the host.
+# Run from server/:  docker compose -f docker-compose.prod.yml up -d --build
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: ccp-api:latest
+    restart: unless-stopped
+    env_file: .env.prod
+    ports:
+      # Bind to localhost only — Caddy terminates TLS and proxies to it. The
+      # API is never exposed directly on the public interface.
+      - "127.0.0.1:4000:4000"
+    extra_hosts:
+      # Lets the container reach the broker running on the host (mqtt://...:1883)
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ccp_payloads:/data/payloads
+
+volumes:
+  ccp_payloads:
