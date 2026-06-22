@@ -1,9 +1,8 @@
 # Cloud Deploy Handoff — Hub API on OCI + Web↔Device MQTT (2026-06-22)
 
 Handoff for the next AI/engineer. The goal of this work stream: make the **web
-apps control real devices over the internet** (no LAN). Most of the pipeline is
-live; one blocker remains (device commands time out). Read this top-to-bottom,
-then jump to **§5 Current blocker** to continue.
+apps control real devices over the internet** (no LAN). The user-web command
+path is now live and verified; the remaining gaps are listed in §7.
 
 ## 1. What is live (verified)
 - **Hub API** runs on the OCI VM in Docker → `https://api.cashlessthailand.com`
@@ -16,6 +15,9 @@ then jump to **§5 Current blocker** to continue.
   (Caddy → Aedes ws `127.0.0.1:8083`). Browser WSS connect returns 101 ✅.
 - **Node-RED RPC bridge** imported & deployed → web RPC reaches devices.
   `web-user Connect` to `ccp-983daee91478` succeeds.
+- **Device commands/settings verified live (2026-06-22)** → Node-RED publishes
+  to both encrypted and legacy plaintext topics. `ping` returned ACK and
+  `Save to display` returned `Saved — display reloading`.
 - **Device registered**: claimed into the new DB + 16 entitlements granted
   (clock/crypto/slideshow/weather/profile/calendar + clock-alarm/crypto-alerts).
   Done via a browser-console snippet hitting `POST /devices/claim` then
@@ -61,12 +63,32 @@ Bridge: `device.info` answered from cached retained status; `settings.put`/
 `command` forwarded to device and correlated by id on `cmd/res`;
 `settings.get` returns `{config:{}}` (gap — device can't read back over MQTT).
 
-## 5. CURRENT BLOCKER — "Save to display" → "MQTT request timed out"
-Symptom: web-user Connect works, but `device.settings.put` (and any
-`device.command`) times out; browser console shows nothing else.
+## 5. DEVICE COMMAND TIMEOUT — diagnosed and fixed in the bridge flow
+Original symptom: web-user Connect worked, but `device.settings.put` (and any
+`device.command`) timed out.
+
+Live diagnosis on 2026-06-22: publishing distinct `ping` commands to both topic
+forms produced a response only on the plaintext form:
+`ccp/v1/ccp-983daee91478/cmd/res`. The device is online and currently
+subscribes `ccp/v1/ccp-983daee91478/cmd`; it does not subscribe the encId topic.
+
+`server/nodered/ccp-web-rpc-bridge.json` now publishes commands to both the
+encrypted and plaintext topics. It also checks both keys in the status cache.
+This flow was deployed live through the local Node-RED Admin API on
+2026-06-22. No broker/container restart was performed.
+
+Verification after deploy:
+- bridge RPC `device.command`/`ping` returned `{ok:true}`;
+- web-user `Save to display` returned `Saved — display reloading`;
+- `jarvis-nodered` remained healthy and `jarvis-aedes` was not restarted.
+
+VM rollback backups:
+- `/home/ubuntu/flows.json.ccp-backup-20260622T113855Z`
+- `/home/ubuntu/ccp-tab-backup-20260622T113855Z.json`
 
 device_id format + AES verified to MATCH on both sides → the cmd SHOULD reach
-the device. Timeout ⇒ one of three (in priority order):
+the encrypted-topic firmware. Before the live diagnosis, timeout had three
+possible causes:
 1. **Device offline** — Connect still "succeeds" because `device.info` returns
    the cached/LWT retained status (possibly `{online:false}`), so no timeout there.
 2. **Device fell back to PLAINTEXT topics** — `app_main.c` ~line 538: if
@@ -87,10 +109,9 @@ the device. Timeout ⇒ one of three (in priority order):
 
 ### Fixes per case
 - Offline → power/WiFi the device.
-- Plaintext fallback → fix why `cc_aes_encrypt_hex` fails on-device (mbedtls),
-  OR temporary: make the bridge publish cmd to BOTH `ccp/v1/<encId>/cmd` and
-  `ccp/v1/<plaintextId>/cmd` (edit `ccp_fn_rpc` in the bridge flow). To map
-  plaintext→encId the bridge already has deviceId; just publish twice.
+- Plaintext/older firmware → the bridge compatibility fix now publishes cmd to
+  BOTH `ccp/v1/<encId>/cmd` and `ccp/v1/<plaintextId>/cmd`. A later firmware
+  flash can move the device to encId topics without breaking the web.
 - No ack → add a debug node on `ccp/v1/+/cmd/res` in Node-RED; confirm `id`
   correlation in `ccp_fn_res`.
 
@@ -104,7 +125,8 @@ for(const s of ['clock','crypto','slideshow','weather','profile','calendar','clo
 ```
 
 ## 7. Remaining work (TODO)
-1. **[BLOCKER] device commands** — resolve §5 so Save/identify/brightness work.
+1. **User-web device commands — DONE** — dual-topic bridge deployed and
+   Save/ping verified against `ccp-983daee91478` on 2026-06-22.
 2. **Admin online status + admin command center DON'T reach the device** —
    `server/apps/api/src/mqtt/mqtt-bridge.service.ts` addresses devices by
    **plaintext** topics (`mqttTopics.cmd(deviceId)` from `@ccp/shared`) and
@@ -123,6 +145,10 @@ for(const s of ['clock','crypto','slideshow','weather','profile','calendar','clo
    `/tmp/projectsupporter/Caddyfile.bak.*`.
 5. **Rotate secrets** if the chat transcript is a concern (Supabase DB password
    + `JWT_SECRET` in `~/ccp/server/.env.prod`), then `docker compose restart api`.
+6. **Factory serial + customer registration** — follow
+   `docs/DEVICE_REGISTRATION_PLAN.md`. Important: the current claim endpoint
+   accepts a code without validating it and can replace an owner; secure the
+   claim flow before exposing customer self-registration.
 
 ## 8. Key files
 | Path | Role |
