@@ -113,6 +113,9 @@ const Auth = {
   },
   // Google: redirect through Supabase OAuth; token comes back in the URL hash.
   googleRedirect(){
+    if(!CFG.supabaseUrl || !CFG.supabaseAnonKey){
+      toast('Supabase is not configured (set VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY)', 'err'); return;
+    }
     const url = new URL(`${CFG.supabaseUrl}/auth/v1/authorize`);
     url.searchParams.set('provider','google');
     url.searchParams.set('redirect_to', location.origin + location.pathname);
@@ -120,6 +123,13 @@ const Auth = {
   },
   // Parse #access_token=... after an OAuth redirect; returns true if a session was captured.
   async captureHash(){
+    // Supabase bounces back with #error=... when redirect_to isn't allow-listed.
+    if(location.hash.includes('error=')){
+      const e = new URLSearchParams(location.hash.slice(1));
+      toast(decodeURIComponent(e.get('error_description')||e.get('error')||'OAuth failed'), 'err');
+      history.replaceState({}, document.title, location.pathname);
+      return false;
+    }
     if(!location.hash.includes('access_token=')) return false;
     const p = new URLSearchParams(location.hash.slice(1));
     const tok = p.get('access_token'); if(!tok) return false;
