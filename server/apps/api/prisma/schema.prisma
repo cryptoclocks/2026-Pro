@@ -107,11 +107,15 @@ model FeatureRequest {
 
 model Device {
   id        String   @id @default(cuid())
-  deviceId  String   @unique // hardware id, e.g. ccp-a1b2c3d4e5f6
+  deviceId  String   @unique // hardware id, e.g. CCP000001 (provisioned) or ccp-a1b2c3d4e5f6
   name      String?
   model     String   @default("JC3248W535C")
   fwVersion String?
-  /// bcrypt hash of the device MQTT/API token minted at claim
+  /// wifi STA MAC, set at provision — used for encId = AES("<deviceId>-<MAC>")
+  mac       String?
+  /// short code (shown as QR/text) the buyer enters/scans to claim ownership
+  claimCode String?
+  /// bcrypt hash of the device MQTT/API token minted at claim/provision
   tokenHash String?
   ownerId   String?
   owner     User?    @relation(fields: [ownerId], references: [id])
@@ -154,6 +158,12 @@ model Claim {
   createdAt       DateTime    @default(now())
 
   @@index([deviceId])
+}
+
+/// Monotonic counters (e.g. the sequential CCP serial). Incremented in a txn.
+model Counter {
+  id    String @id // e.g. "device_ccp"
+  value Int    @default(0)
 }
 
 model DeviceGroup {

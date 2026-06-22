@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { hash, compare } from "bcryptjs";
 import { nanoid } from "nanoid";
 import { PrismaService } from "../prisma/prisma.service";
@@ -6,6 +6,27 @@ import { MqttBridgeService } from "../mqtt/mqtt-bridge.service";
 import type { SyncCommandParams } from "@ccp/shared";
 import type { User } from "@prisma/client";
 import { expandedEntitlementSlugs, runtimeSlugForCatalogSlug, catalogForSlug, catalogLookupSlugs, isRetiredStoreSlug } from "../marketplace/catalog";
+
+/** Accepts both the legacy MAC-derived id and the provisioned CCP serial. */
+const DEVICE_ID_RE = /^(ccp-[0-9a-f]{12}|CCP\d{6})$/;
+
+export type ProvisionInput = {
+  mac: string;
+  buyerEmail?: string;
+  firstname?: string;
+  lastname?: string;
+  position?: string;
+  company?: string;
+  ssid?: string;
+  pass?: string;
+  oldssid?: string;
+  permission?: number;
+  active?: number;
+  coin1?: string;
+  coin2?: string;
+  customerName?: string;
+  ads?: string;
+};
 
 @Injectable()
 export class DevicesService {
@@ -17,26 +38,29 @@ export class DevicesService {
   ) {}
 
   /**
-   * Claim flow:
-   * 1. The device boots unclaimed and shows its claim code (QR).
-   * 2. The user enters/scans the code in the web app -> POST /devices/claim
-   *    (authenticated as the user).
-   * 3. We register the device, mint a device token, and hand it back so the
-   *    web app can transfer it (the device polls GET /devices/claim/:code).
+   * Claim flow (Option B): the device is already provisioned by an admin and
+   * carries a deviceId + claimCode. The buyer signs in, then types or scans the
+   * claim code (QR). We verify the code and set ownership. One device → one
+   * owner; a second account is rejected (transfer is admin-only).
    */
   async claimByUser(userId: string, hwDeviceId: string, code: string, name?: string) {
-    if (!/^ccp-[0-9a-f]{12}$/.test(hwDeviceId)) {
+    if (!DEVICE_ID_RE.test(hwDeviceId)) {
       throw new BadRequestException("invalid device id");
     }
-    const token = nanoid(32);
-    const tokenHash = await hash(token, 10);
-
-    const device = await this.prisma.device.upsert({
-      where: { deviceId: hwDeviceId },
-      update: { ownerId: userId, tokenHash, name },
-      create: { deviceId: hwDeviceId, ownerId: userId, tokenHash, name },
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) {
+      throw new NotFoundException("device not found — it must be provisioned first");
+    }
+    if (device.claimCode && code !== device.claimCode) {
+      throw new BadRequestException("invalid claim code");
+    }
+    if (device.ownerId && device.ownerId !== userId) {
+      throw new ConflictException("device is already owned by another account");
+    }
+    const updated = await this.prisma.device.update({
+      where: { id: device.id },
+      data: { ownerId: userId, name: name ?? device.name },
     });
-
     await this.prisma.claim.create({
       data: {
         code: code || nanoid(8),
@@ -46,9 +70,91 @@ export class DevicesService {
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       },
     });
+    return jsonSafe({ device: updated, mqttUsername: hwDeviceId });
+  }
 
-    // token returned exactly once; device stores it in NVS, we keep the hash
-    return { device, token, mqttUsername: hwDeviceId };
+  /** Next sequential CCP serial, e.g. CCP000007 (atomic increment). */
+  async nextDeviceId(): Promise<string> {
+    const c = await this.prisma.counter.upsert({
+      where: { id: "device_ccp" },
+      create: { id: "device_ccp", value: 1 },
+      update: { value: { increment: 1 } },
+    });
+    return `CCP${String(c.value).padStart(6, "0")}`;
+  }
+
+  /**
+   * Admin provisions a new device by cable at sale time: assign the next CCP
+   * serial, store buyer details + MAC, mint a device token + claim code, and
+   * grant the default page entitlements. Returns token + claimCode for the admin
+   * to push to the device (local /provision) and hand to the buyer.
+   */
+  async provision(adminId: string, input: ProvisionInput) {
+    if (!input.mac) throw new BadRequestException("mac is required");
+    const deviceId = await this.nextDeviceId();
+    const claimCode = nanoid(8);
+    const token = nanoid(32);
+    const tokenHash = await hash(token, 10);
+
+    let ownerId: string | null = null;
+    if (input.buyerEmail) {
+      const u = await this.prisma.user.upsert({
+        where: { email: input.buyerEmail.toLowerCase() },
+        update: {},
+        create: { email: input.buyerEmail.toLowerCase(), passwordHash: "", role: "USER" },
+      });
+      ownerId = u.id;
+    }
+
+    const fullName = [input.firstname, input.lastname].filter(Boolean).join(" ").trim();
+    const settings: Record<string, unknown> = {
+      profile: {
+        name: fullName || undefined,
+        role: input.position || undefined,
+        company: input.company || undefined,
+      },
+      coins: [input.coin1, input.coin2].filter(Boolean),
+      ads: input.ads,
+      permission: input.permission,
+      provision: {
+        firstname: input.firstname, lastname: input.lastname, position: input.position,
+        company: input.company, ssid: input.ssid, oldssid: input.oldssid,
+        customerName: input.customerName, active: input.active,
+      },
+    };
+
+    const device = await this.prisma.device.create({
+      data: {
+        deviceId, mac: input.mac, claimCode, tokenHash, ownerId,
+        name: input.customerName ?? null, settings: settings as object,
+      },
+    });
+
+    // default swipe pages so a fresh device is usable out of the box
+    for (const slug of ["clock", "crypto", "slideshow", "weather", "profile", "calendar"]) {
+      await this.grantItem(deviceId, slug, adminId).catch((e) =>
+        this.logger.warn(`provision grant ${slug} failed: ${e}`),
+      );
+    }
+    this.logger.log(`provisioned ${deviceId} mac=${input.mac} owner=${ownerId ?? "(unclaimed)"}`);
+    return jsonSafe({ deviceId, token, claimCode, mac: input.mac, device });
+  }
+
+  /** Admin sets/transfers a device's owner (by user email or user id). */
+  async assignOwner(hwDeviceId: string, emailOrId: string) {
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    let userId = emailOrId;
+    if (emailOrId.includes("@")) {
+      const u = await this.prisma.user.upsert({
+        where: { email: emailOrId.toLowerCase() },
+        update: {},
+        create: { email: emailOrId.toLowerCase(), passwordHash: "", role: "USER" },
+      });
+      userId = u.id;
+    }
+    const updated = await this.prisma.device.update({ where: { id: device.id }, data: { ownerId: userId } });
+    return jsonSafe(updated);
   }
 
   async verifyDeviceToken(hwDeviceId: string, token: string): Promise<boolean> {

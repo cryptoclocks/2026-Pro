@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Post, Put, UseGuards } from "@nestjs/common";
-import { DevicesService } from "./devices.service";
+import { DevicesService, type ProvisionInput } from "./devices.service";
 import type { DeviceCommandType } from "@ccp/shared";
 import { CurrentUser, UserGuard, AdminGuard } from "../auth/auth.guards";
 import type { User } from "@prisma/client";
@@ -17,6 +17,20 @@ export class DevicesController {
     @Body() body: { deviceId: string; code: string; name?: string },
   ) {
     return this.devices.claimByUser(user.id, body.deviceId, body.code, body.name);
+  }
+
+  /** Admin provisions a new device by cable at sale: assigns CCP serial + buyer. */
+  @Post("provision")
+  @UseGuards(AdminGuard)
+  provision(@CurrentUser() admin: User, @Body() body: ProvisionInput) {
+    return this.devices.provision(admin.id, body);
+  }
+
+  /** Admin sets/transfers a device's owner (by user email or id). */
+  @Post(":hwId/assign-owner")
+  @UseGuards(AdminGuard)
+  assignOwner(@Param("hwId") hwId: string, @Body() body: { email?: string; userId?: string }) {
+    return this.devices.assignOwner(hwId, body.email ?? body.userId ?? "");
   }
 
   @Get()
