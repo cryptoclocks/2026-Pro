@@ -6,6 +6,33 @@ gets an immutable sequential id on first boot and joins CCP immediately (no
 device-initiated call-in). Only one test device exists (admin's) → safe to
 re-flash/re-provision.
 
+## STATUS (2026-06-23) — stages 1–4 implemented + pushed
+- ✅ **Stage 1 API** (`280327f`): Device.mac/claimCode + Counter (+migration);
+  `nextDeviceId()`; `POST /devices/provision`; `POST /devices/:id/assign-owner`;
+  hardened `claimByUser` (verify claimCode, block re-claim, accept CCP######).
+  Typechecks clean. Email owner-binding already works (auth upserts by email).
+- ✅ **Stage 2 admin web** (`546e5f6`): Fleet "+ Provision device" modal +
+  Owner-assign box in Rights modal.
+- ✅ **Stage 3 firmware** (`ec5e053`): NVS-provisioned serial; encId =
+  AES("<id>-<MAC>"); `POST /api/v1/provision`. NOT compiled here (no ESP-IDF env)
+  → build + re-flash the test device.
+- ✅ **Stage 4 mqtt** (`3780b61`): firmware status carries id+mac; Node-RED bridge
+  + API mqtt-bridge learn deviceId↔encId and multicast cmd to encId/AES(id)/plaintext.
+- ⏳ **Stage 5**: retire the Apps Script (external — just stop calling it).
+
+### To go live (operator steps)
+1. **API**: on OCI `cd ~/ccp && git pull && cd server && docker compose -f docker-compose.prod.yml up -d --build` (runs the new migration).
+2. **Web**: Vercel auto-deploys admin+user on push.
+3. **Node-RED**: re-import `server/nodered/ccp-web-rpc-bridge.json` (replaces the CCP tab).
+4. **Firmware**: build + flash the test device. It boots as `ccp-<mac>` until provisioned.
+5. **Provision**: admin web → "+ Provision device" (enter MAC + buyer) → note deviceId/claimCode/token.
+6. **Push id to device** (same-LAN http, not from Vercel https): `curl -X POST http://<device-ip>/api/v1/provision -H 'Content-Type: application/json' -d '{"deviceId":"CCP000001","token":"<token>"}'` → device reboots as CCP000001.
+7. **Claim** (buyer): web-user → enter/scan deviceId + claimCode.
+
+### NOT part of provisioning (still open)
+- web-user **cloud photo upload** (needs a file transport; `supportsFiles=false` in cloud).
+- profile **line-2 "(nickname) role"** composite (single-field binding can't concat).
+
 ## Decision (Option B = full legacy identity)
 - **device_id = `CCP000001`…`CCP999999`** (sequential, assigned by API in a DB
   transaction). NOT `ccp-<mac>` anymore.
