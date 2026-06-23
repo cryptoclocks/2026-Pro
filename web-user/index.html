@@ -223,7 +223,7 @@ function jwtSubject(token){
 
 /* ===================== Device transports ===================== */
 class DeviceApi {
-  constructor(host){ this.host = host.replace(/^https?:\/\//,'').replace(/\/$/,''); this.mode='lan'; this.supportsFiles=true; }
+  constructor(host){ this.host = host.replace(/^https?:\/\//,'').replace(/\/$/,''); this.mode='lan'; this.supportsFiles=true; this.uploads=true; }
   u(p){ return `http://${this.host}${p}`; }
   async info(){ const r=await tfetch(this.u('/api/v1/info'), {}, 6000); if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); }
   async getConfig(){ const r=await tfetch(this.u('/api/v1/config'), {}, 6000); const t=await r.text(); return t?JSON.parse(t):{}; }
@@ -240,7 +240,7 @@ class DeviceApi {
 }
 
 class CloudDeviceApi {
-  constructor(rpc,deviceId){ this.rpc=rpc; this.deviceId=deviceId; this.mode='cloud'; this.supportsFiles=false; }
+  constructor(rpc,deviceId){ this.rpc=rpc; this.deviceId=deviceId; this.mode='cloud'; this.supportsFiles=false; this.uploads=true; }
   async info(){ const d=await this.rpc.request('device.info',this.deviceId); return {...d,device_id:d.device_id||this.deviceId}; }
   async getConfig(){ const d=await this.rpc.request('device.settings.get',this.deviceId); return d.config||d; }
   async setConfig(config){ await this.rpc.request('device.settings.put',this.deviceId,{config}); }
@@ -249,7 +249,13 @@ class CloudDeviceApi {
   async wifiReset(){ await this.rpc.request('device.command',this.deviceId,{type:'wifi_reset'}); }
   fileUrl(){ return ''; }
   async listFiles(){ throw new Error('Photo files are managed locally from the mobile app'); }
-  async upload(){ throw new Error('Photo uploads require the mobile app on the same WiFi'); }
+  async upload(path, bytes){
+    const m=/^pages\/([^/]+)\/assets\/(.+)$/.exec(path); if(!m) throw new Error('bad asset path');
+    const slug=m[1], file=m[2];
+    const key = slug==='profile' ? 'avatar' : slug==='weather' ? 'background' : file.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'_');
+    await Hub.uploadAsset(this.deviceId, slug, key, bytes);
+  }
+  async listFiles(){ throw new Error('Photo files are managed locally from the mobile app'); }
   async del(){ throw new Error('Photo files are managed locally from the mobile app'); }
 }
 
@@ -280,6 +286,14 @@ function imgToSquarePng(file, size){
 const Hub = {
   async catalog(){ try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/items`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
   async entitlements(deviceId){ try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/entitlements`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
+  async uploadAsset(deviceId, slug, key, bytes){
+    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    let bin=''; for(let i=0;i<u8.length;i++) bin+=String.fromCharCode(u8[i]);
+    const dataBase64 = btoa(bin);
+    const r = await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/pages/${slug}/assets/${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataBase64})},20000);
+    if(!r.ok) throw new Error('HTTP '+r.status+' '+(await r.text()).slice(0,120));
+    return await r.json();
+  },
   async checkout(slug, deviceId){
     try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/store/checkout`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({slug, deviceId})}, 15000); if(r.status===401)return{error:'Please sign in again'}; return await r.json(); }catch(e){ return {error:String(e)}; } },
   async resolveSocial(url, platform){
@@ -555,8 +569,8 @@ function drawProfile(){
   const avSrc = c.api.supportsFiles&&s.avatar ? c.api.fileUrl(s.avatar)+'&t='+Date.now() : '';
   const avPanel = `<div class="panel"><div class="row">
     <div id="avwrap" style="width:64px;height:64px;border-radius:16px;overflow:hidden;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:30px;flex:none;box-shadow:0 0 0 1px rgba(255,255,255,.05) inset">${avSrc?`<img src="${avSrc}" style="width:100%;height:100%;object-fit:cover">`:'👤'}</div>
-    <div class="grow"><div class="ttl">Profile photo</div><div class="sub">${c.api.supportsFiles?'Square · auto-resized to 132×132 PNG':'Upload from the mobile app on the same WiFi'}</div></div>
-    ${c.api.supportsFiles?'<button id="avup" style="width:auto">Upload</button>':''}</div>
+    <div class="grow"><div class="ttl">Profile photo</div><div class="sub">${c.api.uploads?'Square · auto-resized to 132×132 PNG':'Upload from the mobile app on the same WiFi'}</div></div>
+    ${c.api.uploads?'<button id="avup" style="width:auto">Upload</button>':''}</div>
     <input type="file" id="avfile" accept="image/*" style="display:none"></div>`;
   settingsPage('Profile', `${avPanel}
     <div class="panel">${toggleRow('Show this page', 'p_show', s.show!==false)}
@@ -579,7 +593,7 @@ function drawProfile(){
     el('avup').disabled=true; el('avup').textContent='…'; toast('Uploading photo…');
     try{ const png=await imgToSquarePng(f, 132); await c.api.upload('pages/profile/assets/avatar.png', png);
       c.patch('profile','avatar','pages/profile/assets/avatar.png');
-      const url=c.api.fileUrl('pages/profile/assets/avatar.png')+'&t='+Date.now();
+      const url=URL.createObjectURL(new Blob([png],{type:'image/png'}));
       el('avwrap').innerHTML=`<img src="${url}" style="width:100%;height:100%;object-fit:cover">`;
       toast('Photo uploaded — press Save to apply','ok');
     }catch(e){ toast('Upload failed: '+e,'err'); }
@@ -639,7 +653,7 @@ function drawWeather(){
     <div class="panel">${field('City','w_city', s.city||'Bangkok')}
       ${toggleRow('Show PM2.5 / PM10 air quality','w_pm', s.show_pm===true)}
       ${selectRow('Background animation','w_gif', s.bg_gif||'auto', opts)}
-      <div class="row" style="margin-top:10px"><div class="grow sub">${c.api.supportsFiles?'Or upload your own animated .gif':'Custom GIF uploads use the mobile app on the same WiFi'}</div>${c.api.supportsFiles?'<button id="wgifup" style="width:auto">Upload .gif</button>':''}</div>
+      <div class="row" style="margin-top:10px"><div class="grow sub">${c.api.uploads?'Or upload your own animated .gif':'Custom GIF uploads use the mobile app on the same WiFi'}</div>${c.api.uploads?'<button id="wgifup" style="width:auto">Upload .gif</button>':''}</div>
       <input type="file" id="wgiffile" accept="image/gif" style="display:none">
       ${colorField('Background colour','w_bg', s.bg_color||'#0B0E11')}</div>
   `, (cc)=>{ cc.patch('weather','city',el('w_city').value.trim()); cc.patch('weather','show_pm',el('w_pm').checked); cc.patch('weather','bg_gif',el('w_gif').value); cc.patch('weather','bg_color',el('w_bg').value); });
