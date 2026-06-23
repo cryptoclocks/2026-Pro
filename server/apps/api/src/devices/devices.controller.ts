@@ -73,6 +73,34 @@ export class DevicesController {
     return this.devices.assignPayload(id, body.payloadVersionId);
   }
 
+  /* ----- normalized config REST (Supabase source of truth, phase 2) ----- */
+
+  /** Full normalized config: revision + system + per-page rows + sync state. */
+  @Get(":hwId/config")
+  @UseGuards(UserGuard)
+  getConfig(@Param("hwId") hwId: string, @CurrentUser() user: User) {
+    return this.devices.getConfigDoc(user, hwId);
+  }
+
+  /** One page's settings + the baseRevision to echo on write. */
+  @Get(":hwId/pages/:slug")
+  @UseGuards(UserGuard)
+  getPage(@Param("hwId") hwId: string, @Param("slug") slug: string, @CurrentUser() user: User) {
+    return this.devices.getPage(user, hwId, slug);
+  }
+
+  /** Write one page (optimistic concurrency via baseRevision) → recompile + push. */
+  @Put(":hwId/pages/:slug")
+  @UseGuards(UserGuard)
+  putPage(
+    @Param("hwId") hwId: string,
+    @Param("slug") slug: string,
+    @CurrentUser() user: User,
+    @Body() body: { baseRevision?: number; config?: Record<string, unknown> },
+  ) {
+    return this.devices.putPage(user, hwId, slug, body);
+  }
+
   /** Device boot-time settings check (and admin read). */
   @Get(":hwId/settings")
   getSettings(@Param("hwId") hwId: string) {

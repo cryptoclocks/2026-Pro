@@ -327,6 +327,83 @@ export class DevicesService {
     });
   }
 
+  /* ---------------------------------------------- normalized config REST (P2) */
+
+  /** Whole config doc for a device: revision + system + per-page rows. */
+  async getConfigDoc(user: Pick<User, "id" | "role">, hwDeviceId: string) {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    const [head, pages, sync] = await Promise.all([
+      this.prisma.deviceConfigHead.findUnique({ where: { deviceDbId: device.id } }),
+      this.prisma.devicePageSettings.findMany({ where: { deviceDbId: device.id }, orderBy: { position: "asc" } }),
+      this.prisma.deviceSyncState.findUnique({ where: { deviceDbId: device.id } }),
+    ]);
+    return jsonSafe({
+      deviceId: hwDeviceId,
+      revision: head?.revision ?? 0n,
+      system: head?.systemConfig ?? {},
+      pages: pages.map((p) => ({ slug: p.pageSlug, enabled: p.enabled, position: p.position, schemaVersion: p.schemaVersion, pageRevision: p.pageRevision, config: p.config })),
+      sync: sync ? { desiredRevision: sync.desiredRevision, reportedRevision: sync.reportedRevision, status: sync.status } : null,
+    });
+  }
+
+  /** One page's settings + the current baseRevision the client must echo back. */
+  async getPage(user: Pick<User, "id" | "role">, hwDeviceId: string, slug: string) {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    const [head, page] = await Promise.all([
+      this.prisma.deviceConfigHead.findUnique({ where: { deviceDbId: device.id } }),
+      this.prisma.devicePageSettings.findUnique({ where: { deviceDbId_pageSlug: { deviceDbId: device.id, pageSlug: slug } } }),
+    ]);
+    return jsonSafe({ slug, baseRevision: head?.revision ?? 0n, schemaVersion: page?.schemaVersion ?? 1, pageRevision: page?.pageRevision ?? 0n, enabled: page?.enabled ?? false, position: page?.position ?? 0, config: page?.config ?? {} });
+  }
+
+  /** Write one page with optimistic concurrency, then recompile + push. */
+  async putPage(user: Pick<User, "id" | "role">, hwDeviceId: string, slug: string, body: { baseRevision?: number; config?: Record<string, unknown> }) {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    if (!CONFIG_PAGE_SLUGS.includes(slug)) throw new BadRequestException("unknown page");
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    const cfg = isPlainObject(body.config) ? body.config : {};
+    await this.prisma.$transaction(async (tx) => {
+      const head = await tx.deviceConfigHead.findUnique({ where: { deviceDbId: device.id } });
+      const current = head?.revision ?? 0n;
+      if (body.baseRevision != null && BigInt(body.baseRevision) !== current) {
+        throw new ConflictException({ error: "CONFIG_REVISION_CONFLICT", currentRevision: Number(current) });
+      }
+      const existing = await tx.devicePageSettings.findUnique({ where: { deviceDbId_pageSlug: { deviceDbId: device.id, pageSlug: slug } } });
+      const h = await tx.deviceConfigHead.upsert({ where: { deviceDbId: device.id }, create: { deviceDbId: device.id, revision: 1n, updatedSource: "api", updatedByUserId: user.id }, update: { revision: { increment: 1n }, updatedSource: "api", updatedByUserId: user.id } });
+      await tx.devicePageSettings.upsert({
+        where: { deviceDbId_pageSlug: { deviceDbId: device.id, pageSlug: slug } },
+        create: { deviceDbId: device.id, pageSlug: slug, config: cfg as object, enabled: true, position: existing?.position ?? 99, updatedSource: "api", updatedByUserId: user.id },
+        update: { config: cfg as object, pageRevision: { increment: 1n }, updatedSource: "api", updatedByUserId: user.id },
+      });
+      await tx.deviceConfigRevision.create({ data: { deviceDbId: device.id, globalRevision: h.revision, pageSlug: slug, changeType: "settings", source: "api", actorUserId: user.id, beforeConfig: (existing?.config as object) ?? undefined, afterConfig: cfg as object } });
+      await tx.deviceSyncState.upsert({ where: { deviceDbId: device.id }, create: { deviceDbId: device.id, desiredRevision: h.revision, status: "pending" }, update: { desiredRevision: h.revision, status: "pending" } });
+    });
+    const compiled = await this.compileAndPush(device.id, hwDeviceId);
+    return jsonSafe({ ok: true, config: compiled });
+  }
+
+  /** Compile the normalized tables to the firmware document, cache it on Device
+   *  + DeviceConfigHead, and push over MQTT. Returns the compiled doc. */
+  private async compileAndPush(deviceDbId: string, hwDeviceId: string): Promise<Record<string, unknown>> {
+    const [head, pages] = await Promise.all([
+      this.prisma.deviceConfigHead.findUnique({ where: { deviceDbId } }),
+      this.prisma.devicePageSettings.findMany({ where: { deviceDbId }, orderBy: { position: "asc" } }),
+    ]);
+    const sys = isPlainObject(head?.systemConfig) ? (head!.systemConfig as Record<string, unknown>) : {};
+    const cfg: Record<string, unknown> = { ...sys, pages: pages.filter((p) => p.enabled).map((p) => p.pageSlug) };
+    for (const p of pages) cfg[p.pageSlug] = p.config;
+    const sha = createHash("sha256").update(JSON.stringify(cfg)).digest("hex");
+    const updated = await this.prisma.device.update({ where: { id: deviceDbId }, data: { settings: cfg as object, settingsVersion: { increment: 1 } } });
+    await this.prisma.deviceConfigHead.update({ where: { deviceDbId }, data: { compiledConfig: cfg as object, compiledSha256: sha } });
+    this.mqtt.sendCommand(hwDeviceId, "settings", { version: updated.settingsVersion, config: cfg });
+    return cfg;
+  }
+
   /** Admin grants/revokes a catalog item on ONE device (per-CryptoClock). */
   async grantItem(hwDeviceId: string, slug: string, actorUserId: string) {
     const [device, item] = await Promise.all([
