@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post, Put, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Post, Put, Res, UseGuards } from "@nestjs/common";
+import type { Response } from "express";
 import { DevicesService, type ProvisionInput } from "./devices.service";
 import type { DeviceCommandType } from "@ccp/shared";
 import { CurrentUser, UserGuard, AdminGuard } from "../auth/auth.guards";
@@ -99,6 +100,49 @@ export class DevicesController {
     @Body() body: { baseRevision?: number; config?: Record<string, unknown> },
   ) {
     return this.devices.putPage(user, hwId, slug, body);
+  }
+
+  /* ----- per-page assets (files on the OCI volume, phase 3) ----- */
+
+  @Get(":hwId/pages/:slug/assets")
+  @UseGuards(UserGuard)
+  listAssets(@Param("hwId") hwId: string, @Param("slug") slug: string, @CurrentUser() user: User) {
+    return this.devices.listAssets(user, hwId, slug);
+  }
+
+  /** Upload a page asset (base64 in JSON). Re-encode the avatar client-side to a
+      132×132 PNG before sending; the API validates magic bytes + size. */
+  @Post(":hwId/pages/:slug/assets/:assetKey")
+  @UseGuards(UserGuard)
+  uploadAsset(
+    @Param("hwId") hwId: string,
+    @Param("slug") slug: string,
+    @Param("assetKey") assetKey: string,
+    @CurrentUser() user: User,
+    @Body() body: { dataBase64?: string; sortOrder?: number },
+  ) {
+    return this.devices.uploadAsset(user, hwId, slug, assetKey, body);
+  }
+
+  @Get(":hwId/pages/:slug/assets/:assetKey/file")
+  @UseGuards(UserGuard)
+  async serveAsset(
+    @Param("hwId") hwId: string,
+    @Param("slug") slug: string,
+    @Param("assetKey") assetKey: string,
+    @CurrentUser() user: User,
+    @Res() res: Response,
+  ) {
+    const { buffer, contentType } = await this.devices.serveAsset(user, hwId, slug, assetKey);
+    res.set("Content-Type", contentType);
+    res.set("Cache-Control", "no-store");
+    res.send(buffer);
+  }
+
+  @Delete(":hwId/pages/:slug/assets/:assetKey")
+  @UseGuards(UserGuard)
+  deleteAsset(@Param("hwId") hwId: string, @Param("slug") slug: string, @Param("assetKey") assetKey: string, @CurrentUser() user: User) {
+    return this.devices.deleteAsset(user, hwId, slug, assetKey);
   }
 
   /** Device boot-time settings check (and admin read). */

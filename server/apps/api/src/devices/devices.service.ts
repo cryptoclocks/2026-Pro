@@ -1,6 +1,8 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { hash, compare } from "bcryptjs";
 import { createHash } from "node:crypto";
+import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { nanoid } from "nanoid";
 import { PrismaService } from "../prisma/prisma.service";
 import { MqttBridgeService } from "../mqtt/mqtt-bridge.service";
@@ -397,11 +399,108 @@ export class DevicesService {
     const sys = isPlainObject(head?.systemConfig) ? (head!.systemConfig as Record<string, unknown>) : {};
     const cfg: Record<string, unknown> = { ...sys, pages: pages.filter((p) => p.enabled).map((p) => p.pageSlug) };
     for (const p of pages) cfg[p.pageSlug] = p.config;
+    // inject asset references the firmware reads as local SD paths
+    const assets = await this.prisma.deviceAsset.findMany({ where: { deviceDbId, enabled: true } });
+    for (const a of assets) {
+      if (!a.currentVersionId) continue;
+      if (a.pageSlug === "profile" && a.assetKey === "avatar") {
+        const pr = isPlainObject(cfg.profile) ? (cfg.profile as Record<string, unknown>) : {};
+        pr.avatar = "pages/profile/assets/avatar.png";
+        cfg.profile = pr;
+      }
+    }
     const sha = createHash("sha256").update(JSON.stringify(cfg)).digest("hex");
     const updated = await this.prisma.device.update({ where: { id: deviceDbId }, data: { settings: cfg as object, settingsVersion: { increment: 1 } } });
     await this.prisma.deviceConfigHead.update({ where: { deviceDbId }, data: { compiledConfig: cfg as object, compiledSha256: sha } });
     this.mqtt.sendCommand(hwDeviceId, "settings", { version: updated.settingsVersion, config: cfg });
     return cfg;
+  }
+
+  /* ------------------------------------------------ device assets (P3) */
+
+  private assetBaseDir(): string {
+    return join(process.env.PAYLOAD_STORAGE_DIR ?? join(process.cwd(), "storage"), "device-assets");
+  }
+
+  /** Upload a page asset (base64). Stores an immutable version on the volume,
+   *  bumps revision, then recompiles + pushes so the path is in the config. */
+  async uploadAsset(user: Pick<User, "id" | "role">, hwDeviceId: string, slug: string, assetKey: string, body: { dataBase64?: string; sortOrder?: number }) {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    if (!body.dataBase64) throw new BadRequestException("dataBase64 required");
+    const buf = Buffer.from(body.dataBase64, "base64");
+    if (buf.length === 0 || buf.length > 8 * 1024 * 1024) throw new BadRequestException("invalid file size");
+    const det = detectAsset(buf);
+    if (!det) throw new BadRequestException("unsupported file type");
+    if (slug === "profile" && assetKey === "avatar") {
+      if (det.kind !== "image") throw new BadRequestException("avatar must be PNG/JPEG");
+      if (buf.length > 300 * 1024) throw new BadRequestException("avatar too large (max 300 KB)");
+    }
+    const sha = createHash("sha256").update(buf).digest("hex");
+    const asset = await this.prisma.deviceAsset.upsert({
+      where: { deviceDbId_pageSlug_assetKey: { deviceDbId: device.id, pageSlug: slug, assetKey } },
+      create: { deviceDbId: device.id, pageSlug: slug, assetKey, kind: det.kind, sortOrder: body.sortOrder ?? null },
+      update: { kind: det.kind, enabled: true },
+    });
+    const version = (await this.prisma.deviceAssetVersion.count({ where: { assetId: asset.id } })) + 1;
+    const dir = join(this.assetBaseDir(), hwDeviceId, slug, assetKey);
+    await mkdir(dir, { recursive: true });
+    const objectPath = join(dir, `v${version}.${det.ext}`);
+    await writeFile(objectPath, buf);
+    const ver = await this.prisma.deviceAssetVersion.create({
+      data: { assetId: asset.id, version, objectPath, contentType: det.contentType, sizeBytes: BigInt(buf.length), sha256: sha, createdByUserId: user.id },
+    });
+    await this.prisma.deviceAsset.update({ where: { id: asset.id }, data: { currentVersionId: ver.id } });
+    await this.prisma.$transaction(async (tx) => {
+      const h = await tx.deviceConfigHead.upsert({ where: { deviceDbId: device.id }, create: { deviceDbId: device.id, revision: 1n }, update: { revision: { increment: 1n } } });
+      await tx.deviceConfigRevision.create({ data: { deviceDbId: device.id, globalRevision: h.revision, pageSlug: slug, changeType: "asset", source: "api", actorUserId: user.id, metadata: { assetKey, version } } });
+      await tx.deviceSyncState.upsert({ where: { deviceDbId: device.id }, create: { deviceDbId: device.id, desiredRevision: h.revision, status: "pending" }, update: { desiredRevision: h.revision, status: "pending" } });
+    });
+    await this.compileAndPush(device.id, hwDeviceId);
+    return { assetId: asset.id, version, kind: det.kind, contentType: det.contentType, sizeBytes: buf.length, url: `/api/v1/devices/${hwDeviceId}/pages/${slug}/assets/${assetKey}/file` };
+  }
+
+  async listAssets(user: Pick<User, "id" | "role">, hwDeviceId: string, slug: string) {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    const assets = await this.prisma.deviceAsset.findMany({
+      where: { deviceDbId: device.id, pageSlug: slug },
+      include: { versions: { orderBy: { version: "desc" }, take: 1 } },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+    return jsonSafe(assets.map((a) => ({
+      id: a.id, assetKey: a.assetKey, kind: a.kind, enabled: a.enabled, sortOrder: a.sortOrder,
+      version: a.versions[0]?.version ?? 0, sizeBytes: a.versions[0]?.sizeBytes ?? 0n, contentType: a.versions[0]?.contentType ?? null,
+      url: `/api/v1/devices/${hwDeviceId}/pages/${slug}/assets/${a.assetKey}/file`,
+    })));
+  }
+
+  async serveAsset(user: Pick<User, "id" | "role">, hwDeviceId: string, slug: string, assetKey: string): Promise<{ buffer: Buffer; contentType: string }> {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    const asset = await this.prisma.deviceAsset.findUnique({ where: { deviceDbId_pageSlug_assetKey: { deviceDbId: device.id, pageSlug: slug, assetKey } } });
+    if (!asset?.currentVersionId) throw new NotFoundException("asset not found");
+    const ver = await this.prisma.deviceAssetVersion.findUnique({ where: { id: asset.currentVersionId } });
+    if (!ver) throw new NotFoundException("asset version not found");
+    return { buffer: await readFile(ver.objectPath), contentType: ver.contentType };
+  }
+
+  async deleteAsset(user: Pick<User, "id" | "role">, hwDeviceId: string, slug: string, assetKey: string) {
+    await this.assertCanManageDevice(user, hwDeviceId);
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    const asset = await this.prisma.deviceAsset.findUnique({
+      where: { deviceDbId_pageSlug_assetKey: { deviceDbId: device.id, pageSlug: slug, assetKey } },
+      include: { versions: true },
+    });
+    if (!asset) return { ok: true };
+    for (const v of asset.versions) await rm(v.objectPath, { force: true }).catch(() => undefined);
+    await this.prisma.deviceAsset.delete({ where: { id: asset.id } });
+    await this.compileAndPush(device.id, hwDeviceId);
+    return { ok: true };
   }
 
   /** Admin grants/revokes a catalog item on ONE device (per-CryptoClock). */
@@ -517,6 +616,19 @@ function jsonSafe<T>(value: T): T {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Sniff a supported asset type from its magic bytes (never trust the filename). */
+function detectAsset(buf: Buffer): { ext: string; contentType: string; kind: string } | null {
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47)
+    return { ext: "png", contentType: "image/png", kind: "image" };
+  if (buf.length >= 3 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46)
+    return { ext: "gif", contentType: "image/gif", kind: "gif" };
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff)
+    return { ext: "jpg", contentType: "image/jpeg", kind: "image" };
+  if (buf.length >= 12 && buf.toString("ascii", 0, 4) === "RIFF" && buf.toString("ascii", 8, 12) === "WAVE")
+    return { ext: "wav", contentType: "audio/wav", kind: "audio" };
+  return null;
 }
 
 function mergeSettings(base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> {

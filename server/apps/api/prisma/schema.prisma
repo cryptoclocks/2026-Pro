@@ -146,6 +146,7 @@ model Device {
   pageSettings    DevicePageSettings[]
   configRevisions DeviceConfigRevision[]
   syncState       DeviceSyncState?
+  assets          DeviceAsset[]
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -203,6 +204,44 @@ model DeviceConfigRevision {
   createdAt      DateTime @default(now())
 
   @@index([deviceDbId, createdAt])
+}
+
+/// A stable logical asset slot on a device/page (avatar, background, photo…).
+/// Replacing a file makes a new immutable version; the logical id is stable.
+model DeviceAsset {
+  id               String   @id @default(cuid())
+  deviceDbId       String
+  device           Device   @relation(fields: [deviceDbId], references: [id], onDelete: Cascade)
+  pageSlug         String
+  assetKey         String
+  kind             String   @default("image") // image|gif|audio|font|binary
+  enabled          Boolean  @default(true)
+  sortOrder        Int?
+  currentVersionId String?
+  versions         DeviceAssetVersion[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([deviceDbId, pageSlug, assetKey])
+  @@index([deviceDbId, pageSlug])
+}
+
+/// Immutable metadata for one uploaded file (stored on the OCI volume).
+model DeviceAssetVersion {
+  id              String   @id @default(cuid())
+  assetId         String
+  asset           DeviceAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  version         Int
+  objectPath      String   // path on the API volume (PAYLOAD_STORAGE_DIR/device-assets/…)
+  contentType     String
+  sizeBytes       BigInt
+  sha256          String
+  width           Int?
+  height          Int?
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+
+  @@index([assetId])
 }
 
 /// Desired vs applied revision for one device.
