@@ -280,38 +280,83 @@ static void schedule_saved_page_settings_replay(void)
  * than what is stored locally (SD/LittleFS). Applied only when the version
  * differs; offline or 404 keeps the local config untouched.
  */
+/* Download one manifest asset to its SD path (sha-verified by conn_http_download).
+ * download_url is absolute (PUBLIC_API_URL); the device token rides in the query
+ * since the firmware HTTP downloader can't set headers. */
+static void bootstrap_fetch_asset(const cJSON *a, const char *token)
+{
+    const char *lp = cJSON_GetStringValue(cJSON_GetObjectItem(a, "local_path"));
+    const char *du = cJSON_GetStringValue(cJSON_GetObjectItem(a, "download_url"));
+    const char *sh = cJSON_GetStringValue(cJSON_GetObjectItem(a, "sha256"));
+    if (!lp || !du || !storage_sd_mounted()) {
+        return;
+    }
+    char dest[200];
+    snprintf(dest, sizeof(dest), "%s/%s", STORAGE_SD_BASE, lp);
+    char *slash = strrchr(dest, '/');
+    if (slash) { *slash = '\0'; storage_mkdirs(dest); *slash = '/'; }
+    char url[640];
+    snprintf(url, sizeof(url), "%s?did=%s&token=%s", du, device_security_id(), token ? token : "");
+    if (conn_http_download(url, dest, sh, 20000) == ESP_OK) {
+        ESP_LOGI(TAG, "asset %s ok", lp);
+    } else {
+        ESP_LOGW(TAG, "asset %s download failed", lp);
+    }
+}
+
+/*
+ * Boot/refresh sync over HTTPS: pull the compiled config + asset manifest from
+ * the Hub bootstrap endpoint, apply it, download changed assets, then ACK the
+ * revision. Authenticates with the minted device token. Every failure keeps the
+ * local last-known-good config and never blocks boot.
+ */
 static void settings_sync_from_server(void)
 {
-    char url[192];
-    snprintf(url, sizeof(url), "%s/api/v1/devices/%s/settings",
-             CCP_CFG_SERVER_BASE_URL, device_security_id());
+    char token[128] = "";
+    device_security_get_token(token, sizeof(token));
+    char local_ver[16] = "0";
+    storage_kv_get_str("settings", "ver", local_ver, sizeof(local_ver));
 
+    char url[224];
+    snprintf(url, sizeof(url), "%s/api/v1/device/bootstrap?revision=%s",
+             CCP_CFG_SERVER_BASE_URL, local_ver);
     esp_http_client_config_t cfg = {
         .url = url,
-        .timeout_ms = 6000,
+        .timeout_ms = 8000,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .buffer_size = 2048,
+        .buffer_size = 4096,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
         return;
     }
-    char *body = malloc(8192);
-    int total = -1;
+    esp_http_client_set_header(client, "X-Device-Id", device_security_id());
+    if (token[0]) {
+        esp_http_client_set_header(client, "X-Device-Token", token);
+    }
+
+    char *body = malloc(16384);
+    int total = -1, status = 0;
     if (body && esp_http_client_open(client, 0) == ESP_OK) {
         esp_http_client_fetch_headers(client);
-        if (esp_http_client_get_status_code(client) == 200) {
+        status = esp_http_client_get_status_code(client);
+        if (status == 200) {
             total = 0;
             int rd;
-            while ((rd = esp_http_client_read(client, body + total, 8191 - total)) > 0) {
+            while ((rd = esp_http_client_read(client, body + total, 16383 - total)) > 0) {
                 total += rd;
             }
             body[total] = '\0';
         }
     }
     esp_http_client_cleanup(client);
+    if (status == 204) {
+        ESP_LOGI(TAG, "config in sync (rev %s)", local_ver);
+        free(body);
+        return;
+    }
     if (total <= 0) {
-        ESP_LOGI(TAG, "settings sync: server unreachable or no settings — keeping local");
+        ESP_LOGI(TAG, "bootstrap: unreachable/unauthorized — keeping local config");
         free(body);
         return;
     }
@@ -321,18 +366,42 @@ static void settings_sync_from_server(void)
     if (!root) {
         return;
     }
-    const cJSON *jver = cJSON_GetObjectItem(root, "version");
+    const cJSON *jrev = cJSON_GetObjectItem(root, "revision");
     const cJSON *jcfg = cJSON_GetObjectItem(root, "config");
-    if (cJSON_IsNumber(jver) && cJSON_IsObject(jcfg)) {
-        char local_ver[12] = "0";
-        storage_kv_get_str("settings", "ver", local_ver, sizeof(local_ver));
-        if (atoi(local_ver) != jver->valueint) {
-            apply_server_settings(jver->valueint, jcfg);
-        } else {
-            ESP_LOGI(TAG, "settings in sync (v%s)", local_ver);
+    const cJSON *jassets = cJSON_GetObjectItem(root, "assets");
+    int revision = cJSON_IsNumber(jrev) ? jrev->valueint : 0;
+    if (cJSON_IsObject(jcfg)) {
+        apply_server_settings(revision, jcfg);
+    }
+    if (cJSON_IsArray(jassets)) {
+        const cJSON *a;
+        cJSON_ArrayForEach(a, jassets) {
+            bootstrap_fetch_asset(a, token);
         }
     }
     cJSON_Delete(root);
+
+    /* ACK the applied revision so the Hub shows applied == desired */
+    char ack[80];
+    snprintf(ack, sizeof(ack), "{\"revision\":%d}", revision);
+    char aurl[160];
+    snprintf(aurl, sizeof(aurl), "%s/api/v1/device/config-ack", CCP_CFG_SERVER_BASE_URL);
+    esp_http_client_config_t acfg = {
+        .url = aurl,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 6000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+    esp_http_client_handle_t ac = esp_http_client_init(&acfg);
+    if (ac) {
+        esp_http_client_set_header(ac, "Content-Type", "application/json");
+        esp_http_client_set_header(ac, "X-Device-Id", device_security_id());
+        if (token[0]) esp_http_client_set_header(ac, "X-Device-Token", token);
+        esp_http_client_set_post_field(ac, ack, strlen(ack));
+        esp_http_client_perform(ac);
+        esp_http_client_cleanup(ac);
+    }
+    ESP_LOGI(TAG, "config applied (rev %d)", revision);
 }
 
 /* --------------------------------------------------------------- hooks */
