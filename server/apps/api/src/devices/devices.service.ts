@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { hash, compare } from "bcryptjs";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile, readFile, rm } from "node:fs/promises";
@@ -501,6 +501,74 @@ export class DevicesService {
     await this.prisma.deviceAsset.delete({ where: { id: asset.id } });
     await this.compileAndPush(device.id, hwDeviceId);
     return { ok: true };
+  }
+
+  /* ------------------------------------------------ device bootstrap (P4) */
+
+  private async deviceByToken(deviceId: string, token: string) {
+    if (!deviceId || !token || !(await this.verifyDeviceToken(deviceId, token))) {
+      throw new UnauthorizedException("invalid device credentials");
+    }
+    const device = await this.prisma.device.findUnique({ where: { deviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    return device;
+  }
+
+  /** Device boot: returns compiled config + asset manifest if newer than the
+   *  device's local revision, else null (caller sends 204). */
+  async deviceBootstrap(deviceId: string, token: string, sinceRevision?: number) {
+    const device = await this.deviceByToken(deviceId, token);
+    const head = await this.prisma.deviceConfigHead.findUnique({ where: { deviceDbId: device.id } });
+    const rev = head?.revision ?? 0n;
+    if (sinceRevision != null && BigInt(sinceRevision) >= rev) return null;
+    const rows = await this.prisma.deviceAsset.findMany({ where: { deviceDbId: device.id, enabled: true } });
+    const base = process.env.PUBLIC_API_URL ?? "https://api.cashlessthailand.com";
+    const assets: Array<Record<string, unknown>> = [];
+    for (const a of rows) {
+      if (!a.currentVersionId) continue;
+      const v = await this.prisma.deviceAssetVersion.findUnique({ where: { id: a.currentVersionId } });
+      if (!v) continue;
+      const ext = v.contentType === "image/gif" ? "gif" : v.contentType === "audio/wav" ? "wav" : v.contentType === "image/jpeg" ? "jpg" : "png";
+      const localPath = a.assetKey === "avatar" ? "pages/profile/assets/avatar.png"
+        : a.assetKey === "background" ? `pages/${a.pageSlug}/assets/background.${ext}`
+        : `pages/${a.pageSlug}/assets/${a.assetKey}.${ext}`;
+      assets.push({
+        id: v.id, page: a.pageSlug, key: a.assetKey, local_path: localPath,
+        download_url: `${base}/api/v1/device/assets/${v.id}/file?did=${encodeURIComponent(deviceId)}&token=${encodeURIComponent(token)}`,
+        sha256: v.sha256, size_bytes: Number(v.sizeBytes), content_type: v.contentType,
+      });
+    }
+    await this.prisma.deviceSyncState.upsert({
+      where: { deviceDbId: device.id },
+      create: { deviceDbId: device.id, desiredRevision: rev, status: "syncing", lastNotifiedAt: new Date() },
+      update: { status: "syncing", lastNotifiedAt: new Date() },
+    });
+    return { revision: Number(rev), sha256: head?.compiledSha256 ?? null, config: head?.compiledConfig ?? {}, assets };
+  }
+
+  /** Device acknowledges it applied a revision (updates sync state). */
+  async deviceAck(deviceId: string, token: string, revision: number, sha256?: string) {
+    const device = await this.deviceByToken(deviceId, token);
+    await this.prisma.deviceSyncState.upsert({
+      where: { deviceDbId: device.id },
+      create: { deviceDbId: device.id, desiredRevision: BigInt(revision || 0), reportedRevision: BigInt(revision || 0), reportedSha256: sha256 ?? null, status: "applied", lastAppliedAt: new Date() },
+      update: { reportedRevision: BigInt(revision || 0), reportedSha256: sha256 ?? null, status: "applied", lastAppliedAt: new Date(), lastError: null },
+    });
+    return { ok: true };
+  }
+
+  async deviceError(deviceId: string, token: string, error: string) {
+    const device = await this.deviceByToken(deviceId, token);
+    await this.prisma.deviceSyncState.updateMany({ where: { deviceDbId: device.id }, data: { status: "failed", lastError: String(error || "").slice(0, 500) } });
+    return { ok: true };
+  }
+
+  /** Stream an asset file to the device (device-token auth via query). */
+  async serveDeviceAsset(deviceId: string, token: string, versionId: string): Promise<{ buffer: Buffer; contentType: string }> {
+    const device = await this.deviceByToken(deviceId, token);
+    const v = await this.prisma.deviceAssetVersion.findUnique({ where: { id: versionId }, include: { asset: true } });
+    if (!v || v.asset.deviceDbId !== device.id) throw new NotFoundException("asset not found");
+    return { buffer: await readFile(v.objectPath), contentType: v.contentType };
   }
 
   /** Admin grants/revokes a catalog item on ONE device (per-CryptoClock). */
