@@ -134,7 +134,9 @@ const PROFILE_MAIN_WIDGETS: WidgetNode[] = [
     type: "label", id: "role", x: 24, y: 214, w: 360, h: 24, props: { text: "(SAT) CYPHERPUNK" },
     style: { text_color: "#848E9C", align: "left", font: "montserrat_20" },
     bindings: [
-      { prop: "text", source: "settings", path: "role" },
+      // role_line = "(nickname) role", synthesized by the device (firmware) since
+      // a single binding can't concatenate two settings fields.
+      { prop: "text", source: "settings", path: "role_line" },
       { prop: "style.text_color", source: "settings", path: "role_color" },
     ],
   },

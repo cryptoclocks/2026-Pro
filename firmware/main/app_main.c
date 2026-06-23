@@ -175,14 +175,33 @@ static void deliver_page_settings_for_slug(const cJSON *config, const char *slug
     if (!cJSON_IsObject(obj)) {
         return;
     }
-    char *json = cJSON_PrintUnformatted(obj);
+    /* Profile line 2 reads "(nickname) role" — a single binding can't concat two
+       fields, so synthesize role_line here (covers every config source). */
+    cJSON *aug = NULL;
+    const cJSON *feed = obj;
+    if (!strcmp(slug, "profile")) {
+        aug = cJSON_Duplicate(obj, 1);
+        if (aug) {
+            const char *ns = cJSON_GetStringValue(cJSON_GetObjectItem(obj, "nickname"));
+            const char *rs = cJSON_GetStringValue(cJSON_GetObjectItem(obj, "role"));
+            char line[96] = "";
+            if (ns && ns[0] && rs && rs[0]) snprintf(line, sizeof(line), "(%s) %s", ns, rs);
+            else if (rs && rs[0]) snprintf(line, sizeof(line), "%s", rs);
+            else if (ns && ns[0]) snprintf(line, sizeof(line), "(%s)", ns);
+            cJSON_AddStringToObject(aug, "role_line", line);
+            feed = aug;
+        }
+    }
+    char *json = cJSON_PrintUnformatted(feed);
     if (!json) {
+        if (aug) cJSON_Delete(aug);
         return;
     }
     char stream[80];
     snprintf(stream, sizeof(stream), "settings.%s", slug);
     ui_renderer_handle_data(stream, json, strlen(json));
     free(json);
+    if (aug) cJSON_Delete(aug);
 
     /* The clock page's time text is drawn by wasm (CLOCK_LOGIC_SOURCE), which
      * can't see the binding stream — mirror the format/tz settings into the wasm

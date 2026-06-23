@@ -33,6 +33,7 @@ export class MqttBridgeService implements OnModuleInit, OnModuleDestroy {
   /** learned from retained status (which carries id): deviceId <-> encId topic. */
   private readonly idToEnc = new Map<string, string>();
   private readonly encToId = new Map<string, string>();
+  private mapTimer?: NodeJS.Timeout;
 
   constructor(private readonly prisma: PrismaService) {}
 
@@ -53,7 +54,12 @@ export class MqttBridgeService implements OnModuleInit, OnModuleDestroy {
         mqttTopics.allCmdRes,
         mqttTopics.allImpressions,
       ]);
+      void this.refreshDeviceMap();
     });
+
+    // refresh the encId<->deviceId map from the DB so devices that haven't
+    // re-published status yet (incl. not-re-flashed ones) still resolve.
+    this.mapTimer = setInterval(() => void this.refreshDeviceMap(), 60_000);
 
     this.client.on("message", (topic, payload) => {
       this.handleMessage(topic, payload).catch((err) =>
@@ -65,7 +71,30 @@ export class MqttBridgeService implements OnModuleInit, OnModuleDestroy {
   }
 
   onModuleDestroy() {
+    if (this.mapTimer) clearInterval(this.mapTimer);
     this.client?.end(true);
+  }
+
+  /** Populate encId<->deviceId from the DB: AES(id) for legacy/plaintext-fallback
+   *  firmware and AES("id-MAC") for re-flashed firmware. Lets status from a
+   *  device that hasn't re-published (with id) yet still resolve to its row. */
+  private async refreshDeviceMap(): Promise<void> {
+    try {
+      const devs = await this.prisma.device.findMany({ select: { deviceId: true, mac: true } });
+      for (const d of devs) {
+        const encId = ccpAes(d.deviceId);
+        this.encToId.set(encId, d.deviceId);
+        if (d.mac) {
+          const encWithMac = ccpAes(`${d.deviceId}-${d.mac}`);
+          this.encToId.set(encWithMac, d.deviceId);
+          this.idToEnc.set(d.deviceId, encWithMac);
+        } else if (!this.idToEnc.has(d.deviceId)) {
+          this.idToEnc.set(d.deviceId, encId);
+        }
+      }
+    } catch (e) {
+      this.log.warn(`refreshDeviceMap failed: ${e}`);
+    }
   }
 
   /** Publish a command to one device; resolves with the correlation id. */
