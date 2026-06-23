@@ -329,6 +329,27 @@ export class DevicesService {
     });
   }
 
+  /** One-time backfill (admin): populate the normalized config tables from each
+   *  device's existing compiled `Device.settings`, for devices that have no
+   *  DeviceConfigHead yet. Idempotent — already-migrated devices are skipped. */
+  async backfillConfig() {
+    const devices = await this.prisma.device.findMany({ select: { id: true, deviceId: true, settings: true } });
+    let backfilled = 0;
+    let skipped = 0;
+    for (const d of devices) {
+      const head = await this.prisma.deviceConfigHead.findUnique({ where: { deviceDbId: d.id } });
+      if (head) { skipped++; continue; }
+      const cfg = isPlainObject(d.settings) ? d.settings : {};
+      try {
+        await this.mirrorConfig(d.id, cfg, "device_import");
+        backfilled++;
+      } catch (e) {
+        this.logger.warn(`backfill ${d.deviceId} failed: ${e}`);
+      }
+    }
+    return { ok: true, backfilled, skipped, total: devices.length };
+  }
+
   /* ---------------------------------------------- normalized config REST (P2) */
 
   /** Whole config doc for a device: revision + system + per-page rows. */

@@ -34,6 +34,13 @@ export class DevicesController {
     return this.devices.assignOwner(hwId, body.email ?? body.userId ?? "");
   }
 
+  /** Admin one-time backfill: compiled Device.settings → normalized config tables. */
+  @Post("backfill-config")
+  @UseGuards(AdminGuard)
+  backfillConfig() {
+    return this.devices.backfillConfig();
+  }
+
   @Get()
   @UseGuards(UserGuard)
   list(@CurrentUser() user: User) {
