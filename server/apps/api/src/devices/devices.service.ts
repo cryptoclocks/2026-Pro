@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { hash, compare } from "bcryptjs";
+import { createHash } from "node:crypto";
 import { nanoid } from "nanoid";
 import { PrismaService } from "../prisma/prisma.service";
 import { MqttBridgeService } from "../mqtt/mqtt-bridge.service";
@@ -9,6 +10,11 @@ import { expandedEntitlementSlugs, runtimeSlugForCatalogSlug, catalogForSlug, ca
 
 /** Accepts both the legacy MAC-derived id and the provisioned CCP serial. */
 const DEVICE_ID_RE = /^(ccp-[0-9a-f]{12}|CCP\d{6})$/;
+
+/** Page slugs that get their own DevicePageSettings row. */
+const CONFIG_PAGE_SLUGS = ["clock", "crypto", "slideshow", "weather", "profile", "calendar"];
+/** Device-wide system keys kept in DeviceConfigHead.systemConfig. */
+const SYSTEM_KEYS = ["display_mode", "page_delay_s", "brightness"];
 
 export type ProvisionInput = {
   mac: string;
@@ -269,11 +275,56 @@ export class DevicesService {
       where: { id: device.id },
       data: { settings: merged as object, settingsVersion: device.settingsVersion + 1 },
     });
+    // dual-write: mirror into the normalized config tables (source of truth +
+    // audit + sync state). Best-effort so it never breaks the legacy save path.
+    await this.mirrorConfig(device.id, merged, "api").catch((e) =>
+      this.logger.warn(`mirrorConfig ${hwDeviceId} failed: ${e}`),
+    );
     this.mqtt.sendCommand(hwDeviceId, "settings", {
       version: updated.settingsVersion,
       config: merged,
     });
     return { version: updated.settingsVersion, config: updated.settings };
+  }
+
+  /**
+   * Mirror a compiled `Device.settings` document into the normalized config
+   * tables: bump the global revision, write one DevicePageSettings row per page,
+   * record an audit revision, and mark the device's sync state pending. The
+   * compiled doc stays the firmware cache; these tables become the source of
+   * truth for the new per-page REST API (Phase 2+).
+   */
+  async mirrorConfig(deviceDbId: string, fullConfig: Record<string, unknown>, source: string, actorUserId?: string) {
+    const sys: Record<string, unknown> = {};
+    for (const k of SYSTEM_KEYS) if (k in fullConfig) sys[k] = fullConfig[k];
+    const order = Array.isArray(fullConfig.pages) ? (fullConfig.pages as string[]) : [];
+    const sha = createHash("sha256").update(JSON.stringify(fullConfig)).digest("hex");
+
+    await this.prisma.$transaction(async (tx) => {
+      const head = await tx.deviceConfigHead.upsert({
+        where: { deviceDbId },
+        create: { deviceDbId, revision: 1n, systemConfig: sys as object, compiledConfig: fullConfig as object, compiledSha256: sha, updatedSource: source, updatedByUserId: actorUserId ?? null },
+        update: { revision: { increment: 1n }, systemConfig: sys as object, compiledConfig: fullConfig as object, compiledSha256: sha, updatedSource: source, updatedByUserId: actorUserId ?? null },
+      });
+      for (const slug of CONFIG_PAGE_SLUGS) {
+        const pcfg = fullConfig[slug];
+        if (!isPlainObject(pcfg)) continue;
+        const pos = order.indexOf(slug);
+        await tx.devicePageSettings.upsert({
+          where: { deviceDbId_pageSlug: { deviceDbId, pageSlug: slug } },
+          create: { deviceDbId, pageSlug: slug, config: pcfg as object, enabled: pos >= 0, position: pos >= 0 ? pos : 0, updatedSource: source, updatedByUserId: actorUserId ?? null },
+          update: { config: pcfg as object, enabled: pos >= 0, position: pos >= 0 ? pos : 0, pageRevision: { increment: 1n }, updatedSource: source, updatedByUserId: actorUserId ?? null },
+        });
+      }
+      await tx.deviceConfigRevision.create({
+        data: { deviceDbId, globalRevision: head.revision, changeType: "settings", source, actorUserId: actorUserId ?? null, afterConfig: fullConfig as object },
+      });
+      await tx.deviceSyncState.upsert({
+        where: { deviceDbId },
+        create: { deviceDbId, desiredRevision: head.revision, status: "pending" },
+        update: { desiredRevision: head.revision, status: "pending" },
+      });
+    });
   }
 
   /** Admin grants/revokes a catalog item on ONE device (per-CryptoClock). */

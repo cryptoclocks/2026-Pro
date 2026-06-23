@@ -61,6 +61,8 @@ enum CampaignStatus {
 model User {
   id               String         @id @default(cuid())
   email            String         @unique
+  /// Supabase Auth subject (JWT `sub`) — stable join key (email can change).
+  authSubject      String?        @unique
   passwordHash     String
   name             String?
   role             Role           @default(USER)
@@ -140,11 +142,81 @@ model Device {
 
   claims      Claim[]
   impressions AdImpression[]
+  configHead      DeviceConfigHead?
+  pageSettings    DevicePageSettings[]
+  configRevisions DeviceConfigRevision[]
+  syncState       DeviceSyncState?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@index([ownerId])
   @@index([groupId])
+}
+
+/// One row per device: global config revision + device-wide system settings.
+/// `compiledConfig` is an API-generated cache (never edit directly).
+model DeviceConfigHead {
+  deviceDbId     String   @id
+  device         Device   @relation(fields: [deviceDbId], references: [id], onDelete: Cascade)
+  revision       BigInt   @default(0)
+  systemConfig   Json     @default("{}")
+  compiledConfig Json     @default("{}")
+  compiledSha256 String?
+  updatedByUserId String?
+  updatedSource  String   @default("system")
+  updatedAt      DateTime @updatedAt
+}
+
+/// One row per page configured on a device. Canonical per-page values.
+model DevicePageSettings {
+  id             String   @id @default(cuid())
+  deviceDbId     String
+  device         Device   @relation(fields: [deviceDbId], references: [id], onDelete: Cascade)
+  pageSlug       String
+  schemaVersion  Int      @default(1)
+  pageRevision   BigInt   @default(0)
+  enabled        Boolean  @default(true)
+  position       Int      @default(0)
+  config         Json     @default("{}")
+  updatedByUserId String?
+  updatedSource  String   @default("system")
+  updatedAt      DateTime @updatedAt
+
+  @@unique([deviceDbId, pageSlug])
+  @@index([deviceDbId, enabled, position])
+}
+
+/// Immutable audit history — one row per config/asset change.
+model DeviceConfigRevision {
+  id             String   @id @default(cuid())
+  deviceDbId     String
+  device         Device   @relation(fields: [deviceDbId], references: [id], onDelete: Cascade)
+  globalRevision BigInt
+  pageSlug       String?
+  pageRevision   BigInt?
+  changeType     String
+  source         String   @default("system")
+  actorUserId    String?
+  beforeConfig   Json?
+  afterConfig    Json?
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now())
+
+  @@index([deviceDbId, createdAt])
+}
+
+/// Desired vs applied revision for one device.
+model DeviceSyncState {
+  deviceDbId      String   @id
+  device          Device   @relation(fields: [deviceDbId], references: [id], onDelete: Cascade)
+  desiredRevision BigInt   @default(0)
+  reportedRevision BigInt  @default(0)
+  reportedSha256  String?
+  status          String   @default("pending")
+  lastNotifiedAt  DateTime?
+  lastAppliedAt   DateTime?
+  lastError       String?
+  updatedAt       DateTime @updatedAt
 }
 
 model Claim {
