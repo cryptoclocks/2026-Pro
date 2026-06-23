@@ -14,11 +14,18 @@ services:
       # Bind to localhost only — Caddy terminates TLS and proxies to it. The
       # API is never exposed directly on the public interface.
       - "127.0.0.1:4000:4000"
-    extra_hosts:
-      # Lets the container reach the broker running on the host (mqtt://...:1883)
-      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      # The broker is exposed by the existing Node-RED stack. A shared Docker
+      # network avoids the broken Linux host-gateway hairpin path.
+      - mqtt_broker
     volumes:
       - ccp_payloads:/data/payloads
 
 volumes:
   ccp_payloads:
+
+networks:
+  mqtt_broker:
+    external: true
+    name: nodered-aedes_default

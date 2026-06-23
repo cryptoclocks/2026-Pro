@@ -18,6 +18,10 @@ path is now live and verified; the remaining gaps are listed in §7.
 - **Device commands/settings verified live (2026-06-22)** → Node-RED publishes
   to both encrypted and legacy plaintext topics. `ping` returned ACK and
   `Save to display` returned `Saved — display reloading`.
+- **Admin/API MQTT status verified live (2026-06-23)** → API and Node-RED share
+  Docker network `nodered-aedes_default`; API connects to
+  `mqtt://jarvis-nodered:1883`. Do not restore `host.docker.internal`: on this
+  Linux VM it accepts TCP but never returns MQTT CONNACK from the API network.
 - **Device registered**: claimed into the new DB + 16 entitlements granted
   (clock/crypto/slideshow/weather/profile/calendar + clock-alarm/crypto-alerts).
   Done via a browser-console snippet hitting `POST /devices/claim` then
@@ -127,15 +131,13 @@ for(const s of ['clock','crypto','slideshow','weather','profile','calendar','clo
 ## 7. Remaining work (TODO)
 1. **User-web device commands — DONE** — dual-topic bridge deployed and
    Save/ping verified against `ccp-983daee91478` on 2026-06-22.
-2. **Admin online status + admin command center DON'T reach the device** —
-   `server/apps/api/src/mqtt/mqtt-bridge.service.ts` addresses devices by
-   **plaintext** topics (`mqttTopics.cmd(deviceId)` from `@ccp/shared`) and
-   ingests status by `deviceIdFromTopic` (gets encId, can't match plaintext DB
-   rows via `updateMany`). FIX: teach the API the encId scheme — add
-   `aesEncrypt(deviceId)` to `@ccp/shared` mqttTopics + maintain an
-   encId→deviceId map for status ingestion; OR route API→device through the same
-   Node-RED bridge. Until then admin Fleet shows the device but offline, and
-   admin reboot/brightness/grant-settings-push won't arrive.
+2. **Admin online status + command addressing — DONE in source; production
+   transport fixed 2026-06-23.** The API maintains plaintext/encId mappings and
+   publishes compatible command topics. Fleet remained offline because
+   `MQTT_URL=mqtt://host.docker.internal:1883` hit a Docker host-gateway
+   hairpin that timed out waiting for CONNACK. Production compose now joins
+   `nodered-aedes_default`, and `.env.prod` must use
+   `MQTT_URL=mqtt://jarvis-nodered:1883`.
 3. **`device.settings.get` gap** — bridge returns `{config:{}}` so web settings
    pages show defaults, not the device's live config. FIX: add a firmware
    `get_settings` cmd that replies config on `cmd/res`, OR have the bridge/web
