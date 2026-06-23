@@ -516,9 +516,9 @@ static void build_clock_page(page_t *page)
 
     const clock_theme_t th = s.cfg.clock_theme;
 
-    /* near-fullscreen time: montserrat 48pt scaled ~3.05x */
-#define CLOCK_TIME_SCALE 780          /* 256 = 1x */
-#define CLOCK_TIME_Y     (-18)        /* time block center offset from screen center */
+    /* oversized time: montserrat 48pt scaled ~3.5x; larger values can wedge LVGL layout */
+#define CLOCK_TIME_SCALE 900          /* 256 = 1x */
+#define CLOCK_TIME_Y     (-20)        /* time block center offset from screen center */
     s.lbl_time = lv_label_create(scr);
 #if LV_FONT_MONTSERRAT_48
     lv_obj_set_style_text_font(s.lbl_time, &lv_font_montserrat_48, 0);
@@ -1756,9 +1756,24 @@ static void menu_open(void)
     lv_obj_set_style_bg_color(slider, lv_color_hex(COL_ACCENT), LV_PART_KNOB);
     lv_obj_add_event_cb(slider, menu_brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    char info[128];
-    snprintf(info, sizeof(info), "%s\nIP: %s\nfw %s",
-             device_security_id(), s.ip[0] ? s.ip : "-", ota_manager_running_version());
+    /* System info — mirrors the web "System" page */
+    char macs[18] = "";
+    device_security_mac_str(macs, sizeof(macs));
+    char pkg[64] = "", pver[16] = "";
+    sync_manager_active_id(pkg, sizeof(pkg));
+    sync_manager_active_version(pver, sizeof(pver));
+
+    lv_obj_t *idcap = lv_label_create(panel);
+    lv_obj_set_style_text_color(idcap, lv_color_hex(COL_MUTED), 0);
+    lv_label_set_text(idcap, "DEVICE ID");
+    lv_obj_t *idval = lv_label_create(panel);
+    lv_obj_set_style_text_color(idval, lv_color_hex(COL_FG), 0);
+    lv_label_set_text(idval, device_security_id());
+
+    char info[224];
+    snprintf(info, sizeof(info), "fw %s\nIP: %s\nMAC: %s\nWiFi: %d dBm\nPage: %s%s%s",
+             ota_manager_running_version(), s.ip[0] ? s.ip : "-", macs, net_manager_rssi(),
+             pkg[0] ? pkg : "native", pver[0] ? " v" : "", pver);
     lv_obj_t *infol = lv_label_create(panel);
     lv_obj_set_style_text_color(infol, lv_color_hex(COL_MUTED), 0);
     lv_label_set_text(infol, info);
@@ -1830,7 +1845,8 @@ static void page_enter(int idx)
 {
     switch (s.pages[idx].kind) {
     case PAGE_CRYPTO:
-        s.last_usd_price = 0;     /* show "loading" until the refetch lands */
+        /* Keep the last quote visible while the poll task refreshes; clearing it
+         * on every swipe made the page look like it was constantly resetting. */
         crypto_render();
         s.need_history = true;
         s.force_fetch = true;
@@ -2081,9 +2097,9 @@ static void destroy_pages(void)
     s.swap_pending = false;
 }
 
-/* Max pages in the swipe rotation. The app curates settings.pages to <=5; we
- * cap here too so a stale/over-long list can never exhaust the page array. */
-#define ROTATION_MAX 5
+/* p001-p006 are the six canonical customer pages. Keep the firmware cap in
+ * sync with that catalog so the last entitled page is not silently dropped. */
+#define ROTATION_MAX 6
 
 static void setup_pages_from_cfg(void)
 {
