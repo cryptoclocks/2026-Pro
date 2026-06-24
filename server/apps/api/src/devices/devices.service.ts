@@ -301,7 +301,7 @@ export class DevicesService {
 
   async putSettingsForUser(user: Pick<User, "id" | "role">, hwDeviceId: string, config: Record<string, unknown>) {
     await this.assertCanManageDevice(user, hwDeviceId);
-    return this.putSettings(hwDeviceId, config);
+    return this.putSettings(hwDeviceId, config, user.id);
   }
 
   async entitlementSlugsForUser(user: Pick<User, "id" | "role">, hwDeviceId: string) {
@@ -309,7 +309,7 @@ export class DevicesService {
     return this.entitlementSlugs(hwDeviceId);
   }
 
-  async putSettings(hwDeviceId: string, config: Record<string, unknown>) {
+  async putSettings(hwDeviceId: string, config: Record<string, unknown>, actorUserId?: string) {
     const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
     if (!device) {
       throw new NotFoundException("device not found");
@@ -324,14 +324,25 @@ export class DevicesService {
     });
     // dual-write: mirror into the normalized config tables (source of truth +
     // audit + sync state). Best-effort so it never breaks the legacy save path.
-    await this.mirrorConfig(device.id, merged, "api").catch((e) =>
-      this.logger.warn(`mirrorConfig ${hwDeviceId} failed: ${e}`),
-    );
-    this.mqtt.sendCommand(hwDeviceId, "settings", {
+    let mirrored: { revision: bigint; sha256: string } | undefined;
+    try {
+      mirrored = await this.mirrorConfig(device.id, merged, "api", actorUserId);
+    } catch (e) {
+      this.logger.warn(`mirrorConfig ${hwDeviceId} failed: ${e}`);
+    }
+    const settingsCmdId = this.mqtt.sendCommand(hwDeviceId, "settings", {
       version: updated.settingsVersion,
       config: merged,
     });
-    return { version: updated.settingsVersion, config: updated.settings };
+    const syncCmdId = mirrored
+      ? this.mqtt.sendCommand(hwDeviceId, "sync_cloud", {
+          reason: "settings",
+          source: "legacy_settings",
+          revision: Number(mirrored.revision),
+          sha256: mirrored.sha256,
+        })
+      : undefined;
+    return { version: updated.settingsVersion, config: updated.settings, settingsCmdId, syncCmdId };
   }
 
   /**
@@ -341,13 +352,18 @@ export class DevicesService {
    * compiled doc stays the firmware cache; these tables become the source of
    * truth for the new per-page REST API (Phase 2+).
    */
-  async mirrorConfig(deviceDbId: string, fullConfig: Record<string, unknown>, source: string, actorUserId?: string) {
+  async mirrorConfig(
+    deviceDbId: string,
+    fullConfig: Record<string, unknown>,
+    source: string,
+    actorUserId?: string,
+  ): Promise<{ revision: bigint; sha256: string }> {
     const sys: Record<string, unknown> = {};
     for (const k of SYSTEM_KEYS) if (k in fullConfig) sys[k] = fullConfig[k];
     const order = Array.isArray(fullConfig.pages) ? (fullConfig.pages as string[]) : [];
     const sha = createHash("sha256").update(JSON.stringify(fullConfig)).digest("hex");
 
-    await this.prisma.$transaction(async (tx) => {
+    const revision = await this.prisma.$transaction(async (tx) => {
       const head = await tx.deviceConfigHead.upsert({
         where: { deviceDbId },
         create: { deviceDbId, revision: 1n, systemConfig: sys as object, compiledConfig: fullConfig as object, compiledSha256: sha, updatedSource: source, updatedByUserId: actorUserId ?? null },
@@ -371,7 +387,9 @@ export class DevicesService {
         create: { deviceDbId, desiredRevision: head.revision, status: "pending" },
         update: { desiredRevision: head.revision, status: "pending" },
       });
+      return head.revision;
     });
+    return { revision, sha256: sha };
   }
 
   /** One-time backfill (admin): populate the normalized config tables from each
@@ -491,13 +509,17 @@ export class DevicesService {
       await tx.deviceConfigRevision.create({ data: { deviceDbId: device.id, globalRevision: h.revision, pageSlug: slug, changeType: "settings", source: "api", actorUserId: user.id, beforeConfig: (existing?.config as object) ?? undefined, afterConfig: cfg as object } });
       await tx.deviceSyncState.upsert({ where: { deviceDbId: device.id }, create: { deviceDbId: device.id, desiredRevision: h.revision, status: "pending" }, update: { desiredRevision: h.revision, status: "pending" } });
     });
-    const compiled = await this.compileAndPush(device.id, hwDeviceId);
+    const { config: compiled } = await this.compileAndPush(device.id, hwDeviceId, { reason: "settings", slug });
     return jsonSafe({ ok: true, config: compiled });
   }
 
   /** Compile the normalized tables to the firmware document, cache it on Device
    *  + DeviceConfigHead, and push over MQTT. Returns the compiled doc. */
-  private async compileAndPush(deviceDbId: string, hwDeviceId: string): Promise<Record<string, unknown>> {
+  private async compileAndPush(
+    deviceDbId: string,
+    hwDeviceId: string,
+    syncCloud?: Record<string, unknown>,
+  ): Promise<{ config: Record<string, unknown>; settingsCmdId: string; syncCmdId?: string }> {
     const [head, pages] = await Promise.all([
       this.prisma.deviceConfigHead.findUnique({ where: { deviceDbId } }),
       this.prisma.devicePageSettings.findMany({ where: { deviceDbId }, orderBy: { position: "asc" } }),
@@ -518,8 +540,15 @@ export class DevicesService {
     const sha = createHash("sha256").update(JSON.stringify(cfg)).digest("hex");
     const updated = await this.prisma.device.update({ where: { id: deviceDbId }, data: { settings: cfg as object, settingsVersion: { increment: 1 } } });
     await this.prisma.deviceConfigHead.update({ where: { deviceDbId }, data: { compiledConfig: cfg as object, compiledSha256: sha } });
-    this.mqtt.sendCommand(hwDeviceId, "settings", { version: updated.settingsVersion, config: cfg });
-    return cfg;
+    const settingsCmdId = this.mqtt.sendCommand(hwDeviceId, "settings", { version: updated.settingsVersion, config: cfg });
+    const syncCmdId = syncCloud
+      ? this.mqtt.sendCommand(hwDeviceId, "sync_cloud", {
+          ...syncCloud,
+          revision: Number(head?.revision ?? 0n),
+          sha256: sha,
+        })
+      : undefined;
+    return { config: cfg, settingsCmdId, syncCmdId };
   }
 
   /* ------------------------------------------------ device assets (P3) */
@@ -563,8 +592,7 @@ export class DevicesService {
       await tx.deviceConfigRevision.create({ data: { deviceDbId: device.id, globalRevision: h.revision, pageSlug: slug, changeType: "asset", source: "api", actorUserId: user.id, metadata: { assetKey, version } } });
       await tx.deviceSyncState.upsert({ where: { deviceDbId: device.id }, create: { deviceDbId: device.id, desiredRevision: h.revision, status: "pending" }, update: { desiredRevision: h.revision, status: "pending" } });
     });
-    await this.compileAndPush(device.id, hwDeviceId);
-    const syncCmdId = this.mqtt.sendCommand(hwDeviceId, "sync_cloud", { reason: "asset", slug, assetKey });
+    const { syncCmdId } = await this.compileAndPush(device.id, hwDeviceId, { reason: "asset", slug, assetKey });
     return { assetId: asset.id, version, kind: det.kind, contentType: det.contentType, sizeBytes: buf.length, url: `/api/v1/devices/${hwDeviceId}/pages/${slug}/assets/${assetKey}/file`, syncCmdId };
   }
 
@@ -606,8 +634,8 @@ export class DevicesService {
     if (!asset) return { ok: true };
     for (const v of asset.versions) await rm(v.objectPath, { force: true }).catch(() => undefined);
     await this.prisma.deviceAsset.delete({ where: { id: asset.id } });
-    await this.compileAndPush(device.id, hwDeviceId);
-    return { ok: true };
+    const { syncCmdId } = await this.compileAndPush(device.id, hwDeviceId, { reason: "asset_deleted", slug, assetKey });
+    return { ok: true, syncCmdId };
   }
 
   /* ------------------------------------------------ firmware OTA */

@@ -259,6 +259,12 @@ class CloudDeviceApi {
     const key = slug==='profile' ? 'avatar' : slug==='weather' ? 'background' : file.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'_');
     await Hub.uploadAsset(this.deviceId, slug, key, bytes);
   }
+  async assetUrl(path){
+    const m=/^pages\/([^/]+)\/assets\/(.+)$/.exec(path); if(!m) return '';
+    const slug=m[1], file=m[2];
+    const key = slug==='profile' ? 'avatar' : slug==='weather' ? 'background' : file.replace(/\.[^.]+$/,'').replace(/[^a-zA-Z0-9_-]/g,'_');
+    return Hub.assetBlobUrl(this.deviceId, slug, key);
+  }
   async listFiles(){ throw new Error('Photo files are managed locally from the mobile app'); }
   async del(){ throw new Error('Photo files are managed locally from the mobile app'); }
 }
@@ -317,6 +323,12 @@ const Hub = {
     const r = await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/pages/${slug}/assets/${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dataBase64})},20000);
     if(!r.ok) throw new Error('HTTP '+r.status+' '+(await r.text()).slice(0,120));
     return await r.json();
+  },
+  async assetBlobUrl(deviceId, slug, key){
+    const r = await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/pages/${slug}/assets/${key}/file?t=${Date.now()}`,{},15000);
+    if(r.status===404) return '';
+    if(!r.ok) throw new Error('HTTP '+r.status+' '+(await r.text()).slice(0,120));
+    return URL.createObjectURL(await r.blob());
   },
   async checkout(slug, deviceId){
     try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/store/checkout`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({slug, deviceId})}, 15000); if(r.status===401)return{error:'Please sign in again'}; return await r.json(); }catch(e){ return {error:String(e)}; } },
@@ -683,19 +695,57 @@ function drawCrypto(){
   el('app').querySelectorAll('[data-dal]').forEach(b=>b.onclick=()=>{ c.patch('crypto','alerts',alerts.filter((_,i)=>i!==+b.dataset.dal)); drawCrypto(); });
 }
 
+function profileRoleLine(s){
+  const nickname=String(s.nickname||'').trim(), role=String(s.role||'').trim();
+  if(nickname&&role) return `(${nickname}) ${role}`;
+  if(nickname) return `(${nickname})`;
+  return role;
+}
+function setAvatarPreview(url){
+  const wrap=el('avwrap'); if(!wrap) return;
+  if(wrap.dataset.blobUrl){ URL.revokeObjectURL(wrap.dataset.blobUrl); delete wrap.dataset.blobUrl; }
+  if(!url){ wrap.innerHTML='👤'; return; }
+  if(url.startsWith('blob:')) wrap.dataset.blobUrl=url;
+  wrap.innerHTML=`<img src="${esc(url)}" style="width:100%;height:100%;object-fit:cover">`;
+}
+async function refreshProfileAvatar(c, s){
+  if(!s.avatar) return setAvatarPreview('');
+  if(c.api.mode==='lan' && c.api.supportsFiles){
+    setAvatarPreview(c.api.fileUrl(s.avatar)+'&t='+Date.now());
+    return;
+  }
+  if(typeof c.api.assetUrl!=='function') return setAvatarPreview('');
+  const wrap=el('avwrap'); if(wrap) wrap.innerHTML='<span class="spin"></span>';
+  try{
+    const url=await c.api.assetUrl(s.avatar);
+    if(App.ctrl!==c || App.route!=='profile'){ if(url?.startsWith?.('blob:')) URL.revokeObjectURL(url); return; }
+    setAvatarPreview(url);
+  }catch(e){
+    console.warn('avatar preview failed', e);
+    setAvatarPreview('');
+  }
+}
+
 function drawProfile(){
   const c=App.ctrl, s=c.section('profile');
   const social=(plat,label,url,fol,fwg,sec)=>`<div class="panel"><div class="ttl" style="margin-bottom:6px">${label}</div>
     ${field('Profile URL','p_'+plat+'_url', s[plat+'_url']||'')}
     <div class="grid2">${field('Followers','p_'+plat+'_fol', s[plat+'_followers']||'')}${field('Following','p_'+plat+'_fwg', s[plat+'_following']||'')}</div>
     ${field('Secondary label','p_'+plat+'_sec', s[plat+'_secondary_label']||'')}</div>`;
-  const avSrc = c.api.supportsFiles&&s.avatar ? c.api.fileUrl(s.avatar)+'&t='+Date.now() : '';
+  const avSrc = c.api.mode==='lan'&&c.api.supportsFiles&&s.avatar ? c.api.fileUrl(s.avatar)+'&t='+Date.now() : '';
   const avPanel = `<div class="panel"><div class="row">
     <div id="avwrap" style="width:64px;height:64px;border-radius:16px;overflow:hidden;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:30px;flex:none;box-shadow:0 0 0 1px rgba(255,255,255,.05) inset">${avSrc?`<img src="${avSrc}" style="width:100%;height:100%;object-fit:cover">`:'👤'}</div>
     <div class="grow"><div class="ttl">Profile photo</div><div class="sub">${c.api.uploads?'Square · auto-resized to 132×132 PNG':'Upload from the mobile app on the same WiFi'}</div></div>
     ${c.api.uploads?'<button id="avup" style="width:auto">Upload</button>':''}</div>
     <input type="file" id="avfile" accept="image/*" style="display:none"></div>`;
+  const profilePreview = `<div class="panel" id="profilePreview">
+    <div class="secttl">Display preview</div>
+    <div class="ttl" style="font-size:18px;color:${esc(s.name_color||'#F0B90B')}">${esc(s.name||'Natthapong Suwanjit')}</div>
+    <div style="margin-top:3px;color:${esc(s.role_color||'#848E9C')}">${esc(profileRoleLine(s)||'(Pong) CEO & Founder')}</div>
+    <div style="margin-top:3px;color:${esc(s.company_color||'#848E9C')}">${esc(s.company||'CryptoClock')}</div>
+  </div>`;
   settingsPage('Profile', `${avPanel}
+    ${profilePreview}
     <div class="panel">${toggleRow('Show this page', 'p_show', s.show!==false)}
       ${field('Name','p_name', s.name||'')}${field('Nickname','p_nick', s.nickname||'')}
       ${field('Role','p_role', s.role||'')}${field('Motto','p_motto', s.motto||'')}${field('Company','p_company', s.company||'')}</div>
@@ -711,6 +761,7 @@ function drawProfile(){
     c.patch('profile','name_color',g('p_namec')); c.patch('profile','role_color',g('p_rolec')); c.patch('profile','company_color',g('p_compc')); c.patch('profile','verify_color',g('p_verc')); c.patch('profile','bg_color',g('p_bgc'));
     for(const p of ['fb','yt','tt','ig']){ c.patch('profile',p+'_url',g('p_'+p+'_url')); c.patch('profile',p+'_followers',g('p_'+p+'_fol')); c.patch('profile',p+'_following',g('p_'+p+'_fwg')); c.patch('profile',p+'_secondary_label',g('p_'+p+'_sec')); }
   });
+  refreshProfileAvatar(c, s);
   if(el('avup')) el('avup').onclick=()=>el('avfile').click();
   if(el('avfile')) el('avfile').onchange=async()=>{ const f=el('avfile').files[0]; if(!f) return;
     el('avup').disabled=true; el('avup').textContent='…'; toast('Uploading photo…');
@@ -721,7 +772,7 @@ function drawProfile(){
       }
       c.patch('profile','avatar','pages/profile/assets/avatar.png');
       const url=URL.createObjectURL(new Blob([png],{type:'image/png'}));
-      el('avwrap').innerHTML=`<img src="${url}" style="width:100%;height:100%;object-fit:cover">`;
+      setAvatarPreview(url);
       toast('Photo uploaded — press Save to apply','ok');
     }catch(e){ toast('Upload failed: '+e,'err'); }
     el('avup').disabled=false; el('avup').textContent='Upload'; };

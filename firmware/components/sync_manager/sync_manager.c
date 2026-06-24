@@ -173,6 +173,37 @@ static void persist_active(const char *package_id, const char *version)
     storage_kv_set_str("sync", "active_ver", version);
 }
 
+static bool bundle_marker_matches(const char *dir, const char *bundle_sha256)
+{
+    if (!bundle_sha256 || !bundle_sha256[0]) {
+        return false;
+    }
+    char marker[300];
+    snprintf(marker, sizeof(marker), "%s/.bundle.sha256", dir);
+    size_t len = 0;
+    char *saved = storage_read_file(marker, &len);
+    if (!saved) {
+        return false;
+    }
+    while (len > 0 && (saved[len - 1] == '\n' || saved[len - 1] == '\r' ||
+                       saved[len - 1] == ' ')) {
+        saved[--len] = '\0';
+    }
+    bool ok = strcasecmp(saved, bundle_sha256) == 0;
+    free(saved);
+    return ok;
+}
+
+static esp_err_t write_bundle_marker(const char *dir, const char *bundle_sha256)
+{
+    if (!bundle_sha256 || !bundle_sha256[0]) {
+        return ESP_OK;
+    }
+    char marker[300];
+    snprintf(marker, sizeof(marker), "%s/.bundle.sha256", dir);
+    return storage_write_file_atomic(marker, bundle_sha256, strlen(bundle_sha256));
+}
+
 /* ------------------------------------------------------------ worker */
 
 static esp_err_t do_sync(const sync_request_t *req)
@@ -186,14 +217,18 @@ static esp_err_t do_sync(const sync_request_t *req)
              STORAGE_PACKAGES_DIR, req->package_id, req->version);
 
     struct stat st;
-    if (stat(final_dir, &st) == 0) {
-        ESP_LOGI(TAG, "version already on SD, activating only");
+    const bool final_exists = (stat(final_dir, &st) == 0);
+    if (final_exists && bundle_marker_matches(final_dir, req->bundle_sha256)) {
+        ESP_LOGI(TAG, "version already on SD with matching bundle, activating only");
         ESP_RETURN_ON_ERROR(activate(req->package_id, req->version), TAG, "activate");
         persist_active(req->package_id, req->version);
         if (s_cb) {
             s_cb(req->package_id, req->version, final_dir);
         }
         return ESP_OK;
+    }
+    if (final_exists) {
+        ESP_LOGW(TAG, "version exists but bundle marker is missing/mismatched, refreshing");
     }
 
     char zip_path[200];
@@ -227,11 +262,15 @@ static esp_err_t do_sync(const sync_request_t *req)
         storage_rm_rf(staging);
         return err;
     }
+    ESP_RETURN_ON_ERROR(write_bundle_marker(staging, req->bundle_sha256), TAG, "bundle marker");
 
     /* 4) move into place; the only mutable step afterwards is current.txt */
     char parent[200];
     snprintf(parent, sizeof(parent), "%s/%s", STORAGE_PACKAGES_DIR, req->package_id);
     storage_mkdirs(parent);
+    if (final_exists) {
+        ESP_RETURN_ON_ERROR(storage_rm_rf(final_dir), TAG, "replace old version");
+    }
     ESP_RETURN_ON_FALSE(rename(staging, final_dir) == 0, ESP_FAIL, TAG, "rename to final");
 
     ESP_RETURN_ON_ERROR(activate(req->package_id, req->version), TAG, "activate");
