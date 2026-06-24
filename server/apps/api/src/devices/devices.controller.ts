@@ -46,6 +46,15 @@ export class DevicesController {
     return { mac };
   }
 
+  /** Admin helper for the Provision modal: returns the next sequential CCP
+   *  serial (e.g. CCP000002) WITHOUT consuming it. The serial is consumed
+   *  only when POST /api/v1/devices/provision runs (atomic increment). */
+  @Get("next-id")
+  @UseGuards(AdminGuard)
+  async nextId() {
+    return { deviceId: await this.devices.peekNextDeviceId() };
+  }
+
   /** User claims a device by hardware id + claim code shown on screen. */
   @Post("claim")
   @UseGuards(UserGuard)

@@ -92,6 +92,22 @@ export class DevicesService {
   }
 
   /**
+   * Read the next serial WITHOUT consuming it. The Provision modal uses this
+   * to show the operator the upcoming CCP number so they can verify it before
+   * committing. If two admins open the modal at the same time they may both
+   * see the same peek — that's fine; the actual increment happens on POST
+   * provision, which is atomic.
+   */
+  async peekNextDeviceId(): Promise<string> {
+    const c = await this.prisma.counter.upsert({
+      where: { id: "device_ccp" },
+      create: { id: "device_ccp", value: 0 },
+      update: {},
+    });
+    return `CCP${String(c.value + 1).padStart(6, "0")}`;
+  }
+
+  /**
    * Admin provisions a new device by cable at sale time: assign the next CCP
    * serial, store buyer details + MAC, mint a device token + claim code, and
    * grant the default page entitlements. Returns token + claimCode for the admin

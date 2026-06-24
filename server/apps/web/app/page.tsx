@@ -157,8 +157,18 @@ function ProvisionModal({ token, onClose, onDone }: { token: string | null; onCl
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [macBusy, setMacBusy] = useState(false);
+  const [nextId, setNextId] = useState<string>("");
   const [result, setResult] = useState<{ deviceId: string; token: string; claimCode: string } | null>(null);
   const set = (k: string, v: string) => setF((s) => ({ ...s, [k]: v }));
+
+  const refreshNextId = async () => {
+    try {
+      const r = await api("/api/v1/devices/next-id", token) as { deviceId: string };
+      setNextId(r.deviceId);
+    } catch {
+      setNextId("");
+    }
+  };
 
   const readMac = async () => {
     setMacBusy(true); setErr(null);
@@ -180,6 +190,9 @@ function ProvisionModal({ token, onClose, onDone }: { token: string | null; onCl
       const r = await api("/api/v1/devices/provision", token, { method: "POST", body: JSON.stringify(body) }) as { deviceId: string; token: string; claimCode: string };
       setResult(r);
       onDone();
+      /* The next-id counter has advanced — refresh the preview so a follow-up
+       * provision flow immediately shows the following serial. */
+      refreshNextId();
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Provision failed");
     } finally {
@@ -205,11 +218,19 @@ function ProvisionModal({ token, onClose, onDone }: { token: string | null; onCl
     <Field label={label}><input className="input w-full" value={f[k]} onChange={(e) => set(k, e.target.value)} placeholder={ph} /></Field>
   );
 
+  /* Show the next serial as soon as the modal opens so the operator can
+   * verify "CCP000002" before clicking Provision. Refreshed after a
+   * successful provision so the next click shows the new next id. */
+  useEffect(() => { refreshNextId(); /* runs once on mount */ }, []);
+
   return (
     <Modal title="Provision new device" onClose={onClose}>
       <p className="text-xs text-[var(--ccp-muted)] mb-4">
         Assigns the next CCP serial and records the buyer. Connect the new device by cable; it joins as that id on boot.
       </p>
+      <Field label="Next device ID (auto-assigned)">
+        <input readOnly className="input w-full font-mono" value={nextId || "—"} title="Server-side atomic counter; cannot be edited" />
+      </Field>
       <Field label="MAC address (required)">
         <div className="flex gap-2">
           <input className="input w-full font-mono" value={f.mac} onChange={(e) => set("mac", e.target.value)} placeholder="98:3D:AE:E9:14:78" />
