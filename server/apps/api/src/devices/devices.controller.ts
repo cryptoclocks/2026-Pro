@@ -72,6 +72,13 @@ export class DevicesController {
     return this.devices.provision(admin.id, body);
   }
 
+  /** Admin removes a device from the fleet (and all its data). */
+  @Delete(":hwId")
+  @UseGuards(AdminGuard)
+  remove(@Param("hwId") hwId: string) {
+    return this.devices.deleteDevice(hwId);
+  }
+
   /** Admin sets/transfers a device's owner (by user email or id). */
   @Post(":hwId/assign-owner")
   @UseGuards(AdminGuard)

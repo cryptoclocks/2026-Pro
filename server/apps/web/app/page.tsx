@@ -124,6 +124,7 @@ function Fleet() {
               d={d}
               onEdit={() => setEditing(d)}
               onRights={() => setRights(d)}
+              onChanged={load}
               token={token}
             />
           ))}
@@ -428,11 +429,20 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
-function DeviceCard({ d, onEdit, onRights, token }: { d: Device; onEdit: () => void; onRights: () => void; token: string | null }) {
+function DeviceCard({ d, onEdit, onRights, onChanged, token }: { d: Device; onEdit: () => void; onRights: () => void; onChanged: () => void; token: string | null }) {
   const pages = (d.settings?.pages as string[] | undefined) ?? [];
   const batt = d.battMv ? `${(d.battMv / 1000).toFixed(2)}V` : "—";
   const cmd = (type: string) =>
     api(`/api/v1/devices/${d.deviceId}/cmd`, token, { method: "POST", body: JSON.stringify({ type }) }).catch(() => {});
+  const del = async () => {
+    if (!confirm(`Delete ${d.deviceId} and all its data? This cannot be undone.`)) return;
+    try {
+      await api(`/api/v1/devices/${d.deviceId}`, token, { method: "DELETE" });
+      onChanged();
+    } catch (e) {
+      alert(e instanceof Error ? `Delete failed: ${e.message}` : "Delete failed");
+    }
+  };
   return (
     <div className="card p-4 flex flex-col gap-3">
       <div className="flex items-center gap-2">
@@ -480,6 +490,7 @@ function DeviceCard({ d, onEdit, onRights, token }: { d: Device; onEdit: () => v
         <button className="btn" onClick={onRights}>Rights</button>
         <button className="btn" onClick={() => cmd("identify")}>🔔</button>
         <button className="btn" title="Reload UI" onClick={() => cmd("reload")}>↻</button>
+        <button className="btn" title="Delete device" style={{ color: "var(--ccp-red)" }} onClick={del}>🗑</button>
       </div>
     </div>
   );
