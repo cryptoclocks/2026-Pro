@@ -115,6 +115,16 @@ export class DevicesService {
    */
   async provision(adminId: string, input: ProvisionInput) {
     if (!input.mac) throw new BadRequestException("mac is required");
+    // Normalize the MAC (uppercase, colon-separated) so encId = AES("<id>-<MAC>")
+    // is deterministic and so duplicate detection is case-insensitive.
+    const mac = input.mac.trim().toUpperCase();
+    if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(mac)) {
+      throw new BadRequestException("mac must look like 98:3D:AE:E9:14:78");
+    }
+    const dup = await this.prisma.device.findFirst({ where: { mac } });
+    if (dup) {
+      throw new ConflictException(`A device with MAC ${mac} is already provisioned (${dup.deviceId})`);
+    }
     const deviceId = await this.nextDeviceId();
     const claimCode = nanoid(8);
     const token = nanoid(32);
@@ -149,7 +159,7 @@ export class DevicesService {
 
     const device = await this.prisma.device.create({
       data: {
-        deviceId, mac: input.mac, claimCode, tokenHash, ownerId,
+        deviceId, mac, claimCode, tokenHash, ownerId,
         name: input.customerName ?? null, settings: settings as object,
       },
     });
@@ -160,8 +170,27 @@ export class DevicesService {
         this.logger.warn(`provision grant ${slug} failed: ${e}`),
       );
     }
-    this.logger.log(`provisioned ${deviceId} mac=${input.mac} owner=${ownerId ?? "(unclaimed)"}`);
-    return jsonSafe({ deviceId, token, claimCode, mac: input.mac, device });
+    this.logger.log(`provisioned ${deviceId} mac=${mac} owner=${ownerId ?? "(unclaimed)"}`);
+    return jsonSafe({ deviceId, token, claimCode, mac, device });
+  }
+
+  /** Admin deletes a device and everything tied to it. Config rows cascade with
+   *  the Device row; entitlements (linked by hardware id), claims, ad impressions
+   *  and on-disk asset files are removed explicitly. */
+  async deleteDevice(hwDeviceId: string) {
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    // remove asset binaries from the volume (DB rows cascade with the device)
+    const assets = await this.prisma.deviceAsset.findMany({ where: { deviceDbId: device.id }, include: { versions: true } });
+    for (const a of assets) for (const v of a.versions) await rm(v.objectPath, { force: true }).catch(() => undefined);
+    await this.prisma.$transaction([
+      this.prisma.entitlement.deleteMany({ where: { deviceId: device.deviceId } }),
+      this.prisma.claim.deleteMany({ where: { deviceId: device.id } }),
+      this.prisma.adImpression.deleteMany({ where: { deviceId: device.id } }),
+      this.prisma.device.delete({ where: { id: device.id } }),
+    ]);
+    this.logger.log(`deleted device ${hwDeviceId} (owner=${device.ownerId ?? "-"})`);
+    return { ok: true, deviceId: hwDeviceId };
   }
 
   /** Admin sets/transfers a device's owner (by user email or user id). */
