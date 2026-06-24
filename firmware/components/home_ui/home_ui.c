@@ -2229,12 +2229,19 @@ void home_ui_set_package_activator(bool (*fn)(const char *dir, const char *slug)
 
 void home_ui_package_loaded(const char *slug, bool ok)
 {
-    /* runs on the sync worker (off the LVGL task). Bounded timeout — if lvgl
-     * is hung we want the caller to fail fast and log it, not block forever. */
-    if (!display_engine_lock(200)) {
-        ESP_LOGE(TAG, "home_ui_package_loaded: lvgl lock timeout 200ms — UI may be hung");
+    /* runs on the sync worker (off the LVGL task). Wait up to 500ms — the same
+     * grace as home_ui_reload, since an LCD-transfer storm can hold the lock for
+     * several frame-flushes. If we still can't get it, clear swap_pending so the
+     * navigation lock isn't wedged (goto_page bails while a swap is "in flight");
+     * the stale loading screen is replaced on the next goto/reload. We must not
+     * touch LVGL objects here without the lock, but swap_pending is a plain bool
+     * so releasing it from this task is safe. */
+    if (!display_engine_lock(500)) {
+        ESP_LOGE(TAG, "home_ui_package_loaded: lvgl lock timeout 500ms — UI busy, releasing swap");
+        s.swap_pending = false;
         return;
     }
+    display_engine_lock_set_state("pkg_loaded");
     const int idx = s.pending_idx;
     s.swap_pending = false;
     strlcpy(s.loaded_pkg_slug, (ok && slug) ? slug : "", sizeof(s.loaded_pkg_slug));
@@ -2322,10 +2329,19 @@ void home_ui_park(void)
 
 esp_err_t home_ui_reload(void)
 {
-    if (!display_engine_lock(200)) {
-        ESP_LOGE(TAG, "home_ui_reload: lvgl lock timeout 200ms — UI may be hung");
+    /* The rebuild below (destroy_pages + setup + build_page) must run under the
+     * display lock since every step touches LVGL, which is not thread-safe. The
+     * heavy package activation is already async (goto_page -> pkg_activator ->
+     * home_ui_package_loaded), so this critical section is short — the only risk
+     * is failing to *acquire* the lock while the LVGL task is mid-flush during an
+     * LCD-transfer storm (a flush can hold the lock ~250ms). Wait up to 500ms
+     * (≈two frame-flushes of grace) before giving up; the caller (POST /config)
+     * then keeps the saved config and returns 503 instead of rolling back. */
+    if (!display_engine_lock(500)) {
+        ESP_LOGE(TAG, "home_ui_reload: lvgl lock timeout 500ms — UI busy, deferring reload");
         return ESP_ERR_TIMEOUT;
     }
+    display_engine_lock_set_state("home_ui_reload");
     /* destroy_pages() deletes the active screen, which LVGL must never have
      * pulled out from under it (render task spins on the dangling screen) —
      * park the display on a blank screen during the rebuild */

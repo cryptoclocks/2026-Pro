@@ -216,8 +216,20 @@ static esp_err_t h_config_post(httpd_req_t *req)
         return httpd_resp_send_500(req);
     }
 
-    /* Try reload — if fails (LVGL hang, etc.), rollback */
+    /* Try reload. A lock timeout means LVGL is only momentarily busy — the
+     * new config is already safely on disk and will take effect on the next
+     * reload/boot, so keep it and report 503 (busy) instead of destroying a
+     * valid write with a rollback. Genuine reload failures still roll back. */
     esp_err_t reload_err = home_ui_reload();
+    if (reload_err == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "config saved but reload busy (LVGL lock) — keeping config, returning 503");
+        if (have_backup) unlink(backup_path);   /* keep the new config; drop the backup */
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req,
+            "{\"ok\":false,\"saved\":true,\"reloaded\":false,\"reason\":\"reload busy, will apply shortly\"}",
+            HTTPD_RESP_USE_STRLEN);
+    }
     if (reload_err != ESP_OK) {
         ESP_LOGE(TAG, "config reload failed (%s) — rolling back", esp_err_to_name(reload_err));
         if (have_backup) {
