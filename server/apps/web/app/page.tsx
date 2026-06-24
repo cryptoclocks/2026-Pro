@@ -67,6 +67,7 @@ function Fleet() {
   const [editing, setEditing] = useState<Device | null>(null);
   const [rights, setRights] = useState<Device | null>(null);
   const [provisioning, setProvisioning] = useState(false);
+  const [firmwareOpen, setFirmwareOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -101,6 +102,7 @@ function Fleet() {
           </p>
         </div>
         <div className="flex gap-3 items-center">
+          <button className="btn" onClick={() => setFirmwareOpen(true)}>Firmware / OTA</button>
           <button className="btn btn-primary" onClick={() => setProvisioning(true)}>+ Provision device</button>
           <Stat label="Devices" value={`${devices.length}`} />
           <Stat label="Online" value={`${online}`} accent />
@@ -136,6 +138,9 @@ function Fleet() {
       )}
       {provisioning && (
         <ProvisionModal token={token} onClose={() => setProvisioning(false)} onDone={load} />
+      )}
+      {firmwareOpen && (
+        <FirmwareModal token={token} devices={devices} onClose={() => setFirmwareOpen(false)} />
       )}
     </main>
   );
@@ -215,6 +220,161 @@ function ProvisionModal({ token, onClose, onDone }: { token: string | null; onCl
         <button className="btn btn-primary flex-1" disabled={busy} onClick={submit}>{busy ? "Provisioning…" : "Provision"}</button>
         <button className="btn" onClick={onClose}>Cancel</button>
       </div>
+    </Modal>
+  );
+}
+
+type FwRow = { id: string; version: string; channel: string; notes: string | null; sha256: string; sizeBytes: number; createdAt: string };
+
+/** Admin: upload an ESP32 firmware .bin and push it OTA to a device. Lives as a
+    Fleet modal (no extra page). The device verifies the SHA-256 before flashing. */
+function FirmwareModal({ token, devices, onClose }: { token: string | null; devices: Device[]; onClose: () => void }) {
+  const [list, setList] = useState<FwRow[]>([]);
+  const [version, setVersion] = useState("");
+  const [channel, setChannel] = useState("stable");
+  const [notes, setNotes] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [target, setTarget] = useState("");
+  const [pushFw, setPushFw] = useState("");
+
+  const reload = useCallback(async () => {
+    if (!token) return;
+    try {
+      const r = await api("/api/v1/firmware", token);
+      setList(Array.isArray(r) ? (r as FwRow[]) : []);
+    } catch {
+      /* ignore — list stays as-is */
+    }
+  }, [token]);
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const fmtSize = (n: number) => (n >= 1024 * 1024 ? `${(n / 1048576).toFixed(2)} MB` : `${(n / 1024).toFixed(0)} KB`);
+
+  const upload = async () => {
+    if (!version.trim()) {
+      setErr("Version is required");
+      return;
+    }
+    if (!file) {
+      setErr("Choose a .bin file");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      const dataBase64 = btoa(bin);
+      const r = (await api("/api/v1/firmware", token, {
+        method: "POST",
+        body: JSON.stringify({ version: version.trim(), channel, notes: notes.trim(), dataBase64 }),
+      })) as { version: string };
+      setMsg(`Uploaded ${r.version} ✓`);
+      setVersion("");
+      setNotes("");
+      setFile(null);
+      await reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const push = async () => {
+    if (!target) {
+      setErr("Pick a target device");
+      return;
+    }
+    if (!pushFw) {
+      setErr("Pick a firmware version");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    setMsg(null);
+    try {
+      await api(`/api/v1/devices/${target}/ota`, token, {
+        method: "POST",
+        body: JSON.stringify({ firmwareId: pushFw }),
+      });
+      setMsg(`OTA command sent to ${target}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Push failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Firmware / OTA" onClose={onClose}>
+      <p className="text-xs text-[var(--ccp-muted)] mb-3">
+        Upload an ESP32 firmware image (.bin), then push it over-the-air to a device. The device verifies the SHA-256 before flashing.
+      </p>
+
+      <div className="card p-3 mb-3">
+        <div className="font-semibold text-sm mb-2">Upload firmware</div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Version"><input className="input w-full" value={version} onChange={(e) => setVersion(e.target.value)} placeholder="1.2.0" /></Field>
+          <Field label="Channel">
+            <select className="select w-full" value={channel} onChange={(e) => setChannel(e.target.value)}>
+              <option value="stable">stable</option>
+              <option value="beta">beta</option>
+              <option value="dev">dev</option>
+            </select>
+          </Field>
+        </div>
+        <Field label="Notes (changelog)"><input className="input w-full" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="optional" /></Field>
+        <Field label="Firmware file (.bin)"><input className="input w-full" type="file" accept=".bin,application/octet-stream" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></Field>
+        <button className="btn btn-primary w-full mt-1" disabled={busy} onClick={upload}>{busy ? "Uploading…" : "Upload"}</button>
+      </div>
+
+      <div className="card p-3 mb-3">
+        <div className="font-semibold text-sm mb-2">Push OTA</div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Target device">
+            <select className="select w-full" value={target} onChange={(e) => setTarget(e.target.value)}>
+              <option value="">— pick device —</option>
+              {devices.map((d) => (
+                <option key={d.deviceId} value={d.deviceId}>{d.deviceId}{d.online ? " (online)" : ""}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Firmware">
+            <select className="select w-full" value={pushFw} onChange={(e) => setPushFw(e.target.value)}>
+              <option value="">— pick version —</option>
+              {list.map((f) => (
+                <option key={f.id} value={f.id}>{f.version} · {f.channel}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <button className="btn btn-primary w-full mt-1" disabled={busy} onClick={push}>{busy ? "Sending…" : "Push OTA"}</button>
+      </div>
+
+      {err && <div className="text-sm text-[var(--ccp-red)] mb-2">{err}</div>}
+      {msg && <div className="text-sm text-[#0ECB81] mb-2">{msg}</div>}
+
+      <div className="font-semibold text-sm mb-1">Uploaded versions</div>
+      {list.length === 0 ? (
+        <div className="text-xs text-[var(--ccp-muted)]">None yet.</div>
+      ) : (
+        <div className="space-y-1 max-h-40 overflow-auto">
+          {list.map((f) => (
+            <div key={f.id} className="text-xs flex justify-between gap-2 border-b border-[var(--ccp-border)] py-1">
+              <span className="font-mono">{f.version}</span>
+              <span className="text-[var(--ccp-muted)]">{f.channel} · {fmtSize(f.sizeBytes)} · {f.sha256.slice(0, 8)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </Modal>
   );
 }

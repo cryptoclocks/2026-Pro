@@ -524,6 +524,76 @@ export class DevicesService {
     return { ok: true };
   }
 
+  /* ------------------------------------------------ firmware OTA */
+
+  private firmwareBaseDir(): string {
+    return join(process.env.PAYLOAD_STORAGE_DIR ?? join(process.cwd(), "storage"), "firmware");
+  }
+
+  /** Admin uploads a firmware .bin (base64). Stored content-addressed on the
+   *  volume; metadata + sha256 recorded for OTA. */
+  async uploadFirmware(
+    user: Pick<User, "id">,
+    body: { version?: string; channel?: string; notes?: string; dataBase64?: string },
+  ) {
+    if (!body.version?.trim()) throw new BadRequestException("version required");
+    if (!body.dataBase64) throw new BadRequestException("dataBase64 required");
+    const buf = Buffer.from(body.dataBase64, "base64");
+    if (buf.length < 1024 || buf.length > 16 * 1024 * 1024) {
+      throw new BadRequestException("invalid firmware size (1KB–16MB)");
+    }
+    // ESP-IDF app images begin with the 0xE9 magic byte — reject obvious mistakes.
+    if (buf[0] !== 0xe9) throw new BadRequestException("not an ESP32 firmware image (bad 0xE9 magic)");
+    const sha = createHash("sha256").update(buf).digest("hex");
+    const dir = this.firmwareBaseDir();
+    await mkdir(dir, { recursive: true });
+    const objectPath = join(dir, `${sha}.bin`);
+    await writeFile(objectPath, buf);
+    const fw = await this.prisma.firmware.create({
+      data: {
+        version: body.version.trim(),
+        channel: body.channel?.trim() || "stable",
+        notes: body.notes?.trim() || null,
+        sha256: sha,
+        sizeBytes: buf.length,
+        objectPath,
+        createdById: user.id,
+      },
+    });
+    this.logger.log(`firmware uploaded ${fw.version} (${fw.channel}) sha=${sha.slice(0, 12)} ${buf.length}B`);
+    return { id: fw.id, version: fw.version, channel: fw.channel, sha256: sha, sizeBytes: buf.length };
+  }
+
+  async listFirmware() {
+    const rows = await this.prisma.firmware.findMany({ orderBy: { createdAt: "desc" }, take: 100 });
+    return rows.map((f) => ({
+      id: f.id, version: f.version, channel: f.channel, notes: f.notes,
+      sha256: f.sha256, sizeBytes: f.sizeBytes, createdAt: f.createdAt,
+    }));
+  }
+
+  /** Public serve (like the package bundle.zip): the device GETs this URL during
+   *  OTA and verifies the sha256 itself, so no per-device token is needed. */
+  async getFirmwareFile(id: string): Promise<{ buffer: Buffer }> {
+    const fw = await this.prisma.firmware.findUnique({ where: { id } });
+    if (!fw) throw new NotFoundException("firmware not found");
+    return { buffer: await readFile(fw.objectPath) };
+  }
+
+  /** Admin pushes an OTA: sends the device an `ota` command with the firmware's
+   *  public file URL + sha256. The device downloads, verifies, flashes, reboots. */
+  async pushOta(hwDeviceId: string, firmwareId: string) {
+    const device = await this.prisma.device.findUnique({ where: { deviceId: hwDeviceId } });
+    if (!device) throw new NotFoundException("device not found");
+    const fw = await this.prisma.firmware.findUnique({ where: { id: firmwareId } });
+    if (!fw) throw new NotFoundException("firmware not found");
+    const base = process.env.PUBLIC_API_URL ?? "https://api.cashlessthailand.com";
+    const fwUrl = `${base}/api/v1/firmware/${fw.id}/file`;
+    const cmdId = this.mqtt.sendCommand(hwDeviceId, "ota", { fw_url: fwUrl, fw_sha256: fw.sha256 });
+    this.logger.log(`OTA push ${hwDeviceId} -> ${fw.version} (${fw.sha256.slice(0, 12)})`);
+    return { cmdId, version: fw.version, fwUrl };
+  }
+
   /* ------------------------------------------------ device bootstrap (P4) */
 
   private async deviceByToken(deviceId: string, token: string) {

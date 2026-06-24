@@ -179,4 +179,11 @@ export class DevicesController {
     const cmdId = this.devices.sendCommand(hwId, body.type, body.params);
     return { cmdId };
   }
+
+  /** Push an OTA firmware update to this device (admin). */
+  @Post(":hwId/ota")
+  @UseGuards(AdminGuard)
+  ota(@Param("hwId") hwId: string, @Body() body: { firmwareId: string }) {
+    return this.devices.pushOta(hwId, body.firmwareId);
+  }
 }
