@@ -87,7 +87,7 @@ typedef struct {
     lv_display_t *disp;
     lv_indev_t *indev;
     uint16_t *frame;                 /* full logical frame, PSRAM */
-    uint16_t *trans[2];              /* DMA bounce buffers, internal RAM */
+    uint16_t *panel_frame;           /* rotated panel-native frame, PSRAM */
     SemaphoreHandle_t trans_done;    /* 1 credit = bus idle */
     SemaphoreHandle_t te_sem;        /* given by TE ISR */
     SemaphoreHandle_t lvgl_mutex;    /* recursive */
@@ -165,20 +165,35 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
     (void)area;
     const uint16_t *frame = (const uint16_t *)px_map;
-    int buf_idx = 0;
 
     /* Tear sync: drop a stale pulse, then gate on the next one (60Hz => <17ms). */
     xSemaphoreTake(s_ctx.te_sem, 0);
     xSemaphoreTake(s_ctx.te_sem, pdMS_TO_TICKS(20));
 
+    if (xSemaphoreTake(s_ctx.trans_done, pdMS_TO_TICKS(250)) != pdTRUE) {
+        ESP_LOGE(TAG, "LCD transfer timeout");
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    /* Build one panel-native frame in PSRAM, then submit it as one color
+     * transaction chain. Re-opening the SPI bus for every band can deadlock
+     * between the async color transfer and the next polling CASET command. */
     for (int py0 = 0; py0 < CCP_LCD_V_RES; py0 += TRANS_ROWS) {
         const int rows = (py0 + TRANS_ROWS <= CCP_LCD_V_RES) ? TRANS_ROWS : (CCP_LCD_V_RES - py0);
-        uint16_t *dst = s_ctx.trans[buf_idx];
+        uint16_t *dst = s_ctx.panel_frame + (size_t)py0 * CCP_LCD_H_RES;
         fill_band(dst, frame, py0, rows);
+    }
 
-        xSemaphoreTake(s_ctx.trans_done, portMAX_DELAY);
-        esp_lcd_panel_draw_bitmap(s_ctx.panel, 0, py0, CCP_LCD_H_RES, py0 + rows, dst);
-        buf_idx ^= 1;
+    esp_err_t err = esp_lcd_panel_draw_bitmap(
+        s_ctx.panel, 0, 0, CCP_LCD_H_RES, CCP_LCD_V_RES, s_ctx.panel_frame);
+    if (err != ESP_OK) {
+        /* No completion callback follows a rejected transfer, so restore
+         * the bus credit before returning to LVGL. */
+        xSemaphoreGive(s_ctx.trans_done);
+        ESP_LOGE(TAG, "LCD transfer failed: %s", esp_err_to_name(err));
+        lv_display_flush_ready(disp);
+        return;
     }
 
     s_ctx.flush_count++;
@@ -271,6 +286,7 @@ static esp_err_t init_panel(void)
 
     esp_lcd_panel_io_spi_config_t io_config =
         AXS15231B_PANEL_IO_QSPI_CONFIG(CCP_PIN_LCD_CS, NULL, NULL);
+    io_config.trans_queue_depth = 2;
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)CCP_LCD_QSPI_HOST,
                                                  &io_config, &s_ctx.io), TAG, "panel io");
 
@@ -349,14 +365,14 @@ esp_err_t display_engine_start(void)
         s_ctx.touch = NULL;
     }
 
-    /* full logical frame in PSRAM, bounce buffers in internal DMA RAM */
+    /* Logical and panel-native frames live in PSRAM. The SPI driver uses its
+     * small queue as the DMA bounce, keeping internal allocation bounded. */
     s_ctx.frame = heap_caps_malloc((size_t)LOGICAL_W * LOGICAL_H * CCP_LCD_PIXEL_BYTES,
                                    MALLOC_CAP_SPIRAM);
-    s_ctx.trans[0] = heap_caps_malloc(TRANS_PIXELS * CCP_LCD_PIXEL_BYTES,
-                                      MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    s_ctx.trans[1] = heap_caps_malloc(TRANS_PIXELS * CCP_LCD_PIXEL_BYTES,
-                                      MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    ESP_RETURN_ON_FALSE(s_ctx.frame && s_ctx.trans[0] && s_ctx.trans[1],
+    s_ctx.panel_frame = heap_caps_malloc(
+        (size_t)CCP_LCD_H_RES * CCP_LCD_V_RES * CCP_LCD_PIXEL_BYTES,
+        MALLOC_CAP_SPIRAM);
+    ESP_RETURN_ON_FALSE(s_ctx.frame && s_ctx.panel_frame,
                         ESP_ERR_NO_MEM, TAG, "framebuffer alloc");
 
     lv_init();
@@ -394,7 +410,13 @@ esp_err_t display_engine_start(void)
 bool display_engine_lock(uint32_t timeout_ms)
 {
     const TickType_t ticks = (timeout_ms == 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-    return xSemaphoreTakeRecursive(s_ctx.lvgl_mutex, ticks) == pdTRUE;
+    if (xSemaphoreTakeRecursive(s_ctx.lvgl_mutex, ticks) == pdTRUE) {
+        return true;
+    }
+    TaskHandle_t holder = xSemaphoreGetMutexHolder(s_ctx.lvgl_mutex);
+    ESP_LOGE(TAG, "display lock timeout (%lu ms), holder=%s",
+             (unsigned long)timeout_ms, holder ? pcTaskGetName(holder) : "none");
+    return false;
 }
 
 void display_engine_unlock(void)

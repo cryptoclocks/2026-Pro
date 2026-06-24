@@ -19,15 +19,15 @@ static const char *TAG = "conn";
 static esp_mqtt_client_handle_t s_mqtt;
 static conn_config_t s_cfg;
 static bool s_connected;
-static char s_topic_prefix[64];   /* ccp/v1/{device_id} */
-static char s_lwt_topic[80];
+static char s_topic_prefix[160];  /* ccp/v1/{client_id} (encrypted id is hex) */
+static char s_lwt_topic[192];
 
 static void publish(const char *suffix, const char *payload, int qos, int retain)
 {
     if (!s_mqtt) {
         return;
     }
-    char topic[128];
+    char topic[256];
     snprintf(topic, sizeof(topic), "%s/%s", s_topic_prefix, suffix);
     esp_mqtt_client_publish(s_mqtt, topic, payload, 0, qos, retain);
 }
@@ -39,7 +39,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base, int32_t event_i
     switch ((esp_mqtt_event_id_t)event_id) {
     case MQTT_EVENT_CONNECTED: {
         s_connected = true;
-        char topic[128];
+        char topic[256];
         snprintf(topic, sizeof(topic), "%s/cmd", s_topic_prefix);
         esp_mqtt_client_subscribe(s_mqtt, topic, 1);
         ESP_LOGI(TAG, "MQTT connected, subscribed %s", topic);
@@ -50,7 +50,7 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base, int32_t event_i
         break;
     case MQTT_EVENT_DATA: {
         /* exact-topic dispatch: cmd or data/{stream} */
-        char topic[160];
+        char topic[288];
         size_t tlen = event->topic_len < sizeof(topic) - 1 ? event->topic_len : sizeof(topic) - 1;
         memcpy(topic, event->topic, tlen);
         topic[tlen] = '\0';
@@ -75,14 +75,16 @@ static void mqtt_event_handler(void *arg, esp_event_base_t base, int32_t event_i
 esp_err_t connectivity_start(const conn_config_t *cfg)
 {
     s_cfg = *cfg;
-    snprintf(s_topic_prefix, sizeof(s_topic_prefix), "ccp/v1/%s", cfg->device_id);
+    /* clientId + topic node use the encrypted id; username stays plaintext. */
+    const char *client_id = (cfg->client_id && cfg->client_id[0]) ? cfg->client_id : cfg->device_id;
+    snprintf(s_topic_prefix, sizeof(s_topic_prefix), "ccp/v1/%s", client_id);
     snprintf(s_lwt_topic, sizeof(s_lwt_topic), "%s/status", s_topic_prefix);
 
     const esp_mqtt_client_config_t mqtt_cfg = {
         .broker.address.uri = cfg->broker_uri,
         .credentials = {
             .username = cfg->device_id,
-            .client_id = cfg->device_id,
+            .client_id = client_id,
             .authentication.password = cfg->password,
         },
         .session = {
@@ -123,7 +125,7 @@ esp_err_t conn_subscribe_stream(const char *stream)
     if (!s_mqtt) {
         return ESP_ERR_INVALID_STATE;
     }
-    char topic[160];
+    char topic[288];
     snprintf(topic, sizeof(topic), "%s/data/%s", s_topic_prefix, stream);
     return esp_mqtt_client_subscribe(s_mqtt, topic, 0) >= 0 ? ESP_OK : ESP_FAIL;
 }
@@ -133,7 +135,7 @@ esp_err_t conn_unsubscribe_stream(const char *stream)
     if (!s_mqtt) {
         return ESP_ERR_INVALID_STATE;
     }
-    char topic[160];
+    char topic[288];
     snprintf(topic, sizeof(topic), "%s/data/%s", s_topic_prefix, stream);
     return esp_mqtt_client_unsubscribe(s_mqtt, topic) >= 0 ? ESP_OK : ESP_FAIL;
 }

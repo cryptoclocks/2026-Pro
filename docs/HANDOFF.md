@@ -24,8 +24,14 @@ then `docs/project-progress.md` and `docs/roadmap-v3-parity.md`.
 - **Inspector fix**: clicking a widget now selects it (added a 4px drag activation constraint to DndContext — `app/builder/page.tsx`).
 - Profile page: avatar + 4 social buttons are **image widgets**; firmware makes any action-bearing widget `CLICKABLE` (`ui_renderer.c`).
 - **Per-part colours** editable from app: bg/name/role/company/verify bind to `settings.profile.*_color` (firmware already supports style colour bindings). App has a Colours card with live-swatch hex fields (`mobile/user-app/lib/settings_pages.dart`).
+- Profile **Motto** is now separate from Role. User App and Admin Fleet settings save `settings.profile.motto`; Profile bundle `com.ccp.profile` **1.0.9** binds the top-right label to `motto`, while Role remains the lower-left subtitle.
+- Profile avatar upload is wired in User App: picks/crops/resizes to 132x132 PNG, uploads to `pages/profile/assets/avatar.png`, and binds `settings.profile.avatar`. Firmware can resolve dynamic SD-relative image paths.
+- Social QR pages bind QR `data` from User-App/Admin URLs and show the platform logo centered over each QR. Social detail pages now have per-platform colour themes (Facebook blue/white, YouTube red, TikTok dark/cyan, Instagram pink), and follower/secondary metric labels bind to `settings.profile.{fb,yt,tt,ig}_followers`, `_following`, `_secondary_label`.
+- Hub API has a best-effort public social resolver: `POST /api/v1/social/resolve` (URL fetch, allowlisted social hosts) and `POST /api/v1/social/parse` (provided/rendered HTML). Admin Fleet and User App Profile settings can refresh social stats from URLs and save them into device profile settings. Facebook mobile public HTML exposes `og:*` metadata reliably for `likes`/`talkingAbout`; rendered desktop snippets can expose exact `followers`/`following` when available.
+- Slideshow manager previews uploaded SD photos via device `/api/v1/file?path=...`; firmware local API serves files with MIME types.
 - App **WelcomeScreen + login gate** (`mobile/user-app/lib/main.dart` `AuthGate`/`WelcomeScreen`; logout returns to gate). Verified on the Samsung device.
 - Google Sign-In (native idToken) in app — works once the Google **Android** OAuth client (pkg `com.cryptoclock.ccp_user_app` + debug SHA-1 `32:39:BF:A3:0D:0D:7A:E0:D1:E7:76:F1:16:0A:FA:C3:60:68:FE:88`) propagates. Web client id is in `secrets.dart` as `googleWebClientId`.
+- Admin/Web :3000 500/`_next/static` 404 was a stale `.next` dev cache (`Cannot find module './859.js'`). Cache was moved aside and dev server restarted; localhost `/` verifies `200` and Browser console is clean.
 
 ## PENDING — specs for the next contributor
 
@@ -38,17 +44,14 @@ Today a widget's image `src` is a text field (paste a path). Required behaviour:
   - **static** (e.g. the 4 social logos): baked into the bundle, user can't change.
   - **dynamic** (e.g. the profile avatar): user picks a file in the **User App** → uploaded to the device SD as the widget's asset → `src` bound to `settings.<slug>.<key>`. The app already uploads images for the slideshow (`mobile/user-app/lib/slideshow_manager.dart`, `image_picker` + `image` deps + device `/api/v1/...` upload) — reuse that pipeline. Firmware `apply_binding` BIND_SRC already swaps an image from a settings value; make it empty-safe (keep default if the asset is missing).
 
-### 2. Avatar changeable from mobile (instance of #1 "dynamic")
-Profile `avatar` is already an image widget. Make it dynamic: bind `src` to `settings.profile.avatar`; add an avatar picker to the app's ProfileSettings that uploads the chosen image to the device and sets `settings.profile.avatar`. Social buttons stay static.
-
-### 3. Font/position mismatch: clock sits lower in the web Builder than on the device
+### 2. Font/position mismatch: clock sits lower in the web Builder than on the device
 The montserrat_80 clock renders at a different vertical position in the web artboard vs LVGL on the device (CSS font baseline/line-height ≠ LVGL font metrics). Fix options, pick one:
 - Make BuilderCanvas render big fonts with the same baseline/line-height LVGL uses (per-font vertical offset table), OR
 - Add a per-font render correction in `BuilderCanvas.tsx` `WidgetInner`/`fontPx` so montserrat_80/48 match the device, OR
 - Document the offset and adjust template `y`. The device line-heights are known from serial `widgets` (montserrat_80 lh≈58 in a 92px box). Verify by comparing a serial `widgets` dump to the web artboard at the same y.
 
-### 4. Carry-over (roadmap-v3-parity.md)
-social.stats real data (needs API keys; followers/likes are mock), dynamic coin-logo fetch, the other new pages (alert/pet/fortune×4/social), QR `data` from User-App-set links (qrcode has no `data` binding yet — add BIND for qrcode data or inject on publish).
+### 3. Carry-over (roadmap-v3-parity.md)
+Official/API-backed social stats (Meta/YouTube/TikTok/Instagram tokens and permissions for exact counts), dynamic coin-logo fetch, the other new pages (alert/pet/fortune×4/social).
 
 ## How to verify
 - Web: dev server :3000 (HMR) or push → Vercel. Load a template in Builder, Simulate, drive via DOM/preview tools.
