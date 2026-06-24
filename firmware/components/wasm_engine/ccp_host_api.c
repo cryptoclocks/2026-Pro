@@ -14,7 +14,12 @@
 
 static const char *TAG = "ccp_abi";
 
-#define UI_LOCK_MS 50   /* host imports must never block long (ABI rule) */
+#define UI_LOCK_MS 200  /* wasm host imports — 200ms safe for image/gif/text load
+                          * during LVGL busy periods (slideshow PNG decode,
+                          * screen-load anims can hold lock > 50ms). The ABI
+                          * rule is "must not block long"; 200ms still
+                          * qualifies — human-perceptible UI is fine at 5 FPS
+                          * worst-case during one tick. */
 
 /* WAMR '*~' signature pairs arrive pre-validated as native pointers. */
 
