@@ -506,6 +506,16 @@ function drawConnect(){
       </div>`;
     }).join('');
     box.querySelectorAll('.devcard').forEach(card=>card.onclick=()=>connectTo(card.dataset.id, card));
+    /* Auto-connect: a signed-in owner with a single linked device (or one that
+       matches the last-used id) goes straight to it — no Connect tap. Done at
+       most once per session so the Back button still lands here, and skipped
+       for a known-offline device so we don't hang on the RPC timeout. */
+    if(!App.autoConnectTried){
+      App.autoConnectTried=true;
+      const last=LS.get('ccp_last_device');
+      const target=devs.length===1?devs[0]:devs.find(d=>d.deviceId===last);
+      if(target && target.online!==false){ connectTo(target.deviceId); }
+    }
   }
   loadMyDevices();
 
