@@ -168,6 +168,24 @@ model DeviceConfigHead {
   updatedAt      DateTime @updatedAt
 }
 
+/// Immutable schema version per page (clock, crypto, profile, slideshow, …).
+/// Used by the API validator + the config compiler to turn a canonical
+/// page document into a firmware-friendly snapshot. New versions are
+/// published, never mutated. (schema.md §3.4)
+model PageSettingSchema {
+  pageSlug       String
+  schemaVersion  Int
+  packageId      String?
+  jsonSchema     Json
+  uiSchema       Json     @default("{}")
+  defaultConfig  Json     @default("{}")
+  assetSlots     Json     @default("[]")
+  createdAt      DateTime @default(now())
+
+  @@id([pageSlug, schemaVersion])
+  @@index([pageSlug, createdAt])
+}
+
 /// One row per page configured on a device. Canonical per-page values.
 model DevicePageSettings {
   id             String   @id @default(cuid())
