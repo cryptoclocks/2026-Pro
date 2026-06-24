@@ -90,6 +90,36 @@ static struct {
 
 const wasm_engine_hooks_t *wasm_engine_get_hooks(void) { return &s_eng.hooks; }
 
+static bool stream_has_subscribers(int handle)
+{
+    for (int i = 0; i < s_eng.mod_count; i++) {
+        if (s_eng.subscribed[i][handle] && !s_eng.mods[i].dead) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool stream_has_any_subscription(int handle)
+{
+    for (int i = 0; i < s_eng.mod_count; i++) {
+        if (s_eng.subscribed[i][handle]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void unsubscribe_stream_if_unused(int handle)
+{
+    if (handle < 0 || handle >= s_eng.stream_count || stream_has_subscribers(handle)) {
+        return;
+    }
+    if (s_eng.hooks.stream_unsubscribe) {
+        s_eng.hooks.stream_unsubscribe(s_eng.streams[handle]);
+    }
+}
+
 /* ---------------------------------------------------------- stream reg */
 
 int wasm_engine_stream_handle(const char *stream, bool create)
@@ -133,6 +163,7 @@ int wasm_engine_unsubscribe_current(wasm_exec_env_t env, int handle)
         return -1;
     }
     s_eng.subscribed[m - s_eng.mods][handle] = false;
+    unsubscribe_stream_if_unused(handle);
     return 0;
 }
 
@@ -476,6 +507,13 @@ void wasm_engine_unload_all(void)
     }
     if (s_eng.exec_lock) {
         xSemaphoreGive(s_eng.exec_lock);
+    }
+    if (s_eng.hooks.stream_unsubscribe) {
+        for (int h = 0; h < s_eng.stream_count; h++) {
+            if (stream_has_any_subscription(h)) {
+                s_eng.hooks.stream_unsubscribe(s_eng.streams[h]);
+            }
+        }
     }
     memset(s_eng.subscribed, 0, sizeof(s_eng.subscribed));
     s_eng.mod_count = 0;

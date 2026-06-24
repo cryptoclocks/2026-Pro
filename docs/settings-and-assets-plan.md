@@ -1,6 +1,8 @@
-# แผน: Page Settings Schema + Per-page Assets
+# แผนเดิม: Page Settings Schema + Per-page Assets
 
-> สถานะ: **แผน — รอไฟเขียวก่อนลงมือ** (เขียน 2026-06-11)
+> สถานะ: **ถูกแทนที่บางส่วน** — การเก็บ settings/assets ต่ออุปกรณ์และการ sync
+> ให้ยึด `docs/SUPABASE_DEVICE_CONFIG_SCHEMA.md` เป็นหลัก เอกสารนี้ยังใช้อ้างอิง
+> ส่วน Builder `settings_schema` และ package assets ได้ (เขียนเดิม 2026-06-11)
 > ตอบโจทย์ 2 ข้อ: (1) แอดมินสร้าง "หน้าตั้งค่า" ของแต่ละหน้าได้ และ publish แล้วไปโผล่ใน
 > Flutter User App อัตโนมัติ (2) โฟลเดอร์ asset ต่อหน้า server ↔ นาฬิกา
 

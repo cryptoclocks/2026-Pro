@@ -4,11 +4,56 @@ import { DevicesService, type ProvisionInput } from "./devices.service";
 import type { DeviceCommandType } from "@ccp/shared";
 import { CurrentUser, UserGuard, AdminGuard } from "../auth/auth.guards";
 import type { User } from "@prisma/client";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+/** Read the MAC address of an ESP32 device connected over USB by running
+ *  esptool on the host. Used during the "Provision new device" flow so the
+ *  admin doesn't have to copy/paste the MAC manually. */
+async function readMacFromUsb(): Promise<string> {
+  // esptool prints "MAC: 98:3D:AE:E9:14:78" on stdout and exits 0.
+  // Try the user's venv path first (common dev setup), then fall back to PATH.
+  const candidates = [
+    ["/Users/natthapongsuwanjit/.espressif/python_env/idf5.5_py3.9_env/bin/python3",
+      "-m", "esptool", "--chip", "esp32s3", "--port", "/dev/cu.usbmodem1301", "read_mac"],
+  ];
+  let lastErr: unknown = null;
+  for (const cmd of candidates) {
+    try {
+      const { stdout } = await execFileAsync(cmd[0], cmd.slice(1), { timeout: 8000 });
+      const m = stdout.match(/([0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5})/);
+      if (m) return m[1].toUpperCase();
+      lastErr = new Error(`esptool output did not contain a MAC: ${stdout.trim()}`);
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("esptool not available");
+}
 
 /** Device fleet, settings, assignment, and command endpoints. */
 @Controller("devices")
 export class DevicesController {
   constructor(private readonly devices: DevicesService) {}
+
+  /** Admin helper for the Provision modal: reads the MAC of the device
+   *  currently connected over USB so the operator doesn't have to type it.
+   *  Returns { mac } on success or throws so the modal can show the error. */
+  @Post("read-mac")
+  @UseGuards(AdminGuard)
+  async readMac() {
+    const mac = await readMacFromUsb();
+    return { mac };
+  }
+
+  /** Admin helper for the Provision modal: returns the next sequential CCP
+   *  serial (e.g. CCP000002) WITHOUT consuming it. The serial is consumed
+   *  only when POST /api/v1/devices/provision runs (atomic increment). */
+  @Get("next-id")
+  @UseGuards(AdminGuard)
+  async nextId() {
+    return { deviceId: await this.devices.peekNextDeviceId() };
+  }
 
   /** User claims a device by hardware id + claim code shown on screen. */
   @Post("claim")
@@ -178,5 +223,12 @@ export class DevicesController {
   ) {
     const cmdId = this.devices.sendCommand(hwId, body.type, body.params);
     return { cmdId };
+  }
+
+  /** Push an OTA firmware update to this device (admin). */
+  @Post(":hwId/ota")
+  @UseGuards(AdminGuard)
+  ota(@Param("hwId") hwId: string, @Body() body: { firmwareId: string }) {
+    return this.devices.pushOta(hwId, body.firmwareId);
   }
 }

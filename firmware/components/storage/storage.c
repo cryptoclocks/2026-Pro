@@ -236,17 +236,38 @@ esp_err_t storage_write_file_atomic(const char *path, const void *data, size_t l
     snprintf(tmp, sizeof(tmp), "%s.new", path);
     FILE *f = fopen(tmp, "wb");
     if (!f) {
+        ESP_LOGE(TAG, "atomic write: fopen(%s) failed: errno=%d", tmp, errno);
         return ESP_FAIL;
     }
     size_t wr = fwrite(data, 1, len, f);
-    fclose(f);
     if (wr != len) {
+        ESP_LOGE(TAG, "atomic write: short write %u/%u", (unsigned)wr, (unsigned)len);
+        fclose(f);
         unlink(tmp);
         return ESP_FAIL;
     }
-    /* FAT has no atomic replace; remove-then-rename is the closest we get. */
+    /* Force buffer flush to SD card BEFORE rename — ensures data survives
+     * power loss in the rename window. esp_vfs_fat_sdmmc honours fsync(). */
+    if (fflush(f) != 0) {
+        ESP_LOGW(TAG, "atomic write: fflush failed");
+    }
+    int fd = fileno(f);
+    if (fd >= 0) {
+        fsync(fd);  /* best-effort; FAT may ignore but doesn't hurt */
+    }
+    fclose(f);
+
+    /* FAT has no atomic replace; remove-then-rename is the closest we get.
+     * The fflush+fsync above minimizes the window where data is buffered
+     * but not yet on flash. */
     unlink(path);
-    return (rename(tmp, path) == 0) ? ESP_OK : ESP_FAIL;
+    int rc = rename(tmp, path);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "atomic write: rename(%s -> %s) failed errno=%d", tmp, path, errno);
+        unlink(tmp);  /* cleanup */
+        return ESP_FAIL;
+    }
+    return ESP_OK;
 }
 
 char *storage_read_file(const char *path, size_t *out_len)

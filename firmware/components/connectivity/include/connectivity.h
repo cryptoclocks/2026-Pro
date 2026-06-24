@@ -3,13 +3,15 @@
  * MQTT client (commands, status, telemetry, data streams) + HTTP downloader
  * with Range-resume and SHA-256 verification.
  *
- * Topic scheme (see schema/mqtt-messages.schema.json):
- *   ccp/v1/{device_id}/cmd                S->D
- *   ccp/v1/{device_id}/cmd/res            D->S
- *   ccp/v1/{device_id}/status             D->S retained + LWT
- *   ccp/v1/{device_id}/telemetry          D->S
- *   ccp/v1/{device_id}/data/{stream}      S->D
- *   ccp/v1/{device_id}/evt/{name}         D->S
+ * Topic scheme (see schema/mqtt-messages.schema.json). {id} is the encrypted
+ * client_id (aesEncrypt(device_id)) so the plaintext device_id never appears on
+ * the wire; Node-RED computes the same value from device_id to address a device.
+ *   ccp/v1/{id}/cmd                S->D
+ *   ccp/v1/{id}/cmd/res            D->S
+ *   ccp/v1/{id}/status             D->S retained + LWT
+ *   ccp/v1/{id}/telemetry          D->S
+ *   ccp/v1/{id}/data/{stream}      S->D
+ *   ccp/v1/{id}/evt/{name}         D->S
  */
 #pragma once
 
@@ -26,7 +28,9 @@ typedef void (*conn_data_cb_t)(const char *stream, const char *payload, size_t l
 
 typedef struct {
     const char *broker_uri;   /* e.g. mqtts://hub.cryptoclock.pro:8883 or mqtt://192.168.1.10:1883 */
-    const char *device_id;
+    const char *device_id;    /* plaintext id: MQTT username + status payload */
+    const char *client_id;    /* encrypted id (aesEncrypt(device_id)): MQTT clientId + topic node.
+                                 If NULL, falls back to device_id. */
     const char *password;     /* device token minted at claim */
     conn_cmd_cb_t on_cmd;
     conn_data_cb_t on_data;

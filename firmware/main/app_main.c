@@ -310,7 +310,7 @@ static void bootstrap_fetch_asset(const cJSON *a, const char *token)
  * revision. Authenticates with the minted device token. Every failure keeps the
  * local last-known-good config and never blocks boot.
  */
-static void settings_sync_from_server(void)
+void settings_sync_from_server(void)
 {
     char token[128] = "";
     device_security_get_token(token, sizeof(token));

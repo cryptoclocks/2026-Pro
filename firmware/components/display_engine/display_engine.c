@@ -16,6 +16,7 @@
 #include "esp_heap_caps.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 
 static const char *TAG = "display";
 
@@ -87,7 +88,7 @@ typedef struct {
     lv_display_t *disp;
     lv_indev_t *indev;
     uint16_t *frame;                 /* full logical frame, PSRAM */
-    uint16_t *trans[2];              /* DMA bounce buffers, internal RAM */
+    uint16_t *panel_frame;           /* rotated panel-native frame, PSRAM */
     SemaphoreHandle_t trans_done;    /* 1 credit = bus idle */
     SemaphoreHandle_t te_sem;        /* given by TE ISR */
     SemaphoreHandle_t lvgl_mutex;    /* recursive */
@@ -165,20 +166,35 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 {
     (void)area;
     const uint16_t *frame = (const uint16_t *)px_map;
-    int buf_idx = 0;
 
     /* Tear sync: drop a stale pulse, then gate on the next one (60Hz => <17ms). */
     xSemaphoreTake(s_ctx.te_sem, 0);
     xSemaphoreTake(s_ctx.te_sem, pdMS_TO_TICKS(20));
 
+    if (xSemaphoreTake(s_ctx.trans_done, pdMS_TO_TICKS(250)) != pdTRUE) {
+        ESP_LOGE(TAG, "LCD transfer timeout");
+        lv_display_flush_ready(disp);
+        return;
+    }
+
+    /* Build one panel-native frame in PSRAM, then submit it as one color
+     * transaction chain. Re-opening the SPI bus for every band can deadlock
+     * between the async color transfer and the next polling CASET command. */
     for (int py0 = 0; py0 < CCP_LCD_V_RES; py0 += TRANS_ROWS) {
         const int rows = (py0 + TRANS_ROWS <= CCP_LCD_V_RES) ? TRANS_ROWS : (CCP_LCD_V_RES - py0);
-        uint16_t *dst = s_ctx.trans[buf_idx];
+        uint16_t *dst = s_ctx.panel_frame + (size_t)py0 * CCP_LCD_H_RES;
         fill_band(dst, frame, py0, rows);
+    }
 
-        xSemaphoreTake(s_ctx.trans_done, portMAX_DELAY);
-        esp_lcd_panel_draw_bitmap(s_ctx.panel, 0, py0, CCP_LCD_H_RES, py0 + rows, dst);
-        buf_idx ^= 1;
+    esp_err_t err = esp_lcd_panel_draw_bitmap(
+        s_ctx.panel, 0, 0, CCP_LCD_H_RES, CCP_LCD_V_RES, s_ctx.panel_frame);
+    if (err != ESP_OK) {
+        /* No completion callback follows a rejected transfer, so restore
+         * the bus credit before returning to LVGL. */
+        xSemaphoreGive(s_ctx.trans_done);
+        ESP_LOGE(TAG, "LCD transfer failed: %s", esp_err_to_name(err));
+        lv_display_flush_ready(disp);
+        return;
     }
 
     s_ctx.flush_count++;
@@ -240,12 +256,29 @@ static void lvgl_tick_cb(void *arg)
 static void lvgl_task(void *arg)
 {
     ESP_LOGI(TAG, "LVGL task running on core %d", xPortGetCoreID());
+    /* Subscribe this task to the task watchdog. Was previously missing, so when
+     * lvgl itself hung the watchdog blamed IDLE1. After subscribing we must
+     * call esp_task_wdt_reset() periodically or the watchdog will fire and
+     * correctly identify THIS task as the hung one. */
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK) {
+        ESP_LOGW(TAG, "lvgl: esp_task_wdt_add failed: %s", esp_err_to_name(wdt_err));
+    }
+
+    uint32_t last_hb_ms = 0;
+    uint32_t hb_count = 0;
+
     while (true) {
         uint32_t delay_ms = 5;
         if (display_engine_lock(0)) {
             delay_ms = lv_timer_handler();
             display_engine_unlock();
         }
+        /* Feed watchdog every iteration. If lv_timer_handler hangs above,
+         * the watchdog will fire after 10s and identify THIS task (lvgl) as
+         * the culprit — not IDLE1. */
+        esp_task_wdt_reset();
+
         /* FPS bookkeeping (1s window) */
         uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
         if (now - s_ctx.fps_window_start_ms >= 1000) {
@@ -254,6 +287,18 @@ static void lvgl_task(void *arg)
             s_ctx.fps_window_start_ms = now;
             s_ctx.fps_window_frames = s_ctx.flush_count;
         }
+
+        /* Heartbeat log every 5s — debug aid: confirms lvgl is alive
+         * and shows live tick rate / fps / free heap. */
+        hb_count++;
+        if (now - last_hb_ms > 5000) {
+            ESP_LOGI(TAG, "lvgl heartbeat: %u ticks in 5s, fps=%.1f, heap_free=%u",
+                     (unsigned)hb_count, s_ctx.fps,
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+            hb_count = 0;
+            last_hb_ms = now;
+        }
+
         if (delay_ms > 500) delay_ms = 500;
         if (delay_ms < 1) delay_ms = 1;
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
@@ -271,6 +316,7 @@ static esp_err_t init_panel(void)
 
     esp_lcd_panel_io_spi_config_t io_config =
         AXS15231B_PANEL_IO_QSPI_CONFIG(CCP_PIN_LCD_CS, NULL, NULL);
+    io_config.trans_queue_depth = 2;
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)CCP_LCD_QSPI_HOST,
                                                  &io_config, &s_ctx.io), TAG, "panel io");
 
@@ -349,14 +395,14 @@ esp_err_t display_engine_start(void)
         s_ctx.touch = NULL;
     }
 
-    /* full logical frame in PSRAM, bounce buffers in internal DMA RAM */
+    /* Logical and panel-native frames live in PSRAM. The SPI driver uses its
+     * small queue as the DMA bounce, keeping internal allocation bounded. */
     s_ctx.frame = heap_caps_malloc((size_t)LOGICAL_W * LOGICAL_H * CCP_LCD_PIXEL_BYTES,
                                    MALLOC_CAP_SPIRAM);
-    s_ctx.trans[0] = heap_caps_malloc(TRANS_PIXELS * CCP_LCD_PIXEL_BYTES,
-                                      MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    s_ctx.trans[1] = heap_caps_malloc(TRANS_PIXELS * CCP_LCD_PIXEL_BYTES,
-                                      MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    ESP_RETURN_ON_FALSE(s_ctx.frame && s_ctx.trans[0] && s_ctx.trans[1],
+    s_ctx.panel_frame = heap_caps_malloc(
+        (size_t)CCP_LCD_H_RES * CCP_LCD_V_RES * CCP_LCD_PIXEL_BYTES,
+        MALLOC_CAP_SPIRAM);
+    ESP_RETURN_ON_FALSE(s_ctx.frame && s_ctx.panel_frame,
                         ESP_ERR_NO_MEM, TAG, "framebuffer alloc");
 
     lv_init();
@@ -391,14 +437,69 @@ esp_err_t display_engine_start(void)
     return ESP_OK;
 }
 
+/*
+ * Optional state tag — set by callers to a short string describing what
+ * they're currently doing under the lock (e.g. "candle_render", "reload").
+ * Read by display_engine_lock_holder_state() and used in timeout log so we
+ * know not just WHO holds the lock but WHAT they're doing with it.
+ */
+static char s_lock_state[24] = "idle";
+static uint32_t s_lock_state_ms = 0;
+static TaskHandle_t s_lock_state_holder = NULL;
+
+void display_engine_lock_set_state(const char *state)
+{
+    if (!state) state = "idle";
+    strlcpy(s_lock_state, state, sizeof(s_lock_state));
+    s_lock_state_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_lock_state_holder = xTaskGetCurrentTaskHandle();
+}
+
+const char *display_engine_lock_holder_state(void)
+{
+    TaskHandle_t cur = xSemaphoreGetMutexHolder(s_ctx.lvgl_mutex);
+    if (!cur || cur != s_lock_state_holder) return "none";
+    return s_lock_state;
+}
+
+uint32_t display_engine_lock_holder_age_ms(void)
+{
+    TaskHandle_t cur = xSemaphoreGetMutexHolder(s_ctx.lvgl_mutex);
+    if (!cur || cur != s_lock_state_holder) return 0;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    return now - s_lock_state_ms;
+}
+
 bool display_engine_lock(uint32_t timeout_ms)
 {
     const TickType_t ticks = (timeout_ms == 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
-    return xSemaphoreTakeRecursive(s_ctx.lvgl_mutex, ticks) == pdTRUE;
+    if (xSemaphoreTakeRecursive(s_ctx.lvgl_mutex, ticks) == pdTRUE) {
+        return true;
+    }
+    TaskHandle_t holder = xSemaphoreGetMutexHolder(s_ctx.lvgl_mutex);
+    const char *name = holder ? pcTaskGetName(holder) : "none";
+    /* If the holder registered a state tag, surface it. Stack HWM tells us
+     * if the holder is dangerously close to overflow (a classic cause of
+     * subtle hangs on this kind of system). */
+    if (holder && holder == s_lock_state_holder) {
+        UBaseType_t hwm = uxTaskGetStackHighWaterMark(holder);
+        ESP_LOGE(TAG, "display lock timeout (%lu ms), holder=%s state=%s age=%lu ms hwm=%u words",
+                 (unsigned long)timeout_ms, name, s_lock_state,
+                 (unsigned long)display_engine_lock_holder_age_ms(),
+                 (unsigned)hwm);
+    } else {
+        ESP_LOGE(TAG, "display lock timeout (%lu ms), holder=%s (no state)",
+                 (unsigned long)timeout_ms, name);
+    }
+    return false;
 }
 
 void display_engine_unlock(void)
 {
+    /* Clear the holder's state tag on unlock so a stale value from a prior
+     * holder doesn't leak into the next timeout log. */
+    s_lock_state_holder = NULL;
+    strlcpy(s_lock_state, "idle", sizeof(s_lock_state));
     xSemaphoreGiveRecursive(s_ctx.lvgl_mutex);
 }
 

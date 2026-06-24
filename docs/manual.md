@@ -1,132 +1,93 @@
-# คู่มือ CryptoClock Pro (ฉบับผู้ใช้และผู้ดูแล)
+# คู่มือผู้ใช้ — CryptoClock Pro (เจ้าของเครื่อง)
 
-## 1. ตัวแปรที่ต้องตั้งก่อนใช้งาน
+> สำหรับผู้ที่ซื้อ/เป็นเจ้าของจอ CryptoClock Pro · คู่มือแอดมินอยู่ที่ [admin-manual.md](admin-manual.md)
+> ตั้งค่าทุกอย่างได้จากเว็บ: **https://2026-pro-user.vercel.app** (ไม่ต้องลงแอป ไม่ต้องเสียบสาย)
 
-แก้ที่ไฟล์เดียว: **[firmware/main/user_config.h](../firmware/main/user_config.h)**
+## 1. ภาพรวม — ตั้งค่าเครื่องได้ 2 ทาง
 
-| ตัวแปร | ความหมาย | ค่าเริ่มต้น |
-|---|---|---|
-| `CCP_CFG_MQTT_BROKER_URI` | IP/พอร์ตของ MQTT broker (เครื่องที่รัน server) | `mqtt://192.168.1.100:1883` |
-| `CCP_CFG_SERVER_BASE_URL` | URL ของ Hub API | `http://192.168.1.100:4000` |
-| `CCP_CFG_TZ_OFFSET_MIN` | timezone (ไทย = 420) | `420` |
-| `CCP_CFG_CRYPTO_SYMBOL` | คู่เหรียญหน้า 2 (รูปแบบ Binance) | `BTCUSDT` |
-| `CCP_CFG_DEFAULT_BRIGHTNESS` | ความสว่างเริ่มต้น 0-100 | `80` |
+| ทาง | ใช้เมื่อ |
+|---|---|
+| **Cloud** (แนะนำ) | อยู่ที่ไหนก็ได้ ขอแค่จอออนไลน์ — ตั้งผ่านเว็บ user แล้วจอเปลี่ยนตามผ่านอินเทอร์เน็ต |
+| **LAN** | อยู่บ้าน วง WiFi เดียวกับจอ — เว็บต่อตรงเข้าจอด้วย IP |
 
-แก้แล้ว build + flash ใหม่:
-```bash
-source ~/esp/esp-idf/export.sh
-cd firmware && idf.py build flash
-```
-> ไม่อยาก flash ใหม่? ทุกค่า override ได้จากไฟล์ `device.json` บน SD card (ข้อ 3) หรือผ่านแอปมือถือ/LAN API (ข้อ 5)
+จอแสดงหลายหน้า: **Clock · Crypto · Photos(สไลด์) · Weather · Calendar · Profile** ปัดเปลี่ยนหน้าเองหรือให้วนอัตโนมัติก็ได้
 
-## 2. การใช้งานครั้งแรก (WiFi Setup)
+---
 
-1. เปิดเครื่อง → เห็นหน้า **Welcome** แล้วเข้าหน้า **WiFi Setup** อัตโนมัติ (ถ้ายังไม่เคยตั้ง WiFi)
+## 2. ตั้ง WiFi ครั้งแรก (ที่ตัวเครื่อง)
+
+1. เปิดเครื่อง → ถ้ายังไม่เคยตั้ง WiFi จอจะเข้าหน้า **WiFi Setup** เอง
 2. มือถือสแกน QR บนจอ (หรือต่อ WiFi ชื่อ `CCP-Setup-XXXX`)
-3. เปิด `http://192.168.4.1` → กรอกชื่อ/รหัส WiFi บ้าน → Save
-4. เครื่องรีบูตและต่อ WiFi เอง → เข้าหน้า Home
+3. เปิด `http://192.168.4.1` → เลือก WiFi บ้าน + ใส่รหัส → Save
+4. เครื่องรีบูตและต่อเน็ตเอง → เข้าหน้า Home
 
-รีเซ็ต WiFi ภายหลัง: เปิดเมนู (ปุ่มมุมขวาบน) → กดค้างที่ **Reset WiFi**
+> เปลี่ยน WiFi ภายหลัง: เปิด **เมนู Settings บนจอ** → **Reset WiFi**
 
-## 3. หน้าจอ Default 3 หน้า + SD Card
+---
 
-**ปัดซ้าย/ขวา** เพื่อเปลี่ยนหน้า · **ปุ่ม ≡ มุมขวาบน** เปิดเมนู (เปลี่ยนหน้า/ความสว่าง/ข้อมูลเครื่อง/รีเซ็ต WiFi)
+## 3. เข้าเว็บ user + ผูกเครื่อง (Claim)
 
-| หน้า | สิ่งที่แสดง | โฟลเดอร์ asset บน SD |
-|---|---|---|
-| 1. Clock | นาฬิกาใหญ่ + วันที่ + การ์ดโปรไฟล์ (avatar+ชื่อ) | `/pages/clock/assets/avatar.png` (สี่เหลี่ยมจัตุรัส) |
-| 2. Crypto | ราคาเหรียญสด (Binance ทุก 5 วิ) + กราฟ + %24h | `/pages/crypto/assets/` |
-| 3. Slideshow | วนรูป PNG/JPG **320x240** ทุก 5 วิ พร้อม fade — ครบทุกรูปกลับหน้า 1 | `/pages/slideshow/assets/*.png` (สูงสุด 8 รูป) |
+### 3.1 เข้าสู่ระบบ
+เปิด `https://2026-pro-user.vercel.app` → ล็อกอินด้วย **Google** หรือ **รหัส OTP ทางอีเมล**
 
-### โครงไฟล์ SD card
-```
-/config/device.json            <- config หลักของเครื่อง
-/pages/clock/config.json       <- override เฉพาะหน้า (ไม่บังคับ)
-/pages/clock/assets/avatar.png
-/pages/crypto/config.json      <- เช่นเปลี่ยนเป็น ETH
-/pages/slideshow/assets/1.png 2.png 3.png
-/packages/...                  <- ระบบ sync จาก server ใช้เอง (อย่าแก้มือ)
-```
+### 3.2 ผูกเครื่องกับบัญชี (Claim)
+> ทำครั้งเดียว · เครื่อง 1 ตัวมีเจ้าของได้คนเดียว · 1 บัญชีถือได้หลายเครื่อง
 
-### ตัวอย่าง `/config/device.json` (เต็มทุกตัวเลือก)
-```json
-{
-  "pages": ["clock", "crypto", "slideshow"],
-  "display_mode": "static",
-  "page_delay_s": 10,
-  "tz_offset_min": 420,
-  "brightness": 80,
-  "profile": { "name": "Natthapong", "title": "CryptoClock Pro" },
-  "clock": { "theme": "gold" },
-  "crypto": {
-    "symbols": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "DOGEUSDT"],
-    "style": "chart",
-    "currency": "USD",
-    "fetch_interval_s": 10
-  },
-  "slideshow": { "interval_s": 5, "effect": "fade", "order": ["1.jpg","2.jpg","3.jpg"], "return_to_first": true }
-}
-```
-| key | ค่า | ความหมาย |
-|---|---|---|
-| `display_mode` | `static` / `dynamic` | ปัดเอง / เปลี่ยนหน้าอัตโนมัติทุก `page_delay_s` วิ |
-| `clock.theme` | `gold` / `mint` / `neon` | ธีมสีหน้านาฬิกา 3 แบบ |
-| `crypto.symbols` | สูงสุด 4 ตัว (รูปแบบ Binance) | ปุ่มซ้ายบนบนจอกดวนเปลี่ยนเหรียญ |
-| `crypto.style` | `chart` / `big` | ราคา+กราฟ หรือ ราคาใหญ่กลางจอ |
-| `crypto.currency` | `USD` / `THB` | ปุ่มขวาบนบนจอสลับได้ (เรท USD→THB ดึงอัตโนมัติ) |
-| `crypto.fetch_interval_s` | 5/10/30/60/300/900 | ความถี่ดึงราคา |
-| `slideshow.effect` | `fade` / `slide` / `none` | เอฟเฟกต์เปลี่ยนรูป |
-| `slideshow.order` | รายชื่อไฟล์ | ลำดับการแสดง (แอปมือถือจัดให้) |
+1. ไปแท็บ **Connect**
+2. กรอก **Device ID** (เช่น `CCP000007`) + **Claim code** (8 ตัว ที่ได้ตอนซื้อ) — หรือกด **สแกน QR / เปิดกล้อง**
+3. กด Claim → ผูกสำเร็จ เครื่องจะอยู่ในรายการของคุณ
 
-ลำดับการอ่าน config ตอนเปิดเครื่อง: ค่าใน `user_config.h` → `/lfs/config/device.json` (ในเครื่อง) → **SD `/config/device.json`** → `/pages/<หน้า>/config.json` (ทับเป็นรายหน้า) → **ตอนต่อเน็ตจะเช็คกับ server เสมอ** (`GET /devices/{id}/settings`) ถ้า server มีเวอร์ชันใหม่กว่าจะดึงมาทับและ reload ทันที
+> ถ้าแอดมินผูกบัญชีให้ตั้งแต่ตอนขาย (ใส่ Gmail คุณตอน provision) เครื่องจะอยู่ในรายการอยู่แล้ว ไม่ต้อง claim
 
-> มีโฟลเดอร์ตัวอย่างพร้อมรูป/logo/config ครบที่ [sdcard/](../sdcard/) — copy ลงการ์ดได้เลย
+### 3.3 เลือกโหมดเชื่อมต่อ
+ในแท็บ **Connect** เลือก **Cloud (MQTT)** เพื่อคุมผ่านเน็ต หรือ **LAN IP** เพื่อต่อตรงในบ้าน
 
-## 4. รัน Server บนเครื่องตัวเอง (local)
+---
 
-**ได้ และติดตั้งไว้แล้วบนเครื่องนี้** (Postgres 16 ผ่าน Homebrew, ไม่ต้องใช้ Docker):
+## 4. ตั้งค่าทีละหน้า (ทุกหน้าเซฟแล้วจอเปลี่ยนตามทันที ~5 วิ)
 
-```bash
-# ครั้งแรกเท่านั้น (ทำไปแล้ว):
-#   brew install postgresql@16 && brew services start postgresql@16
-#   psql -d postgres -c "CREATE ROLE ccp LOGIN PASSWORD 'ccp_dev_password' CREATEDB;"
-#   psql -d postgres -c "CREATE DATABASE cryptoclock OWNER ccp;"
-#   cd server && pnpm install && pnpm --filter @ccp/api exec prisma migrate dev
+| แท็บ | ตั้งอะไรได้ |
+|---|---|
+| **System** | ดูข้อมูลเครื่อง: Device ID, firmware, IP, MAC, WiFi, หน้าปัจจุบัน |
+| **Profile** | ชื่อ / ชื่อเล่น / ตำแหน่ง / บริษัท + **อัปโหลดรูป avatar** |
+| **Clock** | รูปแบบนาฬิกา / timezone / ฟอนต์ / ธีม |
+| **Crypto** | เลือกคู่เหรียญที่อยากดู (ราคาสดจาก Binance) |
+| **Photos** | อัปโหลดรูปทำสไลด์โชว์ + ตั้งเวลาเปลี่ยนรูป |
+| **Weather** | เลือกเมือง/หน่วย + อัปโหลด GIF อากาศ |
+| **Calendar** | รูปแบบปฏิทิน / วันเริ่มสัปดาห์ |
+| **Store** | ซื้อ/ปลดล็อกฟีเจอร์เพิ่ม |
 
-# เปิดใช้งานทุกครั้ง:
-cd server && pnpm dev       # API :4000 / เว็บ Builder :3000
-```
+### หน้า Profile แสดงบนจออย่างไร
+- บรรทัด 1 = **Name** (ชื่อจริง)
+- บรรทัด 2 = **(ชื่อเล่น) ตำแหน่ง**
+- บรรทัด 3 = **Company**
 
-- **MQTT broker ไม่ต้องรันเอง** — ใช้ Node-RED ที่มีอยู่ (`mqtt://node-red.cashlessthailand.com:1883` ตั้งใน `server/.env` และ `user_config.h` แล้ว)
-- Redis/MinIO ยังไม่จำเป็น (ใช้ตอน M5 marketplace)
-- จอชี้มาที่เครื่องนี้แล้ว: `CCP_CFG_SERVER_BASE_URL = http://192.168.1.139:4000` (ถ้า IP เครื่อง Mac เปลี่ยน ดูใหม่ด้วย `ipconfig getifaddr en0` แล้วแก้ + flash)
-- ทดสอบ: `curl http://localhost:4000/api/v1/devices` ต้องเห็นจอพร้อม `"online":true`
+> อัปโหลด avatar: ระบบย่อรูปเป็น ~132×132 PNG ให้อัตโนมัติก่อนส่งขึ้นจอ
 
-## 5. LAN API (สำหรับแอปมือถือ / curl)
+> **ค่าที่คุณตั้ง + รูปที่อัปโหลด จะไม่หาย** แม้แอดมินอัปเดต/เผยแพร่เทมเพลตใหม่
 
-เมื่อจอต่อ WiFi แล้ว จะเปิด API ในวง LAN + ประกาศตัวเองผ่าน mDNS (`_ccp._tcp`):
+---
 
-```bash
-curl http://ccp-983daee91478.local/api/v1/info
-curl http://<IP จอ>/api/v1/config
-curl -X POST http://<IP จอ>/api/v1/config -d @device.json
-curl -X POST http://<IP จอ>/api/v1/brightness -d '{"value":50}'
-curl -X POST http://<IP จอ>/api/v1/identify          # บี๊บหาเครื่อง
-curl -X POST http://<IP จอ>/api/v1/wifi/reset
-```
+## 5. เมนู Settings บนตัวเครื่อง
 
-## 6. ดู log / แก้ปัญหา
+กดปุ่ม **≡ มุมขวาบน** บนจอเพื่อเปิดเมนู:
+- ดูข้อมูลระบบ: Device ID, firmware, IP, MAC, WiFi (dBm), หน้าปัจจุบัน
+- ปรับ **ความสว่าง** ด้วยสไลเดอร์
+- เปิด/ปิดหน้าในวงหมุน
+- **Reset WiFi**
+
+---
+
+## 6. แก้ปัญหา (Troubleshooting)
 
 | อาการ | วิธีแก้ |
 |---|---|
-| จอดำ | เช็คไฟเข้า → ดู log (`idf.py -p /dev/cu.usbmodem* monitor`) — จอรุ่นนี้ console ออกทาง USB เดียวกับที่ flash |
-| ไม่เห็นรูป slideshow | รูปต้องเป็น PNG/JPG ใน `/pages/slideshow/assets/` และ SD เป็น FAT32 |
-| ราคาเหรียญไม่ขึ้น | ต้องต่อ WiFi ก่อน · เช็ค symbol ให้ตรงรูปแบบ Binance (BTCUSDT) |
-| เวลาไม่ตรง | รอ SNTP sync ~10 วิหลังต่อเน็ต · เช็ค `tz_offset_min` |
-| SD อ่านไม่ได้ | format FAT32, ลองการ์ดอื่น (บางการ์ดไม่ compatible กับ SDMMC 1-bit) |
+| ล็อกอิน Google ไม่ได้ (Invalid URL) | แจ้งแอดมิน — ค่า config เว็บยังไม่ครบ |
+| Claim ไม่ผ่าน (409) | เครื่องมีเจ้าของแล้ว — ถ้าเป็นของคุณ ให้แอดมินช่วยย้ายเจ้าของ |
+| ตั้งค่าแล้วจอไม่เปลี่ยน | เช็คว่าจอ **online** (แท็บ System) · ลองโหมด Cloud · รอ ~5–10 วิ |
+| ราคาเหรียญไม่ขึ้น | จอต้องต่อเน็ต · ตรวจสัญลักษณ์เหรียญให้เป็นรูปแบบ Binance (เช่น `BTCUSDT`) |
+| รูป slideshow ไม่ขึ้น | อัปโหลดใหม่ในแท็บ Photos · ใช้ไฟล์ PNG/JPG |
+| เวลาไม่ตรง | รอ ~10 วิหลังต่อเน็ต (sync เวลาอัตโนมัติ) · ตรวจ timezone ในแท็บ Clock |
+| จอดำ | เช็คไฟเข้า/สาย USB-C · ลองกดปุ่มหน้าเครื่อง |
 
-## 7. แอป Android
-
-ดู [mobile/README.md](../mobile/README.md) — มี 2 แอป (Flutter):
-- **user-app**: ค้นหาจอในวง LAN (mDNS) + ตั้งค่า WiFi/หน้า/ความสว่าง
-- **admin-app**: จัดการ fleet ผ่าน Hub API + ส่งคำสั่ง (sync/reboot/lock)
+> ติดปัญหาที่แก้เองไม่ได้ → ติดต่อแอดมิน พร้อมแจ้ง **Device ID** (ดูในแท็บ System หรือเมนู Settings บนจอ)

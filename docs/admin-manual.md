@@ -1,103 +1,165 @@
-# คู่มือแอดมิน CryptoClock Pro Hub
+# คู่มือแอดมิน — CryptoClock Pro (ระบบคลาวด์)
 
-> สำหรับผู้ดูแลระบบ/เจ้าของแพลตฟอร์ม — คู่มือผู้ใช้ทั่วไปอยู่ที่ [manual.md](manual.md)
+> สำหรับผู้ดูแล/เจ้าของแพลตฟอร์ม · คู่มือผู้ใช้ทั่วไป (เจ้าของเครื่อง) อยู่ที่ [manual.md](manual.md)
+> อัปเดตล่าสุดให้ตรงกับระบบจริงที่ deploy บนคลาวด์ (ไม่ใช่ docker local แบบเดิมแล้ว)
 
-## 1. สถาปัตยกรรมโดยย่อ
+## 1. ภาพรวมระบบ (Production)
 
 ```
-[จอ ESP32] ←MQTT(1883/8883)→ [EMQX] ←→ [NestJS API :4000] ←→ [Postgres / Redis / MinIO]
-     ↑                                        ↑
-     └─HTTP: ดาวน์โหลด bundle / settings      └─ [Next.js Builder+Dashboard :3000]
-     └─LAN API :80 (ในวง WiFi เดียวกัน สำหรับแอป user)
-```
-รายละเอียดเต็ม: [architecture.md](architecture.md)
-
-## 2. ติดตั้ง Server
-
-```bash
-cd server && cp .env.example .env       # แก้ secrets ก่อนใช้จริงทุกตัว!
-docker compose up -d                    # postgres, redis, emqx, minio
-pnpm install
-pnpm --filter @ccp/api exec prisma migrate dev
-pnpm dev                                # api :4000, web :3000
-```
-- EMQX dashboard: `http://localhost:18083` (admin/public — **เปลี่ยนรหัสทันที**)
-- MinIO console: `http://localhost:9001`
-- Production: ใช้ MQTT TLS (8883) + ใส่ JWT_SECRET/STRIPE keys จริงใน `.env`
-
-## 3. การจัดการ Device
-
-### Claim (ผูกเครื่องกับ user)
-```bash
-curl -X POST localhost:4000/api/v1/devices/claim \
-  -H 'Content-Type: application/json' \
-  -d '{"userId":"<uid>","deviceId":"ccp-983daee91478","code":"E91478","name":"จอหน้าร้าน"}'
-# -> ได้ token (แสดงครั้งเดียว) — เครื่องเก็บใน NVS, server เก็บแค่ hash
+[จอ ESP32-S3] ──MQTT/WSS──┐
+   │  └─HTTPS bootstrap+asset (X-Device-Token)
+   │                        ▼
+[เวปแอดมิน Next.js] ──► [Hub API NestJS บน OCI] ──► [Supabase Postgres]
+[เวป user Vite]      ──►  api.cashlessthailand.com        └ assets เก็บบน OCI volume
+        └──MQTT/WSS──► [Broker หลัง Caddy บน OCI] ──cmd──► จอ
 ```
 
-### ส่งคำสั่ง (Command Center)
-```bash
-curl -X POST localhost:4000/api/v1/devices/ccp-983daee91478/cmd \
-  -H 'Content-Type: application/json' -d '{"type":"identify"}'
-```
-| type | params | ผล |
+| ส่วน | URL |
+|---|---|
+| เวปแอดมิน | `https://2026-pro-admin.vercel.app` |
+| เวป user (เจ้าของเครื่อง) | `https://2026-pro-user.vercel.app` |
+| Hub API | `https://api.cashlessthailand.com/api/v1` |
+
+- **MQTT** = คุมเครื่องแบบ realtime (identify/reboot/brightness/sync) เวป→API→broker→จอ
+- **HTTPS + device token** = จอดึง config/asset เอง (`/device/bootstrap`)
+- topic จอ: subscribe `ccp/v1/<encId>/cmd` · publish `ccp/v1/<encId>/status|cmd/res|telemetry`
+  โดย `encId = AES-128-CBC(<deviceId>-<MAC>)`
+
+---
+
+## 2. เข้าสู่ระบบแอดมิน
+
+1. เปิด `https://2026-pro-admin.vercel.app` → กด **Sign in** → เลือก Google `mycryptoclock@gmail.com`
+2. เข้าได้แล้วมุมขวาบนต้องเห็น: pill **Admin** · อีเมล · สถานะ **MQTT connected** (สีเขียว)
+3. เมนูบน: **Fleet · Builder · Store · Users · Approvals** (โผล่เฉพาะบัญชี admin)
+
+> ถ้า login แล้วไม่เห็นเมนูพวกนี้ = บัญชีนั้นยังไม่ใช่ ADMIN (ไป Users → grant role ก่อน)
+
+---
+
+## 3. ⭐ เพิ่มเครื่องใหม่ / เครื่องเปล่า เข้าระบบ (Provision)
+
+> **คำถามที่พบบ่อย: "อัพโหลดเข้าเครื่องเปล่า จากเวปแอดมินได้จากหน้าไหน?"**
+> **ตอบ: หน้า Fleet (หน้าแรกหลัง login) → ปุ่ม `+ Provision device` มุมขวาบน**
+
+Provision คือการลงทะเบียนเครื่องเข้าระบบ + แจกหมายเลขซีเรียล + mint token + claim code ทำตามนี้:
+
+### ขั้นตอนเต็ม
+
+**เตรียมเครื่องเปล่า**
+1. เปิดเครื่อง → ตั้ง WiFi ให้เครื่องเข้าวง **LAN เดียวกับคอมแอดมิน** (ดูวิธีใน [manual.md ข้อ 2](manual.md))
+2. จด **MAC** ของเครื่อง — ดูได้จาก **เมนู Settings บนจอ** หรือ
+   `GET http://<device-ip>/api/v1/info` (คืน deviceId/fw/ip/**mac**/heap)
+
+**ลงทะเบียนบนเวปแอดมิน**
+3. ไปหน้า **Fleet** (`/`) → กด **`+ Provision device`** (มุมขวาบน)
+4. กรอกฟอร์ม:
+   | ช่อง | จำเป็น | หมายเหตุ |
+   |---|---|---|
+   | **MAC address** | ✅ | เช่น `98:3D:AE:E9:14:78` (รูปแบบตัวพิมพ์ใหญ่ คั่น `:`) |
+   | First / Last name | – | ชื่อผู้ซื้อ |
+   | Position / Role · Company | – | ขึ้นการ์ดโปรไฟล์บนจอ |
+   | Name of customer | – | ป้ายชื่อเครื่อง (device label) |
+   | **Buyer Gmail** | – | ถ้าใส่ → ผูก owner ให้อัตโนมัติ (ผู้ซื้อไม่ต้อง claim เอง) |
+   | WiFi SSID / password / Old SSID | – | บันทึกไว้ในประวัติเครื่อง |
+   | Coin 1 / Coin 2 | – | คู่เหรียญเริ่มต้น เช่น `BTCUSDT` / `ETHUSDT` |
+   | Ads · Permission | – | Permission: Active(1) / Locked(0) |
+5. กด **Provision** → ป๊อปอัป **"Device provisioned ✓"** จะแสดง 3 ค่า **(คัดลอกเก็บทันที)**:
+   - **Device ID** เช่น `CCP000007` (ซีเรียลรันนิ่งที่ระบบแจกให้)
+   - **Claim code** (8 ตัว) — ให้ผู้ซื้อเอาไปผูกบัญชี
+   - **Device token** (32 ตัว) — บัตรผ่านให้เครื่องดึง config (server เก็บแค่ hash)
+
+**ยัด identity ลงเครื่องเปล่า** (ทำให้เครื่องกลายเป็น `CCP000007`)
+6. ยิงเข้า local API ของเครื่อง (อยู่วง LAN เดียวกัน):
+   ```
+   POST http://<device-ip>/api/v1/provision
+   Content-Type: application/json
+   { "deviceId": "CCP000007", "token": "<device token จากข้อ 5>" }
+   ```
+   → เครื่องตอบ `{"ok":true,"rebooting":true}` แล้ว **reboot เอง**
+   → หลัง boot เครื่องใช้ id ใหม่ + subscribe topic encId ใหม่ + ลอง `/device/bootstrap` ด้วย token
+
+**ยืนยัน**
+7. กลับหน้า **Fleet** → เครื่อง `CCP000007` ต้องขึ้น **online** (จุดเขียว) ภายใน ~30 วิ
+8. กด **Identify** ที่การ์ดเครื่อง → จอจริงต้องกระพริบ (พิสูจน์ MQTT loop ครบวง)
+9. ถ้าไม่ได้ใส่ Buyer Gmail → ส่ง **Device ID + Claim code** ให้ผู้ซื้อไป claim ในเวป user เอง
+
+> **สรุปสั้น:** Fleet → `+ Provision device` → กรอก MAC → ได้ id/token/claim → `POST /api/v1/provision` เข้าเครื่อง → เครื่อง reboot เป็นเครื่องใหม่
+>
+> **หมายเหตุ token:** ถ้าเครื่องไม่มี token (หรือ token ผิด) → `/device/bootstrap` ตอบ 401 → เครื่อง **ไม่พัง** แต่ใช้ config เดิมใน NVS ต่อไป
+
+---
+
+## 4. หน้า Fleet — จัดการเครื่อง
+
+ในการ์ดแต่ละเครื่องมี:
+
+### 4.1 Command Center (ปุ่มคำสั่ง / `POST /devices/:id/cmd`)
+| คำสั่ง | ผล |
+|---|---|
+| `ping` / `identify` | ทดสอบ / ทำให้จอกระพริบหาเครื่อง |
+| `brightness` | ปรับความสว่าง (จอหรี่/สว่างทันที) |
+| `show_page` | สลับไปหน้าที่ระบุ (clock/crypto/...) |
+| `sync` / `reload` | ดึง config/payload ใหม่ + reload UI |
+| `reboot` | รีสตาร์ทเครื่อง |
+| `settings` | push ค่าตั้งหน้า |
+| `ota` | อัปเดต firmware (มี rollback) ⚠️ |
+| `lock` / `unlock` | ล็อก/ปลดล็อกเครื่อง ⚠️ |
+| `wipe` | ล้างเครื่องกลับค่าโรงงาน ⚠️ **อันตราย** |
+
+### 4.2 Settings modal
+แก้ config ของเครื่อง (display mode, page delay, brightness, เหรียญ ฯลฯ) → กด Save → bump revision + push ไปจอผ่าน MQTT ทันที
+
+### 4.3 Rights / Owner
+- **Assign owner**: ใส่อีเมล user → ผูก/ย้ายเจ้าของเครื่อง (`/devices/:id/assign-owner`)
+- **Grant / Revoke**: เปิด/ปิดสิทธิ์ใช้ item รายเครื่อง (เช่นปลดล็อกหน้า/ฟีเจอร์)
+
+---
+
+## 5. หน้า Builder — ออกแบบ UI (Dynamic Layout)
+
+1. เปิด **Builder** → จัด widget ของแต่ละหน้า
+2. **Validate / Compile** → `POST /payloads/validate` + `/payloads/compile-wasm`
+3. **Publish compiled** → **Rollout** ให้เครื่อง (`/payloads/versions/:id/rollout`)
+4. เครื่องรับเวอร์ชันใหม่โดยไม่รีบูต (zero-flash)
+
+> **สำคัญ:** การ publish ต้อง**ไม่ลบ**ค่าที่ user ตั้งไว้ + รูปที่อัปโหลด — ต้อง persist เสมอ
+
+---
+
+## 6. หน้า Store / Users / Approvals
+
+| หน้า | ทำอะไร | endpoint หลัก |
 |---|---|---|
-| `ping` / `identify` | - | ทดสอบ/บี๊บหาเครื่อง |
-| `reboot` | - | รีสตาร์ท |
-| `brightness` | `{value:0-100}` | ปรับไฟ |
-| `show_page` | `{page_id}` | สลับหน้า (layout package) |
-| `sync` | `{package_id, version, bundle_url, bundle_sha256}` | ติดตั้ง package |
-| `settings` | `{version, config}` | push ตั้งค่า 3 หน้า default |
-| `reload` | - | โหลด UI ใหม่ |
-| `ota` | `{fw_url, fw_sha256}` | อัปเดต firmware (มี rollback) |
-| `lock` / `unlock` / `wipe` | - | ล็อก/ปลดล็อก/ล้างเครื่อง ⚠️ |
+| **Store** | ดู/แก้ราคา/สถานะ item ในแคตตาล็อก | `GET /store/admin/items` · `PATCH /store/admin/items/:id` |
+| **Users** | ดูรายชื่อ user, อุปกรณ์ของแต่ละคน, grant/revoke item & role | `GET /admin/users` · `/admin/users/:id` · `POST .../grant\|revoke` |
+| **Approvals** | อนุมัติ/ปฏิเสธ feature request ที่ user ส่งมา | `GET /admin/feature-requests` · `POST .../:id/approve\|reject` |
 
-### Settings 3 หน้า default (สำคัญ)
-เครื่อง**เช็คตอนเปิดทุกครั้ง**: `GET /api/v1/devices/{id}/settings` เทียบ `version` กับที่จำไว้ — ไม่ตรงจะดึงของ server มาทับ device.json แล้ว reload ทันที / แอดมินตั้งจาก server:
-```bash
-curl -X PUT localhost:4000/api/v1/devices/ccp-983daee91478/settings \
-  -H 'Content-Type: application/json' \
-  -d '{"config":{"pages":["clock","crypto"],"clock":{"theme":"neon"},
-       "crypto":{"symbols":["BTCUSDT","SOLUSDT"],"currency":"THB","fetch_interval_s":30}}}'
-# บันทึก + bump version + push MQTT ไปเครื่องที่ออนไลน์ทันที
-```
-ลำดับความสำคัญ config บนเครื่อง: **server settings > SD device.json > per-page config.json > user_config.h**
+---
 
-## 4. Payload/Package (Dynamic UI เต็มรูปแบบ)
+## 7. MQTT / debug
 
-1. ออกแบบใน Builder (`localhost:3000/builder`) → Export `layout.json`
-2. แพ็กเป็น zip: `python3 firmware/tools/make_package.py <dir> bundle.zip` (สร้าง manifest + sha256 ให้)
-3. Publish: `POST /api/v1/payloads/publish` → assign: `POST /api/v1/devices/{dbId}/assign`
-4. เครื่องโหลด → ตรวจ hash → สลับ UI โดยไม่รีบูต (zero-flash)
-
-## 5. MQTT Topics (debug ด้วย mosquitto_sub)
-
-```bash
-mosquitto_sub -h localhost -t 'ccp/v1/+/status' -t 'ccp/v1/+/telemetry' -v
-```
 | topic | ทิศ | เนื้อหา |
 |---|---|---|
-| `ccp/v1/{id}/cmd` | S→D | คำสั่ง (qos1) |
-| `ccp/v1/{id}/cmd/res` | D→S | ผลคำสั่ง |
-| `ccp/v1/{id}/status` | D→S | retained + LWT (`online:false` เมื่อหลุด) |
-| `ccp/v1/{id}/telemetry` | D→S | heap/psram/แบต/fps/SD ทุก 30s |
-| `ccp/v1/{id}/data/{stream}` | S→D | ข้อมูล real-time เข้า widget bindings |
+| `ccp/v1/<encId>/cmd` | S→D | คำสั่ง |
+| `ccp/v1/<encId>/cmd/res` | D→S | ผลคำสั่ง |
+| `ccp/v1/<encId>/status` | D→S | retained + LWT (`online:false` เมื่อหลุด) มี `id`+`mac` |
+| `ccp/v1/<encId>/telemetry` | D→S | heap/psram/แบต/WiFi RSSI ทุก ~30s |
 
-## 6. ความปลอดภัย (production checklist)
+- เวป RPC: `ccp/web/user/<uid>/request` / `response/<id>`
+- API map deviceId↔encId จาก DB (`refreshDeviceMap`) และยังเรียนรู้จาก `status.id` ที่จอส่งมา
 
-- [ ] เปลี่ยนรหัส EMQX dashboard + เปิด HTTP auth hook ชี้ `/api/v1/emqx/auth` (M5)
-- [ ] MQTT ใช้ TLS 8883 + per-device credentials (ออกตอน claim)
-- [ ] เปลี่ยน `JWT_SECRET`, Postgres/MinIO passwords ใน `.env`
-- [ ] LAN API ของจอยังไม่มี auth (v1) — ใช้ในวง LAN ที่ไว้ใจได้เท่านั้น
-- [ ] เปิด Stripe webhook secret จริง + ทดสอบด้วย `stripe trigger checkout.session.completed`
-- [ ] GitHub token / API keys ห้าม commit — `.env` อยู่ใน .gitignore แล้ว
+---
 
-## 7. Monitoring & แก้ปัญหา
+## 8. แก้ปัญหา (Troubleshooting)
 
 | อาการ | เช็ค |
 |---|---|
-| เครื่อง offline | `status` retained ใน MQTT, ไฟ/WiFi, LWT จะ set `online:false` เอง |
-| sync ไม่ลง | `cmd/res` error, พื้นที่ SD (`telemetry.sd_free_kb`), sha256 ตรงไหม |
-| heap ลดเรื่อยๆ | `telemetry.heap_min` — แจ้งทีมเฟิร์มแวร์พร้อม log |
-| WASM พัง | `telemetry.wasm_crashes` เพิ่ม = module โดน terminate (3 ครั้ง = ปิดถาวรจนกว่า reload) |
+| เครื่องไม่ขึ้น online | จอต่อ WiFi ไหม · status retained ใน broker · MAC ที่ provision ตรงกับเครื่องจริงไหม |
+| สั่ง cmd แล้วเครื่องไม่ตอบ | firmware รุ่นเก่าอาจ subscribe topic plaintext เดิม — ต้องเป็นรุ่นที่ใช้ encId · ดูสถานะ MQTT บนแอดมินเป็นเขียว |
+| `/device/bootstrap` 401 | เครื่องไม่มี token / token ไม่ตรง hash ใน DB → ทำข้อ 3.6 (push token) ใหม่ |
+| provision แล้ว id ไม่เปลี่ยนบนจอ | ยังไม่ได้ยิง `POST http://<device-ip>/api/v1/provision` หรือเครื่องไม่อยู่วง LAN เดียวกัน |
+| config ที่ user ตั้งหาย | ตรวจ revision/optimistic concurrency · publish payload ต้องไม่ทับค่า user |
 | ดู log บนเครื่อง | เสียบ USB → `idf.py -p /dev/cu.usbmodem* monitor` |
+
+> เอกสารเชิงลึก: [SUPABASE_DEVICE_CONFIG_SCHEMA.md](SUPABASE_DEVICE_CONFIG_SCHEMA.md) · [DEVICE_PROVISIONING_SPEC.md](DEVICE_PROVISIONING_SPEC.md) · [CLOUD_DEPLOY_HANDOFF.md](CLOUD_DEPLOY_HANDOFF.md) · แผนทดสอบ: [QA_TEST_PROMPT_MINIMAX.md](QA_TEST_PROMPT_MINIMAX.md)

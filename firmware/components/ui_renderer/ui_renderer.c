@@ -2,7 +2,7 @@
 #include "display_engine.h"
 #include "storage.h"
 #include "widgets/gif/lv_gif.h" /* lv_gif_class / lv_gif_set_src for runtime src binding */
-#include "ccp_fonts.h" /* lv_font_montserrat_80 (large clock font) */
+#include "ccp_fonts.h" /* large clock fonts */
 
 #include <stdio.h>
 #include <string.h>
@@ -117,8 +117,33 @@ static const lv_font_t *parse_font(const char *name)
 #if LV_FONT_MONTSERRAT_48
     if (!strcmp(name, "montserrat_48")) return &lv_font_montserrat_48;
 #endif
-    /* custom large clock font (digits + colon), from the ccp_fonts component */
+    /* Clock-only bitmap fonts (digits + colon), from the ccp_fonts component. */
+    if (!strcmp(name, "montserrat_32")) return &lv_font_montserrat_32;
+    if (!strcmp(name, "montserrat_64")) return &lv_font_montserrat_64;
     if (!strcmp(name, "montserrat_80")) return &lv_font_montserrat_80;
+    if (!strcmp(name, "montserrat_96")) return &lv_font_montserrat_96;
+    if (!strcmp(name, "montserrat_112")) return &lv_font_montserrat_112;
+    if (!strcmp(name, "montserrat_128")) return &lv_font_montserrat_128;
+    if (!strcmp(name, "montserrat_144")) return &lv_font_montserrat_144;
+    if (!strcmp(name, "montserrat_160")) return &lv_font_montserrat_160;
+    if (!strcmp(name, "dseg7_32")) return &lv_font_dseg7_32;
+    if (!strcmp(name, "dseg7_48")) return &lv_font_dseg7_48;
+    if (!strcmp(name, "dseg7_64")) return &lv_font_dseg7_64;
+    if (!strcmp(name, "dseg7_80")) return &lv_font_dseg7_80;
+    if (!strcmp(name, "dseg7_96")) return &lv_font_dseg7_96;
+    if (!strcmp(name, "dseg7_112")) return &lv_font_dseg7_112;
+    if (!strcmp(name, "dseg7_128")) return &lv_font_dseg7_128;
+    if (!strcmp(name, "dseg7_144")) return &lv_font_dseg7_144;
+    if (!strcmp(name, "dseg7_160")) return &lv_font_dseg7_160;
+    if (!strcmp(name, "dseg14_32")) return &lv_font_dseg14_32;
+    if (!strcmp(name, "dseg14_48")) return &lv_font_dseg14_48;
+    if (!strcmp(name, "dseg14_64")) return &lv_font_dseg14_64;
+    if (!strcmp(name, "dseg14_80")) return &lv_font_dseg14_80;
+    if (!strcmp(name, "dseg14_96")) return &lv_font_dseg14_96;
+    if (!strcmp(name, "dseg14_112")) return &lv_font_dseg14_112;
+    if (!strcmp(name, "dseg14_128")) return &lv_font_dseg14_128;
+    if (!strcmp(name, "dseg14_144")) return &lv_font_dseg14_144;
+    if (!strcmp(name, "dseg14_160")) return &lv_font_dseg14_160;
     return LV_FONT_DEFAULT;
 }
 
@@ -915,7 +940,10 @@ esp_err_t ui_renderer_load_json(const char *json, size_t len, const char *base_d
     cJSON *root = cJSON_ParseWithLength(json, len);
     ESP_RETURN_ON_FALSE(root, ESP_ERR_INVALID_ARG, TAG, "layout parse error");
 
-    if (!display_engine_lock(0)) {
+    /* Startup races the LVGL refresh task; allow it to release the lock instead
+     * of silently leaving an installed package page without a widget tree. */
+    if (!display_engine_lock(1000)) {
+        ESP_LOGE(TAG, "timed out waiting for display lock");
         cJSON_Delete(root);
         return ESP_ERR_TIMEOUT;
     }
@@ -1290,7 +1318,8 @@ static lv_obj_t *system_screen_base(void)
 
 void ui_renderer_show_boot_screen(const char *line1, const char *line2)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "ui_renderer_show_boot_screen: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = system_screen_base();
@@ -1322,7 +1351,8 @@ void ui_renderer_show_boot_screen(const char *line1, const char *line2)
 
 void ui_renderer_show_provisioning_screen(const char *ap_ssid)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "ui_renderer_show_provisioning_screen: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = system_screen_base();
@@ -1361,7 +1391,8 @@ void ui_renderer_show_provisioning_screen(const char *ap_ssid)
 
 void ui_renderer_show_lock_screen(void)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "ui_renderer_show_lock_screen: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = system_screen_base();

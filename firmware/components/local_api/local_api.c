@@ -104,6 +104,58 @@ static esp_err_t h_config_get(httpd_req_t *req)
     return ESP_OK;
 }
 
+/* Validate that required fields exist and have correct types/ranges.
+ * Required: pages (non-empty array of strings), brightness (0-100),
+ * page_delay_s (>=3), profile (object), owner (object), display_mode (string).
+ * Returns 0 if valid, -1 with err_out filled if invalid. */
+static int validate_config_json(const cJSON *root, char *err_out, size_t err_len)
+{
+    if (!cJSON_IsObject(root)) {
+        snprintf(err_out, err_len, "must be JSON object");
+        return -1;
+    }
+    const cJSON *pages = cJSON_GetObjectItem(root, "pages");
+    if (!cJSON_IsArray(pages) || cJSON_GetArraySize(pages) == 0) {
+        snprintf(err_out, err_len, "missing or empty 'pages' array");
+        return -1;
+    }
+    int valid_pages = 0;
+    const cJSON *p;
+    cJSON_ArrayForEach(p, pages) {
+        if (cJSON_IsString(p) && p->valuestring && p->valuestring[0]) valid_pages++;
+    }
+    if (valid_pages == 0) {
+        snprintf(err_out, err_len, "'pages' array has no valid strings");
+        return -1;
+    }
+    const cJSON *brightness = cJSON_GetObjectItem(root, "brightness");
+    if (!cJSON_IsNumber(brightness) || brightness->valueint < 0 || brightness->valueint > 100) {
+        snprintf(err_out, err_len, "'brightness' must be 0-100");
+        return -1;
+    }
+    const cJSON *delay = cJSON_GetObjectItem(root, "page_delay_s");
+    if (!cJSON_IsNumber(delay) || delay->valueint < 3) {
+        snprintf(err_out, err_len, "'page_delay_s' must be >= 3");
+        return -1;
+    }
+    const cJSON *profile = cJSON_GetObjectItem(root, "profile");
+    if (!cJSON_IsObject(profile)) {
+        snprintf(err_out, err_len, "missing 'profile' object");
+        return -1;
+    }
+    const cJSON *owner = cJSON_GetObjectItem(root, "owner");
+    if (!cJSON_IsObject(owner)) {
+        snprintf(err_out, err_len, "missing 'owner' object");
+        return -1;
+    }
+    const cJSON *mode = cJSON_GetObjectItem(root, "display_mode");
+    if (!cJSON_IsString(mode)) {
+        snprintf(err_out, err_len, "missing 'display_mode' string");
+        return -1;
+    }
+    return 0;
+}
+
 static esp_err_t h_config_post(httpd_req_t *req)
 {
     cors(req);
@@ -114,6 +166,7 @@ static esp_err_t h_config_post(httpd_req_t *req)
     if (!body) {
         return httpd_resp_send_500(req);
     }
+
     int rd = httpd_req_recv(req, body, req->content_len);
     if (rd <= 0) {
         free(body);
@@ -121,25 +174,81 @@ static esp_err_t h_config_post(httpd_req_t *req)
     }
     body[rd] = '\0';
 
+    /* Layer 1: validate schema BEFORE writing */
     cJSON *root = cJSON_Parse(body);
     if (!root) {
         free(body);
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid JSON");
     }
+
+    char err[96] = {0};
+    if (validate_config_json(root, err, sizeof(err)) != 0) {
+        ESP_LOGW(TAG, "config rejected: %s", err);
+        cJSON_Delete(root);
+        free(body);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err);
+    }
     cJSON_Delete(root);
 
-    /* config dir may not exist on first write */
+    /* Layer 2: backup current config before write */
+    char backup_path[200];
+    snprintf(backup_path, sizeof(backup_path), "%s.bak", config_path());
+    bool have_backup = false;
+    size_t cur_len = 0;
+    char *cur = storage_read_file(config_path(), &cur_len);
+    if (cur && cur_len > 0 && cur_len < 8192) {
+        if (storage_write_file_atomic(backup_path, cur, cur_len) == ESP_OK) {
+            have_backup = true;
+        }
+        free(cur);
+    }
+
+    /* Write new config */
     char dir[96];
     snprintf(dir, sizeof(dir), "%s/config",
              storage_sd_mounted() ? STORAGE_SD_BASE : STORAGE_LFS_BASE);
     storage_mkdirs(dir);
 
-    esp_err_t err = storage_write_file_atomic(config_path(), body, rd);
+    esp_err_t werr = storage_write_file_atomic(config_path(), body, rd);
     free(body);
-    if (err != ESP_OK) {
+    if (werr != ESP_OK) {
+        if (have_backup) unlink(backup_path);
         return httpd_resp_send_500(req);
     }
-    home_ui_reload();
+
+    /* Try reload. A lock timeout means LVGL is only momentarily busy — the
+     * new config is already safely on disk and will take effect on the next
+     * reload/boot, so keep it and report 503 (busy) instead of destroying a
+     * valid write with a rollback. Genuine reload failures still roll back. */
+    esp_err_t reload_err = home_ui_reload();
+    if (reload_err == ESP_ERR_TIMEOUT) {
+        ESP_LOGW(TAG, "config saved but reload busy (LVGL lock) — keeping config, returning 503");
+        if (have_backup) unlink(backup_path);   /* keep the new config; drop the backup */
+        httpd_resp_set_status(req, "503 Service Unavailable");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req,
+            "{\"ok\":false,\"saved\":true,\"reloaded\":false,\"reason\":\"reload busy, will apply shortly\"}",
+            HTTPD_RESP_USE_STRLEN);
+    }
+    if (reload_err != ESP_OK) {
+        ESP_LOGE(TAG, "config reload failed (%s) — rolling back", esp_err_to_name(reload_err));
+        if (have_backup) {
+            size_t bk_len = 0;
+            char *bk = storage_read_file(backup_path, &bk_len);
+            if (bk && bk_len > 0) {
+                storage_write_file_atomic(config_path(), bk, bk_len);
+                free(bk);
+                home_ui_reload();   /* best effort retry */
+            }
+            unlink(backup_path);
+        }
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR,
+                                    "reload failed, rolled back");
+    }
+
+    /* Success: cleanup backup */
+    if (have_backup) unlink(backup_path);
+
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
 }
@@ -157,6 +266,10 @@ static esp_err_t h_brightness(httpd_req_t *req)
     if (!cJSON_IsNumber(v)) {
         cJSON_Delete(root);
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need {\"value\":0-100}");
+    }
+    if (v->valueint < 0 || v->valueint > 100) {
+        cJSON_Delete(root);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "value must be 0-100");
     }
     ccp_board_set_brightness(v->valueint);
     cJSON_Delete(root);

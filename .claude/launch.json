@@ -7,6 +7,12 @@
       "runtimeArgs": ["--dir", "server", "--filter", "@ccp/web", "dev"],
       "port": 3000,
       "autoPort": false
+    },
+    {
+      "name": "web-user",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["web-user/serve.js"],
+      "port": 8099
     }
   ]
 }

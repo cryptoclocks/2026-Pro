@@ -16,6 +16,18 @@
 #include "sync_manager.h"
 #include "storage.h"
 
+#include "esp_system.h"
+#include "ccp_board.h"
+#include "display_engine.h"
+#include "audio_engine.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+/* Forward decl for settings_sync_from_server (defined in app_main.c, may
+ * need to make non-static if currently static). */
+extern void settings_sync_from_server(void);
+
 static const char *TAG = "dbg";
 static char s_buf[3072]; /* shared scratch for listings */
 
@@ -117,6 +129,98 @@ static int cmd_ver(int argc, char **argv)
     return 0;
 }
 
+/* -------------------------------------------------------------- bonus debug commands */
+
+static int cmd_restart(int argc, char **argv)
+{
+    printf("Rebooting in 500ms...\n");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return 0;
+}
+
+static int cmd_brightness(int argc, char **argv)
+{
+    if (argc < 2) {
+        printf("usage: brightness <0-100>\n");
+        return 1;
+    }
+    int v = atoi(argv[1]);
+    if (v < 0 || v > 100) {
+        printf("brightness must be 0-100\n");
+        return 1;
+    }
+    ccp_board_set_brightness(v);
+    printf("brightness set to %d\n", v);
+    return 0;
+}
+
+static int cmd_identify(int argc, char **argv)
+{
+    audio_engine_tone(1200, 250, 70);
+    printf("identify: beep done\n");
+    return 0;
+}
+
+static int cmd_reload_config(int argc, char **argv)
+{
+    printf("reloading config from disk...\n");
+    home_ui_reload();
+    printf("reload done\n");
+    return 0;
+}
+
+static void sync_cloud_task(void *arg)
+{
+    /* Run on a separate task with a generous stack — settings_sync_from_server
+     * does HTTPS + JSON parsing that overflows the console_repl stack. */
+    settings_sync_from_server();
+    vTaskDelete(NULL);
+}
+
+static int cmd_sync_cloud(int argc, char **argv)
+{
+    printf("triggering cloud sync on separate task (8KB stack)...\n");
+    TaskHandle_t h = NULL;
+    BaseType_t ok = xTaskCreate(sync_cloud_task, "dbg_sync_cloud", 8192,
+                                NULL, 3, &h);
+    if (ok != pdPASS || h == NULL) {
+        printf("failed to start sync-cloud task\n");
+        return 1;
+    }
+    return 0;
+}
+
+static int cmd_lock_test(int argc, char **argv)
+{
+    printf("trying display_engine_lock(100ms)...\n");
+    if (display_engine_lock(100)) {
+        printf("got lock, holding for 2s\n");
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        display_engine_unlock();
+        printf("released\n");
+    } else {
+        printf("lock timeout (lvgl may be busy)\n");
+    }
+    return 0;
+}
+
+static int cmd_lock_state(int argc, char **argv)
+{
+    /* Read-only probe: reports who (if anyone) currently holds the display
+     * lock and what state tag they registered. Useful when a long-running
+     * operation is suspected of starving the LVGL task. */
+    const char *state = display_engine_lock_holder_state();
+    uint32_t age_ms = display_engine_lock_holder_age_ms();
+    if (age_ms == 0) {
+        printf("display lock: free (state=%s)\n", state);
+    } else {
+        printf("display lock: held, state=%s, age=%lu ms\n",
+               state, (unsigned long)age_ms);
+    }
+    return 0;
+}
+
 /* -------------------------------------------------------------- setup */
 
 static void reg(const char *cmd, const char *help, esp_console_cmd_func_t fn, void *args)
@@ -155,6 +259,15 @@ void dbg_console_start(void)
     cat_args.file = arg_str1(NULL, NULL, "<file>", "file to dump (first 4KB)");
     cat_args.end = arg_end(1);
     reg("cat", "print an SD file", cmd_cat, &cat_args);
+
+    /* Bonus #7: debug aids that avoid needing a power-cycle */
+    reg("restart", "reboot device (500ms delay)", cmd_restart, NULL);
+    reg("brightness", "<0-100> set backlight", cmd_brightness, NULL);
+    reg("identify", "beep + flash for device ID", cmd_identify, NULL);
+    reg("reload-config", "re-read device.json + reload UI", cmd_reload_config, NULL);
+    reg("sync-cloud", "force settings_sync_from_server", cmd_sync_cloud, NULL);
+    reg("lock-test", "test display lock for 2s", cmd_lock_test, NULL);
+    reg("lock-state", "show current display lock holder + age", cmd_lock_state, NULL);
 
     /* non-fatal: a console that can't start (e.g. low memory) must never abort
      * the device into a boot loop */

@@ -24,6 +24,7 @@
 #include "cJSON.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "lvgl.h"
 
 #include "user_config.h"
@@ -43,7 +44,14 @@ static const char *TAG = "home_ui";
 #define MAX_PAGES        6
 #define MAX_SLIDES       8
 #define SPARK_POINTS     60
-#define CRYPTO_POLL_STACK 4096
+#define CRYPTO_POLL_STACK 8192   /* doubled; was overflowing on TLS+cJSON_parse */
+
+/* Route cJSON parse-tree allocations to PSRAM (matches ui_renderer.c pattern).
+ * crypto_poll_task stack is small (8KB); cJSON_Parse of 60-element kline array
+ * otherwise puts parse nodes on heap via default malloc — moving them to PSRAM
+ * reduces fragmentation risk and keeps the small task stack safe. */
+static void *ccp_cjson_malloc(size_t sz) { return heap_caps_malloc(sz, MALLOC_CAP_SPIRAM); }
+static void ccp_cjson_free(void *p) { heap_caps_free(p); }
 
 typedef enum { PAGE_CLOCK, PAGE_CRYPTO, PAGE_SLIDESHOW, PAGE_PACKAGE } page_kind_t;
 
@@ -646,12 +654,19 @@ static void crypto_render(void)
 }
 
 static void candle_render(void);
+static void candle_render_under_lock(void);
 
 static void crypto_apply_quote(double last, double chg_pct)
 {
-    if (!display_engine_lock(200)) {
+    /* Hold the display lock once for the whole update: crypto_render() (label
+     * updates) + candle_render_under_lock() (canvas repaint). The previous
+     * code released and reacquired the lock between these two steps, opening
+     * a window where the LVGL task could be starved mid-flush by a concurrent
+     * HTTP request. (Fix A: crypto_apply_quote single-lock pattern.) */
+    if (!display_engine_lock(500)) {
         return;
     }
+    display_engine_lock_set_state("crypto_quote");
     s.last_usd_price = last;
     s.last_chg_pct = chg_pct;
     crypto_render();
@@ -664,12 +679,10 @@ static void crypto_apply_quote(double last, double chg_pct)
         s.candles[i].c = p;
         if (p > s.candles[i].h) s.candles[i].h = p;
         if (p < s.candles[i].l) s.candles[i].l = p;
+        candle_render_under_lock();
     }
     s.last_quote_ms = (int64_t)(lv_tick_get());
     display_engine_unlock();
-    if (s.candle_canvas && s.candle_count > 0) {
-        candle_render(); /* re-locks internally */
-    }
 }
 
 /** GET url into buf; returns body length or <0. Logs failures. */
@@ -785,15 +798,16 @@ static void candle_fill_rect(int x0, int y0, int x1, int y1, lv_color_t col)
     }
 }
 
-/* draw all candles green/red onto the canvas (TradingView-style) */
-static void candle_render(void)
+/* draw all candles green/red onto the canvas (TradingView-style).
+ * Caller MUST hold the display lock; this function only does the LVGL
+ * work (no acquire/release) so it can be composed with other LVGL ops
+ * inside a single lock window. (Fix B: split heavy work + under-lock API.) */
+static void candle_render_under_lock(void)
 {
     if (!s.candle_canvas || s.candle_count <= 0) {
         return;
     }
-    if (!display_engine_lock(500)) {
-        return;
-    }
+    display_engine_lock_set_state("candle_render");
     int n = s.candle_count;
     float lo = s.candles[0].l, hi = s.candles[0].h;
     for (int i = 1; i < n; i++) {
@@ -836,6 +850,19 @@ static void candle_render(void)
     }
     lv_display_enable_invalidation(disp, true);
     lv_obj_invalidate(s.candle_canvas);
+}
+
+/* Public-style wrapper for callers that don't already hold the lock.
+ * Used by fetch_klines() in the crypto_poll task context. */
+static void candle_render(void)
+{
+    if (!s.candle_canvas || s.candle_count <= 0) {
+        return;
+    }
+    if (!display_engine_lock(500)) {
+        return;
+    }
+    candle_render_under_lock();
     display_engine_unlock();
 }
 
@@ -935,7 +962,22 @@ static void crypto_poll_task(void *arg)
     ESP_LOGI(TAG, "crypto poll task started (net=%d, symbol=%s, tf=%s)",
              s.net_connected, s.cfg.symbols[s.cur_symbol], s.cfg.timeframe);
 
+    /* Subscribe to task watchdog. Was previously missing, so a hang here was
+     * silently blamed on IDLE0. After subscribing we must reset the watchdog
+     * every loop iteration or it will fire and identify THIS task. */
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK) {
+        ESP_LOGW(TAG, "crypto_poll: esp_task_wdt_add failed: %s", esp_err_to_name(wdt_err));
+    }
+
+    /* Route cJSON parse-tree allocations to PSRAM. ui_renderer_init already
+     * installed the same hooks globally, but re-installing here keeps the
+     * intent local to this task and is idempotent. */
+    static cJSON_Hooks s_cjson_hooks = { .malloc_fn = ccp_cjson_malloc, .free_fn = ccp_cjson_free };
+    cJSON_InitHooks(&s_cjson_hooks);
+
     while (s.poll_run) {
+        esp_task_wdt_reset();   /* feed watchdog every iteration */
         if (!s.net_connected) {
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
@@ -981,6 +1023,8 @@ static void crypto_poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
+    /* Unsubscribe from task watchdog before deleting self (required by esp_task_wdt API). */
+    esp_task_wdt_delete(NULL);
     free(body);
     s.poll_task = NULL;
     vTaskDelete(NULL);
@@ -1943,7 +1987,8 @@ static void goto_page(int idx, bool anim_left)
 
 void home_ui_show_welcome(const char *status_line)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_show_welcome: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = screen_base();
@@ -2000,7 +2045,8 @@ void home_ui_show_welcome(const char *status_line)
 
 void home_ui_show_wifi_setup(const char *ap_ssid)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_show_wifi_setup: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = screen_base();
@@ -2161,7 +2207,8 @@ esp_err_t home_ui_init(void)
 
 void home_ui_show_home(void)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_show_home: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     goto_page(0, true);
@@ -2182,12 +2229,19 @@ void home_ui_set_package_activator(bool (*fn)(const char *dir, const char *slug)
 
 void home_ui_package_loaded(const char *slug, bool ok)
 {
-    /* runs on the sync worker (off the LVGL task). Wait for the lock like
-     * home_ui_reload() does — a short timeout could lose to the loading-screen
-     * spinner + the freshly-started package wasm and strand the swap. */
-    if (!display_engine_lock(0)) {
+    /* runs on the sync worker (off the LVGL task). Wait up to 500ms — the same
+     * grace as home_ui_reload, since an LCD-transfer storm can hold the lock for
+     * several frame-flushes. If we still can't get it, clear swap_pending so the
+     * navigation lock isn't wedged (goto_page bails while a swap is "in flight");
+     * the stale loading screen is replaced on the next goto/reload. We must not
+     * touch LVGL objects here without the lock, but swap_pending is a plain bool
+     * so releasing it from this task is safe. */
+    if (!display_engine_lock(500)) {
+        ESP_LOGE(TAG, "home_ui_package_loaded: lvgl lock timeout 500ms — UI busy, releasing swap");
+        s.swap_pending = false;
         return;
     }
+    display_engine_lock_set_state("pkg_loaded");
     const int idx = s.pending_idx;
     s.swap_pending = false;
     strlcpy(s.loaded_pkg_slug, (ok && slug) ? slug : "", sizeof(s.loaded_pkg_slug));
@@ -2261,7 +2315,8 @@ void home_ui_network_changed(bool connected, const char *ip)
 
 void home_ui_park(void)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_park: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     if (s.owns_screen && !s.park_screen) {
@@ -2274,9 +2329,19 @@ void home_ui_park(void)
 
 esp_err_t home_ui_reload(void)
 {
-    if (!display_engine_lock(0)) {
+    /* The rebuild below (destroy_pages + setup + build_page) must run under the
+     * display lock since every step touches LVGL, which is not thread-safe. The
+     * heavy package activation is already async (goto_page -> pkg_activator ->
+     * home_ui_package_loaded), so this critical section is short — the only risk
+     * is failing to *acquire* the lock while the LVGL task is mid-flush during an
+     * LCD-transfer storm (a flush can hold the lock ~250ms). Wait up to 500ms
+     * (≈two frame-flushes of grace) before giving up; the caller (POST /config)
+     * then keeps the saved config and returns 503 instead of rolling back. */
+    if (!display_engine_lock(500)) {
+        ESP_LOGE(TAG, "home_ui_reload: lvgl lock timeout 500ms — UI busy, deferring reload");
         return ESP_ERR_TIMEOUT;
     }
+    display_engine_lock_set_state("home_ui_reload");
     /* destroy_pages() deletes the active screen, which LVGL must never have
      * pulled out from under it (render task spins on the dangling screen) —
      * park the display on a blank screen during the rebuild */

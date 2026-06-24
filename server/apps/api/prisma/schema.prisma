@@ -277,6 +277,23 @@ model Counter {
   value Int    @default(0)
 }
 
+/// An uploaded device firmware image, served for OTA. The binary lives on the
+/// payload volume; the row holds metadata + integrity hash. OTA pushes send the
+/// device an `ota` command with this firmware's public file URL + sha256.
+model Firmware {
+  id          String   @id @default(cuid())
+  version     String // human/build version, e.g. "1.2.0" or a git short sha
+  channel     String   @default("stable") // stable | beta | dev
+  notes       String? // changelog / release notes
+  sha256      String // hex digest of the .bin (device verifies before flashing)
+  sizeBytes   Int
+  objectPath  String // absolute path on the payload volume
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@index([channel, createdAt])
+}
+
 model DeviceGroup {
   id      String   @id @default(cuid())
   name    String
