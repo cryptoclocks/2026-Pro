@@ -246,8 +246,8 @@ class DeviceApi {
 class CloudDeviceApi {
   constructor(rpc,deviceId){ this.rpc=rpc; this.deviceId=deviceId; this.mode='cloud'; this.supportsFiles=false; this.uploads=true; }
   async info(){ const d=await this.rpc.request('device.info',this.deviceId); return {...d,device_id:d.device_id||this.deviceId}; }
-  async getConfig(){ const d=await this.rpc.request('device.settings.get',this.deviceId); return d.config||d; }
-  async setConfig(config){ await this.rpc.request('device.settings.put',this.deviceId,{config}); }
+  async getConfig(){ const d=await Hub.getSettings(this.deviceId); return d.config||{}; }
+  async setConfig(config){ await Hub.saveSettings(this.deviceId, config); }
   async setBrightness(value){ await this.rpc.request('device.command',this.deviceId,{type:'brightness',params:{value}}); }
   async identify(){ await this.rpc.request('device.command',this.deviceId,{type:'identify'}); }
   async wifiReset(){ await this.rpc.request('device.command',this.deviceId,{type:'wifi_reset'}); }
@@ -291,6 +291,16 @@ const Hub = {
   async catalog(){ try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/items`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
   async entitlements(deviceId){ try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/entitlements`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
   async myDevices(){ try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/devices`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
+  async getSettings(deviceId){
+    const r = await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/settings`,{},10000);
+    if(!r.ok) throw new Error('HTTP '+r.status+' '+(await r.text()).slice(0,120));
+    return await r.json();
+  },
+  async saveSettings(deviceId, config){
+    const r = await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({config})},15000);
+    if(!r.ok) throw new Error('HTTP '+r.status+' '+(await r.text()).slice(0,120));
+    return await r.json();
+  },
   async claim(deviceId, code, name){
     try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/devices/claim`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deviceId,code,name})},15000);
       if(r.ok) return {ok:true, device:await r.json().catch(()=>null)};
@@ -359,7 +369,16 @@ class Ctrl {
     else { if(p.length<=1) return true; p=p.filter(x=>x!==page); }
     this.config.pages=p; return true; }
   movePage(slug,dir){ const p=this.enabledPages.slice(); const i=p.indexOf(slug); const j=i+dir; if(i<0||j<0||j>=p.length) return; [p[i],p[j]]=[p[j],p[i]]; this.config.pages=p; }
-  async save(){ const cfg=Object.assign({}, this.config, {pages:this.enabledPages, brightness:Math.round(this.brightness)}); const e=Auth.email(); if(e) cfg.owner={email:e}; await this.api.setConfig(cfg); this.config=cfg; }
+  async save(){
+    const cfg=Object.assign({}, this.config, {pages:this.enabledPages, brightness:Math.round(this.brightness)});
+    const e=Auth.email(); if(e) cfg.owner={email:e};
+    await this.api.setConfig(cfg);
+    if(this.api.mode==='lan' && CFG.hubBase && /^CCP\d{6}$/i.test(this.deviceId)){
+      try{ await Hub.saveSettings(this.deviceId, cfg); }
+      catch(err){ console.warn('Hub settings sync failed', err); }
+    }
+    this.config=cfg;
+  }
 }
 
 /* ===================== UI helpers ===================== */
@@ -696,6 +715,10 @@ function drawProfile(){
   if(el('avfile')) el('avfile').onchange=async()=>{ const f=el('avfile').files[0]; if(!f) return;
     el('avup').disabled=true; el('avup').textContent='…'; toast('Uploading photo…');
     try{ const png=await imgToSquarePng(f, 132); await c.api.upload('pages/profile/assets/avatar.png', png);
+      if(c.api.mode==='lan' && CFG.hubBase && /^CCP\d{6}$/i.test(c.deviceId)){
+        try{ await Hub.uploadAsset(c.deviceId, 'profile', 'avatar', png); }
+        catch(err){ console.warn('Hub avatar sync failed', err); }
+      }
       c.patch('profile','avatar','pages/profile/assets/avatar.png');
       const url=URL.createObjectURL(new Blob([png],{type:'image/png'}));
       el('avwrap').innerHTML=`<img src="${url}" style="width:100%;height:100%;object-fit:cover">`;

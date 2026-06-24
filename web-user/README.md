@@ -7,9 +7,9 @@ Browser version of the CryptoClock Pro user app. It supports two transports:
 - Local HTTP: direct LAN access to a display by IP remains available for
   development and same-WiFi maintenance.
 
-Photo, avatar, and GIF files are intentionally not sent through MQTT. Until the
-production signed-upload service exists, manage those files from the Flutter
-mobile app on the same WiFi as the display.
+Photo, avatar, and GIF files are intentionally not sent through MQTT. Production
+HTTPS uploads them through the Hub asset API; local HTTP mode still writes to the
+display over LAN and mirrors supported assets back to the Hub when signed in.
 
 ## Local development
 

@@ -19,7 +19,7 @@ export const mqttTopics = {
 export type DeviceCommandType =
   | "sync" | "reload" | "ota" | "reboot" | "brightness"
   | "identify" | "lock" | "unlock" | "wipe" | "show_page" | "notify" | "ping"
-  | "settings";
+  | "settings" | "sync_cloud";
 
 export interface DeviceCommand {
   id: string;

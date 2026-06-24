@@ -310,12 +310,14 @@ static void bootstrap_fetch_asset(const cJSON *a, const char *token)
  * revision. Authenticates with the minted device token. Every failure keeps the
  * local last-known-good config and never blocks boot.
  */
-void settings_sync_from_server(void)
+static void settings_sync_from_server_inner(bool force)
 {
     char token[128] = "";
     device_security_get_token(token, sizeof(token));
     char local_ver[16] = "0";
-    storage_kv_get_str("settings", "ver", local_ver, sizeof(local_ver));
+    if (!force) {
+        storage_kv_get_str("settings", "ver", local_ver, sizeof(local_ver));
+    }
 
     char url[224];
     snprintf(url, sizeof(url), "%s/api/v1/device/bootstrap?revision=%s",
@@ -402,6 +404,16 @@ void settings_sync_from_server(void)
         esp_http_client_cleanup(ac);
     }
     ESP_LOGI(TAG, "config applied (rev %d)", revision);
+}
+
+void settings_sync_from_server(void)
+{
+    settings_sync_from_server_inner(false);
+}
+
+void settings_sync_from_server_force(void)
+{
+    settings_sync_from_server_inner(true);
 }
 
 /* --------------------------------------------------------------- hooks */
@@ -501,6 +513,14 @@ static void cmd_respond(const char *id, bool ok, const char *error)
     conn_publish_cmd_res(json);
 }
 
+static void mqtt_sync_cloud_task(void *arg)
+{
+    (void)arg;
+    settings_sync_from_server_force();
+    publish_status();
+    vTaskDelete(NULL);
+}
+
 static void on_cmd(const char *json, size_t len)
 {
     cJSON *root = cJSON_ParseWithLength(json, len);
@@ -564,6 +584,12 @@ static void on_cmd(const char *json, size_t len)
         } else {
             cmd_respond(id, false, "missing version/config");
         }
+    } else if (!strcmp(type, "sync_cloud")) {
+        TaskHandle_t h = NULL;
+        BaseType_t ok = xTaskCreate(mqtt_sync_cloud_task, "mqtt_sync_cloud",
+                                    8192, NULL, 3, &h);
+        cmd_respond(id, ok == pdPASS && h != NULL,
+                    ok == pdPASS && h != NULL ? NULL : "sync task failed");
     } else if (!strcmp(type, "ota")) {
         const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(params, "fw_url"));
         const char *sha = cJSON_GetStringValue(cJSON_GetObjectItem(params, "fw_sha256"));

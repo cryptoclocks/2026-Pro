@@ -564,7 +564,8 @@ export class DevicesService {
       await tx.deviceSyncState.upsert({ where: { deviceDbId: device.id }, create: { deviceDbId: device.id, desiredRevision: h.revision, status: "pending" }, update: { desiredRevision: h.revision, status: "pending" } });
     });
     await this.compileAndPush(device.id, hwDeviceId);
-    return { assetId: asset.id, version, kind: det.kind, contentType: det.contentType, sizeBytes: buf.length, url: `/api/v1/devices/${hwDeviceId}/pages/${slug}/assets/${assetKey}/file` };
+    const syncCmdId = this.mqtt.sendCommand(hwDeviceId, "sync_cloud", { reason: "asset", slug, assetKey });
+    return { assetId: asset.id, version, kind: det.kind, contentType: det.contentType, sizeBytes: buf.length, url: `/api/v1/devices/${hwDeviceId}/pages/${slug}/assets/${assetKey}/file`, syncCmdId };
   }
 
   async listAssets(user: Pick<User, "id" | "role">, hwDeviceId: string, slug: string) {
@@ -710,7 +711,7 @@ export class DevicesService {
         : `pages/${a.pageSlug}/assets/${a.assetKey}.${ext}`;
       assets.push({
         id: v.id, page: a.pageSlug, key: a.assetKey, local_path: localPath,
-        download_url: `${base}/api/v1/device/assets/${v.id}/file?did=${encodeURIComponent(deviceId)}&token=${encodeURIComponent(token)}`,
+        download_url: `${base}/api/v1/device/assets/${v.id}/file`,
         sha256: v.sha256, size_bytes: Number(v.sizeBytes), content_type: v.contentType,
       });
     }
