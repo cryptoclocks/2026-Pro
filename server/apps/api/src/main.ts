@@ -1,6 +1,7 @@
 import { NestFactory } from "@nestjs/core";
 import { json, urlencoded } from "express";
 import { AppModule } from "./app.module";
+import { DevicesService } from "./devices/devices.service";
 
 async function bootstrap() {
   // rawBody is required for Stripe webhook signature verification
@@ -24,5 +25,16 @@ async function bootstrap() {
   const port = Number(process.env.PORT ?? 4000);
   await app.listen(port);
   console.log(`CryptoClock Pro Hub API on :${port}`);
+
+  // Idempotent: ensure every device with a legacy settings cache has been
+  // split into DeviceConfigHead + DevicePageSettings rows. Runs once per
+  // boot. (schema.md §10 — backfill step)
+  try {
+    const devices = app.get(DevicesService);
+    const r = await devices.backfillConfig();
+    console.log(`backfillConfig on boot: ${JSON.stringify(r)}`);
+  } catch (e) {
+    console.error("backfillConfig on boot failed:", e);
+  }
 }
 bootstrap();

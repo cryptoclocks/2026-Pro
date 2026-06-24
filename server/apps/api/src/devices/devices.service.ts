@@ -349,21 +349,61 @@ export class DevicesService {
    *  device's existing compiled `Device.settings`, for devices that have no
    *  DeviceConfigHead yet. Idempotent — already-migrated devices are skipped. */
   async backfillConfig() {
-    const devices = await this.prisma.device.findMany({ select: { id: true, deviceId: true, settings: true } });
-    let backfilled = 0;
+    const devices = await this.prisma.device.findMany({
+      select: { id: true, deviceId: true, settings: true },
+    });
+    let fullBackfill = 0;
+    let pageBackfill = 0;
     let skipped = 0;
     for (const d of devices) {
-      const head = await this.prisma.deviceConfigHead.findUnique({ where: { deviceDbId: d.id } });
-      if (head) { skipped++; continue; }
       const cfg = isPlainObject(d.settings) ? d.settings : {};
+      const head = await this.prisma.deviceConfigHead.findUnique({ where: { deviceDbId: d.id } });
+      if (!head) {
+        // Fresh device with no normalized config at all.
+        try {
+          await this.mirrorConfig(d.id, cfg, "device_import");
+          fullBackfill++;
+        } catch (e) {
+          this.logger.warn(`full backfill ${d.deviceId} failed: ${e}`);
+        }
+        continue;
+      }
+      // Head exists — do we have at least one DevicePageSettings row?
+      const pages = await this.prisma.devicePageSettings.findMany({ where: { deviceDbId: d.id } });
+      if (pages.length > 0) { skipped++; continue; }
+      // Head exists but no page rows → split the compiled config into pages.
       try {
-        await this.mirrorConfig(d.id, cfg, "device_import");
-        backfilled++;
+        await this.splitConfigIntoPages(d.id, cfg, "device_import");
+        pageBackfill++;
       } catch (e) {
-        this.logger.warn(`backfill ${d.deviceId} failed: ${e}`);
+        this.logger.warn(`page backfill ${d.deviceId} failed: ${e}`);
       }
     }
-    return { ok: true, backfilled, skipped, total: devices.length };
+    return { ok: true, fullBackfill, pageBackfill, skipped, total: devices.length };
+  }
+
+  /** One-shot helper for the second-class backfill case: head exists
+   *  but DevicePageSettings is empty. Splits the compiled config into
+   *  one page row per slug in CONFIG_PAGE_SLUGS, without bumping the
+   *  global revision (we're not changing config, just normalizing). */
+  private async splitConfigIntoPages(
+    deviceDbId: string,
+    fullConfig: Record<string, unknown>,
+    source: string,
+  ) {
+    const order = Array.isArray(fullConfig.pages) ? (fullConfig.pages as string[]) : [];
+    await this.prisma.$transaction(async (tx) => {
+      for (const slug of CONFIG_PAGE_SLUGS) {
+        const pcfg = fullConfig[slug];
+        if (!isPlainObject(pcfg)) continue;
+        const pos = order.indexOf(slug);
+        await tx.devicePageSettings.upsert({
+          where: { deviceDbId_pageSlug: { deviceDbId, pageSlug: slug } },
+          create: { deviceDbId, pageSlug: slug, config: pcfg as object, enabled: pos >= 0, position: pos >= 0 ? pos : 0, updatedSource: source },
+          update: { config: pcfg as object, enabled: pos >= 0, position: pos >= 0 ? pos : 0 },
+        });
+      }
+    });
   }
 
   /* ---------------------------------------------- normalized config REST (P2) */
