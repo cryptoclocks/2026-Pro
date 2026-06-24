@@ -286,6 +286,16 @@ function imgToSquarePng(file, size){
 const Hub = {
   async catalog(){ try{ const r=await tfetch(`${CFG.hubBase}/api/v1/store/items`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
   async entitlements(deviceId){ try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/devices/${deviceId}/entitlements`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
+  async myDevices(){ try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/devices`); if(!r.ok) return []; const j=await r.json(); return Array.isArray(j)?j:[]; }catch(_){ return []; } },
+  async claim(deviceId, code, name){
+    try{ const r=await hubFetch(`${CFG.hubBase}/api/v1/devices/claim`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({deviceId,code,name})},15000);
+      if(r.ok) return {ok:true, device:await r.json().catch(()=>null)};
+      if(r.status===401) return {error:'Please sign in again'};
+      if(r.status===409) return {error:'This device is already linked to an account'};
+      if(r.status===404) return {error:'Device ID not found — check the code on the box'};
+      return {error:'HTTP '+r.status+' '+(await r.text()).slice(0,100)};
+    }catch(e){ return {error:String(e)}; }
+  },
   async uploadAsset(deviceId, slug, key, bytes){
     const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     let bin=''; for(let i=0;i<u8.length;i++) bin+=String.fromCharCode(u8[i]);
@@ -413,23 +423,100 @@ function drawLogin(){
   el('google').onclick=()=>Auth.googleRedirect();
 }
 
+/* Parse a scanned/typed claim string into {id, code}. Accepts a bare device id,
+ * "<id> <code>" / "<id>|<code>", or a claim URL (…/claim/<code>?d=<id> or ?code=). */
+function parseClaim(text){
+  text=(text||'').trim(); let id='', code='';
+  const mi=text.match(/(CCP\d{6}|ccp-[0-9a-f]{12})/i); if(mi) id=mi[1];
+  const mc=text.match(/[?&](?:code|c)=([A-Za-z0-9_-]{4,})/) || text.match(/\/claim\/([A-Za-z0-9_-]{6,})/) || text.match(/[|: ]\s*([A-Za-z0-9_-]{6,12})\s*$/);
+  if(mc) code=mc[1];
+  return {id, code};
+}
+async function scanQR(onResult){
+  if(!('BarcodeDetector' in window)){ toast('QR scan not supported here — type the ID instead','err'); return; }
+  let stream;
+  try{ stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}); }
+  catch(e){ toast('Camera permission needed to scan','err'); return; }
+  const ov=document.createElement('div'); ov.style.cssText='position:fixed;inset:0;z-index:99;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px';
+  const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; v.muted=true; v.style.cssText='max-width:92%;max-height:70%;border-radius:14px';
+  const hint=document.createElement('div'); hint.textContent='Point the camera at the QR code on the box'; hint.style.cssText='color:#fff;font-size:14px';
+  const cancel=document.createElement('button'); cancel.className='primary'; cancel.textContent='Cancel'; cancel.style.width='auto';
+  ov.append(hint,v,cancel); document.body.appendChild(ov); v.srcObject=stream;
+  const det=new window.BarcodeDetector({formats:['qr_code']}); let live=true;
+  const stop=()=>{ live=false; stream.getTracks().forEach(t=>t.stop()); ov.remove(); };
+  cancel.onclick=stop;
+  const loop=async()=>{ if(!live) return; try{ const codes=await det.detect(v); if(codes&&codes[0]){ stop(); onResult(codes[0].rawValue||''); return; } }catch(_){ } if(live) requestAnimationFrame(loop); };
+  v.onloadedmetadata=()=>loop();
+}
+
 function drawConnect(){
   const cloudMode=location.protocol==='https:'&&!!CFG.mqttWsUrl;
   render(`${header('CryptoClock Pro', false, `<div class="act" id="out">Sign out</div>`)}<main>
-    <div class="panel"><div class="sub" style="margin-bottom:8px">${cloudMode?'Enter the CryptoClock device ID assigned to your account. Commands and settings use the secure MQTT gateway.':"Enter your display's IP address. Local mode works only on the same WiFi over HTTP."}</div>
-      <div class="row"><input class="grow" id="ip" type="text" placeholder="${cloudMode?'ccp-xxxxxxxxxxxx':'192.168.1.x'}" value="${esc(LS.get(cloudMode?'ccp_last_device':'ccp_last_ip')||'')}"><button class="primary" id="connect" style="width:auto">Connect</button></div>
-      <div id="cerr" class="err small" style="margin-top:8px"></div>
+    ${cloudMode?`<div class="sub" style="margin:2px 0 6px;font-weight:600">My CryptoClocks</div>
+    <div id="mydevs"><div class="sub">Loading your devices…</div></div>
+    <div class="panel" style="margin-top:6px">
+      <div class="ttl" style="font-size:15px;margin-bottom:8px">Add a device</div>
+      <div class="sub" style="margin-bottom:8px">Scan the QR on the box, or type the Device ID + claim code printed on the label.</div>
+      <div class="row"><input class="grow" id="cid" type="text" placeholder="Device ID (CCP000001)"><button id="scan" style="width:auto">📷 Scan</button></div>
+      <div class="row" style="margin-top:8px"><input class="grow" id="ccode" type="text" placeholder="Claim code"><button class="primary" id="claim" style="width:auto">Add</button></div>
+      <div id="aerr" class="err small" style="margin-top:8px"></div>
     </div>
+    <div class="panel" style="margin-top:10px">
+      <div class="sub" style="margin-bottom:8px">Already linked? Connect by Device ID:</div>
+      <div class="row"><input class="grow" id="ip" type="text" placeholder="ccp-xxxxxxxxxxxx" value="${esc(LS.get('ccp_last_device')||'')}"><button class="primary" id="connect" style="width:auto">Connect</button></div>
+      <div id="cerr" class="err small" style="margin-top:8px"></div>
+    </div>`
+    :`<div class="panel"><div class="sub" style="margin-bottom:8px">Enter your display's IP address. Local mode works only on the same WiFi over HTTP.</div>
+      <div class="row"><input class="grow" id="ip" type="text" placeholder="192.168.1.x" value="${esc(LS.get('ccp_last_ip')||'')}"><button class="primary" id="connect" style="width:auto">Connect</button></div>
+      <div id="cerr" class="err small" style="margin-top:8px"></div>
+    </div>`}
     <div class="sub" style="text-align:center;margin-top:8px">Signed in as ${esc(Auth.email()||'')}</div>
     <div class="panel" style="margin-top:14px"><div class="sub">New device? Join its WiFi <b>CCP-Setup-XXXX</b> and open <b>http://192.168.4.1</b> to set up WiFi first.</div></div>
   </main>`);
   el('out').onclick=()=>{ Auth.signOut(); go('welcome'); };
-  el('connect').onclick=async()=>{
-    const ip=el('ip').value.trim(); if(!ip) return;
-    const b=el('connect'); b.disabled=true; b.textContent='...'; el('cerr').textContent='';
-    try{ const api=cloudMode?new CloudDeviceApi(await MqttRpc.connect(),ip):new DeviceApi(ip); const info=await api.info(); LS.set(cloudMode?'ccp_last_device':'ccp_last_ip', ip);
+
+  const connectTo=async(id, btn)=>{
+    if(!id) return;
+    const b=btn||el('connect'); const lbl=b.textContent; b.disabled=true; b.textContent='…'; if(el('cerr')) el('cerr').textContent='';
+    try{ const api=cloudMode?new CloudDeviceApi(await MqttRpc.connect(),id):new DeviceApi(id); const info=await api.info(); LS.set(cloudMode?'ccp_last_device':'ccp_last_ip', id);
       App.ctrl=new Ctrl(api, info); await App.ctrl.load(); go('device');
-    }catch(e){ el('cerr').textContent=cloudMode?'Cannot reach this device through the MQTT gateway. ('+e+')':'Cannot reach device at '+ip+' — use local HTTP and the same WiFi. ('+e+')'; b.disabled=false; b.textContent='Connect'; }
+    }catch(e){ if(el('cerr')) el('cerr').textContent=cloudMode?'Cannot reach this device through the MQTT gateway. ('+e+')':'Cannot reach device at '+id+' — use local HTTP and the same WiFi. ('+e+')'; b.disabled=false; b.textContent=lbl; }
+  };
+  el('connect').onclick=()=>connectTo(el('ip').value.trim());
+
+  if(!cloudMode) return;
+
+  async function loadMyDevices(){
+    const box=el('mydevs'); if(!box) return;
+    const devs=await Hub.myDevices();
+    if(!devs.length){ box.innerHTML='<div class="panel"><div class="sub">No devices linked yet. Add one below 👇</div></div>'; return; }
+    box.innerHTML=devs.map(d=>{
+      const id=esc(d.deviceId||''); const nm=esc(d.name||d.deviceId||'CryptoClock');
+      const pill = (typeof d.online==='boolean')
+        ? `<span class="pill" style="font-size:11px"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${d.online?'#22c55e':'#6b7280'};margin-right:5px"></span>${d.online?'online':'offline'}</span>`
+        : '<span class="sub" style="font-size:18px">›</span>';
+      return `<div class="panel devcard" data-id="${id}" style="display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:8px">
+        <div class="ico" style="width:42px;height:42px;font-size:22px;background:rgba(240,185,11,.14);color:var(--accent)">⌚</div>
+        <div class="grow"><div class="ttl">${nm}</div><div class="sub" style="margin-top:2px">${id}</div></div>
+        ${pill}
+      </div>`;
+    }).join('');
+    box.querySelectorAll('.devcard').forEach(card=>card.onclick=()=>connectTo(card.dataset.id, card));
+  }
+  loadMyDevices();
+
+  el('scan').onclick=()=>scanQR(text=>{ const p=parseClaim(text); if(p.id) el('cid').value=p.id; if(p.code) el('ccode').value=p.code; if(p.id) toast('Scanned '+p.id,'ok'); else toast('No device ID in that QR','err'); });
+
+  el('claim').onclick=async()=>{
+    const id=el('cid').value.trim(), code=el('ccode').value.trim();
+    if(!id||!code){ el('aerr').textContent='Enter both the Device ID and the claim code.'; return; }
+    const b=el('claim'); b.disabled=true; b.textContent='…'; el('aerr').textContent='';
+    const r=await Hub.claim(id, code);
+    b.disabled=false; b.textContent='Add';
+    if(r.error){ el('aerr').textContent=r.error; return; }
+    toast('Device added ✓','ok'); el('cid').value=''; el('ccode').value='';
+    await loadMyDevices();
+    connectTo(id);
   };
 }
 
