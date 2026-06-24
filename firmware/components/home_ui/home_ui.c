@@ -43,7 +43,14 @@ static const char *TAG = "home_ui";
 #define MAX_PAGES        6
 #define MAX_SLIDES       8
 #define SPARK_POINTS     60
-#define CRYPTO_POLL_STACK 4096
+#define CRYPTO_POLL_STACK 8192   /* doubled; was overflowing on TLS+cJSON_parse */
+
+/* Route cJSON parse-tree allocations to PSRAM (matches ui_renderer.c pattern).
+ * crypto_poll_task stack is small (8KB); cJSON_Parse of 60-element kline array
+ * otherwise puts parse nodes on heap via default malloc — moving them to PSRAM
+ * reduces fragmentation risk and keeps the small task stack safe. */
+static void *ccp_cjson_malloc(size_t sz) { return heap_caps_malloc(sz, MALLOC_CAP_SPIRAM); }
+static void ccp_cjson_free(void *p) { heap_caps_free(p); }
 
 typedef enum { PAGE_CLOCK, PAGE_CRYPTO, PAGE_SLIDESHOW, PAGE_PACKAGE } page_kind_t;
 
@@ -934,6 +941,12 @@ static void crypto_poll_task(void *arg)
     }
     ESP_LOGI(TAG, "crypto poll task started (net=%d, symbol=%s, tf=%s)",
              s.net_connected, s.cfg.symbols[s.cur_symbol], s.cfg.timeframe);
+
+    /* Route cJSON parse-tree allocations to PSRAM. ui_renderer_init already
+     * installed the same hooks globally, but re-installing here keeps the
+     * intent local to this task and is idempotent. */
+    static cJSON_Hooks s_cjson_hooks = { .malloc_fn = ccp_cjson_malloc, .free_fn = ccp_cjson_free };
+    cJSON_InitHooks(&s_cjson_hooks);
 
     while (s.poll_run) {
         if (!s.net_connected) {
