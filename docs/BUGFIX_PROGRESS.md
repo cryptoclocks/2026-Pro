@@ -331,11 +331,57 @@ git revert c088f48        # revert commit นี้
 ### Section 8 Checkpoint log
 | # | Fix | Status | Commit |
 |---|---|---|---|
-| D | lock holder diagnostics | ⏳ in progress | TBD |
-| A | crypto_apply_quote single-lock | ⏳ pending | TBD |
-| B | candle_render under-lock split | ⏳ pending | TBD |
-| C | home_ui_reload async split | ⏳ pending | TBD |
-| E | HTTP 503 reload busy | ⏳ pending | TBD |
+| D | lock holder diagnostics | ✅ DONE | `b22a301` |
+| A | crypto_apply_quote single-lock | ✅ DONE | `2bb5270` |
+| B | candle_render under-lock split | ✅ DONE | `2bb5270` |
+| C | home_ui_reload lock grace (re-scoped) | ✅ DONE | `c3b1a67` |
+| E | HTTP 503 reload busy (no destructive rollback) | ✅ DONE | `c3b1a67` |
+| F | home_ui_package_loaded: 500ms + release stuck swap | ✅ DONE | `c3b1a67` |
+
+### Section 8 — findings + verification (2026-06-24, completed)
+
+**Fix A+B** (`2bb5270`): `crypto_apply_quote()` now holds the display lock once
+for `crypto_render()` + `candle_render_under_lock()` (was release/reacquire →
+starvation window). `candle_render()` split into an under-lock worker + a thin
+acquiring wrapper for the `fetch_klines()` path.
+- Verified: goto crypto + 30s HTTP /info hammer (**517/517 ok**) → **0** lock
+  timeouts, **0** task_wdt, **0** crashes, 6 quotes rendered, LVGL heartbeat
+  continuous. `lock-state` (Fix D) reports `free (state=none)`.
+
+**Fix C re-scoped — premise didn't match the code.** The plan assumed
+`home_ui_reload` made a 5–10 s synchronous WAMR call under the lock. It does
+not: package activation is already async (`goto_page → pkg_activator →
+home_ui_package_loaded` callback). The reload critical section is short. The
+real failure was *failing to acquire* the 200 ms lock while the LVGL task was
+mid-flush during an LCD-transfer storm. So instead of a risky async rewrite:
+- `home_ui_reload` lock-acquire 200 → **500 ms** (≈2 frame-flushes of grace).
+
+**Fix E** (`c3b1a67`): `POST /config` on a reload **timeout** now returns
+**HTTP 503** and **keeps** the saved config (applies on next reload/boot)
+instead of destroying a valid write with a rollback. Genuine reload failures
+still roll back + 500. This fixes the Section 6 "Test 4 → 500 rolled back" case.
+
+**Fix F — latent hang found on device + fixed.** During the Fix E contention
+test, the device **froze on the clock page**. Diagnosed via `pages`:
+`current=0 loaded_pkg=profile [swapping]` — a package-swap callback
+(`home_ui_package_loaded`) timed out at 200 ms and returned with
+`s.swap_pending == true`, so `goto_page()` then refused ALL navigation
+("swap in flight"). Self-healed only on the next reload (`destroy_pages` resets
+the flag). Fix: 200 → **500 ms** + **clear `swap_pending` on timeout** (safe —
+plain bool, no LVGL touch needed).
+- Recovery: re-flashed fixed fw → fresh boot clean (`loaded_pkg=clock`, no
+  `[swapping]`), `goto crypto ↔ clock` works.
+- Verified: 3x POST /config under load → all **200**, config persisted, 3 clock
+  package swaps completed with **0** `package_loaded` timeouts, **0** task_wdt,
+  **0** crashes.
+
+**Incident note:** a long-running background build+flash waiter was killed
+mid-run, leaving the device on the prior fw (`2bb5270-dirty`) stuck mid-swap
+(the Fix F bug). Running fw was intact (HTTP alive); re-flash recovered it.
+
+> Still out of scope (separate display-layer issue): **LCD-transfer-timeout
+> storm** on the crypto page (SPI/QSPI starvation) — Fix D now shows it clearly
+> as `holder=lvgl`. LVGL is not hung (heartbeat continuous); fps just drops.
 
 ### ถ้าต้องการ revert ทั้งหมด
 ```bash
