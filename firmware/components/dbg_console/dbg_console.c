@@ -205,6 +205,22 @@ static int cmd_lock_test(int argc, char **argv)
     return 0;
 }
 
+static int cmd_lock_state(int argc, char **argv)
+{
+    /* Read-only probe: reports who (if anyone) currently holds the display
+     * lock and what state tag they registered. Useful when a long-running
+     * operation is suspected of starving the LVGL task. */
+    const char *state = display_engine_lock_holder_state();
+    uint32_t age_ms = display_engine_lock_holder_age_ms();
+    if (age_ms == 0) {
+        printf("display lock: free (state=%s)\n", state);
+    } else {
+        printf("display lock: held, state=%s, age=%lu ms\n",
+               state, (unsigned long)age_ms);
+    }
+    return 0;
+}
+
 /* -------------------------------------------------------------- setup */
 
 static void reg(const char *cmd, const char *help, esp_console_cmd_func_t fn, void *args)
@@ -251,6 +267,7 @@ void dbg_console_start(void)
     reg("reload-config", "re-read device.json + reload UI", cmd_reload_config, NULL);
     reg("sync-cloud", "force settings_sync_from_server", cmd_sync_cloud, NULL);
     reg("lock-test", "test display lock for 2s", cmd_lock_test, NULL);
+    reg("lock-state", "show current display lock holder + age", cmd_lock_state, NULL);
 
     /* non-fatal: a console that can't start (e.g. low memory) must never abort
      * the device into a boot loop */

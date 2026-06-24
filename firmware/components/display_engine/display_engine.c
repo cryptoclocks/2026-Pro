@@ -437,6 +437,39 @@ esp_err_t display_engine_start(void)
     return ESP_OK;
 }
 
+/*
+ * Optional state tag — set by callers to a short string describing what
+ * they're currently doing under the lock (e.g. "candle_render", "reload").
+ * Read by display_engine_lock_holder_state() and used in timeout log so we
+ * know not just WHO holds the lock but WHAT they're doing with it.
+ */
+static char s_lock_state[24] = "idle";
+static uint32_t s_lock_state_ms = 0;
+static TaskHandle_t s_lock_state_holder = NULL;
+
+void display_engine_lock_set_state(const char *state)
+{
+    if (!state) state = "idle";
+    strlcpy(s_lock_state, state, sizeof(s_lock_state));
+    s_lock_state_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_lock_state_holder = xTaskGetCurrentTaskHandle();
+}
+
+const char *display_engine_lock_holder_state(void)
+{
+    TaskHandle_t cur = xSemaphoreGetMutexHolder(s_ctx.lvgl_mutex);
+    if (!cur || cur != s_lock_state_holder) return "none";
+    return s_lock_state;
+}
+
+uint32_t display_engine_lock_holder_age_ms(void)
+{
+    TaskHandle_t cur = xSemaphoreGetMutexHolder(s_ctx.lvgl_mutex);
+    if (!cur || cur != s_lock_state_holder) return 0;
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    return now - s_lock_state_ms;
+}
+
 bool display_engine_lock(uint32_t timeout_ms)
 {
     const TickType_t ticks = (timeout_ms == 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
@@ -444,13 +477,29 @@ bool display_engine_lock(uint32_t timeout_ms)
         return true;
     }
     TaskHandle_t holder = xSemaphoreGetMutexHolder(s_ctx.lvgl_mutex);
-    ESP_LOGE(TAG, "display lock timeout (%lu ms), holder=%s",
-             (unsigned long)timeout_ms, holder ? pcTaskGetName(holder) : "none");
+    const char *name = holder ? pcTaskGetName(holder) : "none";
+    /* If the holder registered a state tag, surface it. Stack HWM tells us
+     * if the holder is dangerously close to overflow (a classic cause of
+     * subtle hangs on this kind of system). */
+    if (holder && holder == s_lock_state_holder) {
+        UBaseType_t hwm = uxTaskGetStackHighWaterMark(holder);
+        ESP_LOGE(TAG, "display lock timeout (%lu ms), holder=%s state=%s age=%lu ms hwm=%u words",
+                 (unsigned long)timeout_ms, name, s_lock_state,
+                 (unsigned long)display_engine_lock_holder_age_ms(),
+                 (unsigned)hwm);
+    } else {
+        ESP_LOGE(TAG, "display lock timeout (%lu ms), holder=%s (no state)",
+                 (unsigned long)timeout_ms, name);
+    }
     return false;
 }
 
 void display_engine_unlock(void)
 {
+    /* Clear the holder's state tag on unlock so a stale value from a prior
+     * holder doesn't leak into the next timeout log. */
+    s_lock_state_holder = NULL;
+    strlcpy(s_lock_state, "idle", sizeof(s_lock_state));
     xSemaphoreGiveRecursive(s_ctx.lvgl_mutex);
 }
 

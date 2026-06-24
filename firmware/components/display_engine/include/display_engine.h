@@ -24,6 +24,21 @@ esp_err_t display_engine_start(void);
 bool display_engine_lock(uint32_t timeout_ms); /* 0 = wait forever */
 void display_engine_unlock(void);
 
+/**
+ * Optional: register a short string describing what the calling code is
+ * currently doing under the lock (e.g. "candle_render", "reload").
+ * Read by the next display lock timeout log so we know not just WHO holds
+ * the lock but WHAT they're doing with it. Safe to call repeatedly.
+ * Cleared automatically on display_engine_unlock().
+ */
+void display_engine_lock_set_state(const char *state);
+
+/** Inspect the current holder's state tag (or "none" if unlocked). */
+const char *display_engine_lock_holder_state(void);
+
+/** How long the current holder has held the lock, in ms (0 if unlocked). */
+uint32_t display_engine_lock_holder_age_ms(void);
+
 lv_display_t *display_engine_get_disp(void);
 
 /** Logical resolution after rotation is applied. */

@@ -308,6 +308,35 @@ git revert c088f48        # revert commit นี้
 - **LCD transfer timeout storm** — SPI/QSPI starvation ตอน crypto page — เป็น separate issue
 - **Section 6 Plan B** (.new/.ok marker + recovery) — ยังไม่ได้ทำ (ใช้แค่ fflush+fsync)
 
+---
+
+## Section 8 — LVGL hang root cause (round 2) — STARTED (2026-06-24)
+
+**Plan**: `docs/.../wiggly-cuddling-wren.md` (approved)
+**Revert point**: `git reset --hard 76e9618` (ก่อน Section 8)
+
+### Static analysis findings
+- **Pattern #1** `crypto_apply_quote` (home_ui.c:658) — release+reacquire lock window → LVGL task แทรกได้
+- **Pattern #2** `candle_render` (home_ui.c:797) — heavy CPU + canvas work under 500ms lock
+- **Pattern #3** `home_ui_reload` (home_ui.c:2304) — WAMR activator อาจใช้เวลา 5-10s under lock → LVGL starved
+- **Pattern #4** `flush_cb` (display_engine.c:165) — 250ms trans_done wait ต่อ frame
+
+### Fix breakdown
+- Fix A: `crypto_apply_quote` ใช้ single-lock
+- Fix B: `candle_render` แยก assumed-locked variant
+- Fix C: `home_ui_reload` 3-phase async split
+- Fix D: lock holder diagnostics (DONE first เพราะ build observability ก่อน)
+- Fix E: HTTP 503 สำหรับ reload busy
+
+### Section 8 Checkpoint log
+| # | Fix | Status | Commit |
+|---|---|---|---|
+| D | lock holder diagnostics | ⏳ in progress | TBD |
+| A | crypto_apply_quote single-lock | ⏳ pending | TBD |
+| B | candle_render under-lock split | ⏳ pending | TBD |
+| C | home_ui_reload async split | ⏳ pending | TBD |
+| E | HTTP 503 reload busy | ⏳ pending | TBD |
+
 ### ถ้าต้องการ revert ทั้งหมด
 ```bash
 git reset --hard 7f9bf29   # กลับไปก่อน merge wip-snapshot (baseline + docs only)
