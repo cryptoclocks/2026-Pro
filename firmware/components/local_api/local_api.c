@@ -158,6 +158,10 @@ static esp_err_t h_brightness(httpd_req_t *req)
         cJSON_Delete(root);
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "need {\"value\":0-100}");
     }
+    if (v->valueint < 0 || v->valueint > 100) {
+        cJSON_Delete(root);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "value must be 0-100");
+    }
     ccp_board_set_brightness(v->valueint);
     cJSON_Delete(root);
     httpd_resp_set_type(req, "application/json");
