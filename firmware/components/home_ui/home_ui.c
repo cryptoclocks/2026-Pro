@@ -24,6 +24,7 @@
 #include "cJSON.h"
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_task_wdt.h"
 #include "lvgl.h"
 
 #include "user_config.h"
@@ -942,6 +943,14 @@ static void crypto_poll_task(void *arg)
     ESP_LOGI(TAG, "crypto poll task started (net=%d, symbol=%s, tf=%s)",
              s.net_connected, s.cfg.symbols[s.cur_symbol], s.cfg.timeframe);
 
+    /* Subscribe to task watchdog. Was previously missing, so a hang here was
+     * silently blamed on IDLE0. After subscribing we must reset the watchdog
+     * every loop iteration or it will fire and identify THIS task. */
+    esp_err_t wdt_err = esp_task_wdt_add(NULL);
+    if (wdt_err != ESP_OK) {
+        ESP_LOGW(TAG, "crypto_poll: esp_task_wdt_add failed: %s", esp_err_to_name(wdt_err));
+    }
+
     /* Route cJSON parse-tree allocations to PSRAM. ui_renderer_init already
      * installed the same hooks globally, but re-installing here keeps the
      * intent local to this task and is idempotent. */
@@ -949,6 +958,7 @@ static void crypto_poll_task(void *arg)
     cJSON_InitHooks(&s_cjson_hooks);
 
     while (s.poll_run) {
+        esp_task_wdt_reset();   /* feed watchdog every iteration */
         if (!s.net_connected) {
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
@@ -994,6 +1004,8 @@ static void crypto_poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
+    /* Unsubscribe from task watchdog before deleting self (required by esp_task_wdt API). */
+    esp_task_wdt_delete(NULL);
     free(body);
     s.poll_task = NULL;
     vTaskDelete(NULL);
@@ -1956,7 +1968,8 @@ static void goto_page(int idx, bool anim_left)
 
 void home_ui_show_welcome(const char *status_line)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_show_welcome: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = screen_base();
@@ -2013,7 +2026,8 @@ void home_ui_show_welcome(const char *status_line)
 
 void home_ui_show_wifi_setup(const char *ap_ssid)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_show_wifi_setup: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = screen_base();
@@ -2174,7 +2188,8 @@ esp_err_t home_ui_init(void)
 
 void home_ui_show_home(void)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_show_home: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     goto_page(0, true);
@@ -2195,10 +2210,10 @@ void home_ui_set_package_activator(bool (*fn)(const char *dir, const char *slug)
 
 void home_ui_package_loaded(const char *slug, bool ok)
 {
-    /* runs on the sync worker (off the LVGL task). Wait for the lock like
-     * home_ui_reload() does — a short timeout could lose to the loading-screen
-     * spinner + the freshly-started package wasm and strand the swap. */
-    if (!display_engine_lock(0)) {
+    /* runs on the sync worker (off the LVGL task). Bounded timeout — if lvgl
+     * is hung we want the caller to fail fast and log it, not block forever. */
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_package_loaded: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     const int idx = s.pending_idx;
@@ -2274,7 +2289,8 @@ void home_ui_network_changed(bool connected, const char *ip)
 
 void home_ui_park(void)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_park: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     if (s.owns_screen && !s.park_screen) {
@@ -2287,7 +2303,8 @@ void home_ui_park(void)
 
 esp_err_t home_ui_reload(void)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "home_ui_reload: lvgl lock timeout 200ms — UI may be hung");
         return ESP_ERR_TIMEOUT;
     }
     /* destroy_pages() deletes the active screen, which LVGL must never have

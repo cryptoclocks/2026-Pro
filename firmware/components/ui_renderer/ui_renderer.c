@@ -1318,7 +1318,8 @@ static lv_obj_t *system_screen_base(void)
 
 void ui_renderer_show_boot_screen(const char *line1, const char *line2)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "ui_renderer_show_boot_screen: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = system_screen_base();
@@ -1350,7 +1351,8 @@ void ui_renderer_show_boot_screen(const char *line1, const char *line2)
 
 void ui_renderer_show_provisioning_screen(const char *ap_ssid)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "ui_renderer_show_provisioning_screen: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = system_screen_base();
@@ -1389,7 +1391,8 @@ void ui_renderer_show_provisioning_screen(const char *ap_ssid)
 
 void ui_renderer_show_lock_screen(void)
 {
-    if (!display_engine_lock(0)) {
+    if (!display_engine_lock(200)) {
+        ESP_LOGE(TAG, "ui_renderer_show_lock_screen: lvgl lock timeout 200ms — UI may be hung");
         return;
     }
     lv_obj_t *scr = system_screen_base();
