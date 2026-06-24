@@ -151,12 +151,26 @@ function Fleet() {
 function ProvisionModal({ token, onClose, onDone }: { token: string | null; onClose: () => void; onDone: () => void }) {
   const [f, setF] = useState<Record<string, string>>({
     mac: "", buyerEmail: "", firstname: "", lastname: "", position: "", company: "",
-    customerName: "", ssid: "", pass: "", oldssid: "", coin1: "", coin2: "", ads: "", permission: "1",
+    customerName: "", ssid: "ABong_Lab_2G", pass: "@Rock666", oldssid: "",
+    coin1: "", coin2: "", ads: "", permission: "1",
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [macBusy, setMacBusy] = useState(false);
   const [result, setResult] = useState<{ deviceId: string; token: string; claimCode: string } | null>(null);
   const set = (k: string, v: string) => setF((s) => ({ ...s, [k]: v }));
+
+  const readMac = async () => {
+    setMacBusy(true); setErr(null);
+    try {
+      const r = await api("/api/v1/devices/read-mac", token, { method: "POST" }) as { mac: string };
+      set("mac", r.mac);
+    } catch (e) {
+      setErr(e instanceof Error ? `Read MAC failed: ${e.message}` : "Read MAC failed");
+    } finally {
+      setMacBusy(false);
+    }
+  };
 
   const submit = async () => {
     if (!f.mac.trim()) { setErr("MAC address is required"); return; }
@@ -197,7 +211,12 @@ function ProvisionModal({ token, onClose, onDone }: { token: string | null; onCl
         Assigns the next CCP serial and records the buyer. Connect the new device by cable; it joins as that id on boot.
       </p>
       <Field label="MAC address (required)">
-        <input className="input w-full font-mono" value={f.mac} onChange={(e) => set("mac", e.target.value)} placeholder="98:3D:AE:E9:14:78" />
+        <div className="flex gap-2">
+          <input className="input w-full font-mono" value={f.mac} onChange={(e) => set("mac", e.target.value)} placeholder="98:3D:AE:E9:14:78" />
+          <button type="button" className="btn" onClick={readMac} disabled={macBusy} title="Read MAC from USB via esptool">
+            {macBusy ? "Reading…" : "Read MAC"}
+          </button>
+        </div>
       </Field>
       <div className="grid grid-cols-2 gap-3">{text("firstname", "First name")}{text("lastname", "Last name")}</div>
       <div className="grid grid-cols-2 gap-3">{text("position", "Position / Role")}{text("company", "Company")}</div>

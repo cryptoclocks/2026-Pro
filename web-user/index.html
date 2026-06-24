@@ -68,8 +68,12 @@
   .pill{ display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:700; padding:3px 9px; border-radius:20px; background:rgba(14,203,129,.12); color:var(--ok); letter-spacing:.3px; }
   .pill.dot:before{ content:""; width:6px; height:6px; border-radius:50%; background:var(--ok); box-shadow:0 0 6px var(--ok); }
   .secttl{ font-size:11px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.8px; margin:0 0 10px; }
-  .savebar{ position:fixed; left:0; right:0; bottom:0; z-index:8; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:linear-gradient(180deg, transparent, rgba(8,10,13,.9)30%); pointer-events:none; }
-  .savebar > *{ pointer-events:auto; max-width:540px; margin:0 auto; }
+  /* The save bar is fixed to the viewport but must stay centered within the
+   * .wrap content area (max-width:540px). Pinning to left:0/right:0 would
+   * center the button on the viewport instead of the page content, making
+   * the button look off-center on wide screens. */
+  .savebar{ position:fixed; left:50%; transform:translateX(-50%); bottom:0; width:min(100%, 540px); z-index:8; padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:linear-gradient(180deg, transparent, rgba(8,10,13,.9)30%); pointer-events:none; }
+  .savebar > *{ pointer-events:auto; width:100%; }
 </style>
 </head>
 <body>
@@ -551,8 +555,11 @@ function settingsPage(title, bodyHtml, collect){
   async function doSave(){
     collect(c); const b=el('saveBtn'); b.disabled=true; b.textContent='Saving...';
     try{ await c.save(); toast('Saved — display reloading','ok'); }
-    catch(e){ toast('Save failed: '+e,'err'); }
-    b.disabled=false; b.textContent='Save to display';
+    catch(e){ toast('Save failed: '+e,'err'); b.disabled=false; b.textContent='Save to display'; return; }
+    /* Re-render the current page so values shown reflect the new server state
+     * (especially the avatar: it switches from a local blob preview to the
+     * device-served file URL). history.replaceState keeps the back button sane. */
+    go(App.route, false);
   }
   el('save').onclick=doSave; el('saveBtn').onclick=doSave;
 }
