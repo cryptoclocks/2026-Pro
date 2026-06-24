@@ -39,8 +39,8 @@
 | 2 | LVGL task watchdog hang | Bug #2 | ✅ **DONE** | `5e219f0` |
 | 3 | POST /config schema validation | Bug #3 | ✅ **DONE** | `ecf01b9` |
 | 5 | slideshow transient lock timeout | Bug #5 | ✅ **DONE** | `9e7837c` |
-| 6 | FAT atomic write race | Bug #6 | 🔄 PENDING | — |
-| 7 | Bonus: serial debug commands | Bonus | 🔄 PENDING | — |
+| 6 | FAT atomic write race | Bug #6 | ✅ **DONE** | `94b0170` |
+| 7 | Bonus: serial debug commands | Bonus | ✅ **DONE** | `3e920b0` |
 
 **หมายเหตุ**: Section 1 (crypto) ทำก่อนเพราะเป็น P0 + กระทบแค่ 1 ไฟล์
 Section 4 (brightness) ทำก่อน Section 2 เพราะเร็วมาก (1 บรรทัด) — quick win
@@ -208,3 +208,110 @@ git revert c088f48        # revert commit นี้
 - HTTP `/api/v1/info`: 200 OK + valid JSON
 - pages(5) ยังครบทั้ง 5 หน้า
 - LVGL heartbeat FPS: 4-6 (ปกติ)
+
+---
+
+## Section 6 — FAT atomic write race (Plan A: fflush+fsync) ✅ DONE (2026-06-24)
+
+**Approach**: Plan A เท่านั้น (ไม่ใช่ .new/.ok scheme เพราะจะ conflict กับ Section 3 .bak)
+**File**: `firmware/components/storage/storage.c:233-271`
+**Commit**: `94b0170`
+
+### แก้
+- เพิ่ม `fflush(f)` + `fsync(fileno(f))` หลัง fwrite ก่อน fclose — บังคับให้ข้อมูลถึง SD card จริงก่อน rename
+- Fixed FD leak on short-write path
+- เพิ่ม error logging ทุกจุด
+- Cleanup .new ถ้า rename fail
+- rename/unlink sequence เดิม (FAT limitation)
+
+### Verify บนเครื่องจริง
+- ✅ Build + flash สำเร็จ
+- ✅ POST /config brightness=70 (regression test Section 3) → 200 OK
+- ✅ Upload PNG + List + Delete + List (roundtrip atomic write) → PASS
+- ✅ device.json on disk consistent
+- ⚠️ Test 4 (restore brightness=80) → HTTP 500 "reload failed, rolled back"
+  - ไม่ใช่ bug Section 6 — แต่ Section 3 rollback ทำงานถูกต้อง
+  - root cause: LVGL task ค้างจริง (200ms lock timeout) → home_ui_reload fail → rollback
+  - **ตอนนี้ watchdog log ระบุชัดเจน**: `task_wdt: - lvgl (CPU 1)` (เดิมเคยบอก `- IDLE1` ผิด)
+  - เป็น PROGRESS: Section 2 fix เห็นได้ชัดว่าทำงาน — watchdog ระบุได้ถูกต้องว่าใครค้าง
+  - แต่ LVGL ยังค้างเป็นบางครั้ง — เป็นปัญหาแยกที่ต้อง debug เพิ่ม (out of scope ตอนนี้)
+
+### ทุก caller ของ storage_write_file_atomic (5 จุด)
+- local_api.c:200 (backup write)
+- local_api.c:212 (primary write)  
+- local_api.c:227 (rollback restore) ← ถูก exercise ตอน Test 4 rollback
+- sync_manager.c:167, 391
+- storage.h:50 (declaration)
+
+---
+
+## Section 7 — Bonus: serial debug commands ✅ DONE (2026-06-24)
+
+**Commit**: `3e920b0 feat(dbg): add 6 serial debug commands (Bonus #7)`
+
+### แก้
+- `firmware/components/dbg_console/dbg_console.c`: เพิ่ม 6 คำสั่ง
+  - `restart` — reboot (500ms delay)
+  - `brightness <0-100>` — set backlight + range check
+  - `identify` — beep via audio_engine_tone(1200, 250, 70)
+  - `reload-config` — call home_ui_reload()
+  - `sync-cloud` — call settings_sync_from_server()
+  - `lock-test` — try display lock 2s
+- `firmware/components/dbg_console/CMakeLists.txt` — เพิ่ม REQUIRES: board_bsp display_engine audio_engine esp_system
+- `firmware/main/app_main.c:313` — ลบ `static` จาก `settings_sync_from_server` (1 caller เดิม, ไม่มี conflict)
+
+### ปัญหาที่เจอระหว่างทำ
+- `cmd_sync_cloud` เรียก HTTPS + cJSON parse โดยตรง → **stack overflow** ใน console task (เหมือน crypto_poll bug!)
+- Fix: spawn separate 8KB task (`sync_cloud_task`) ที่ call settings_sync_from_server แล้ว self-delete
+- ตอนนี้ sync-cloud ทำงานปลอดภัย — log ออกมา: "triggering cloud sync on separate task (8KB stack)..."
+
+### Verify บนเครื่องจริง
+- ✅ `help` แสดง 6 คำสั่งใหม่
+- ✅ `brightness 50` → "brightness set to 50"
+- ✅ `brightness 999` → "brightness must be 0-100"
+- ✅ `identify` → "identify: beep done"
+- ✅ `lock-test` → "got lock, holding for 2s" → "released"
+- ✅ `reload-config` → "config applied: /sd/config/device.json"
+- ✅ `sync-cloud` → HTTPS roundtrip → "bootstrap: unreachable/unauthorized — keeping local config" (ไม่มี token → expected)
+- ✅ HTTP /info ยังตอบปกติ
+- ⚠️ ไม่ทดสอบ `restart` (จะ kill serial — เก็บไว้ manual test)
+
+---
+
+## ✅ ทุก Section เสร็จแล้ว!
+
+### Summary
+
+| Section | Bug | Commit | สถานะ |
+|---|---|---|---|
+| Setup + wip merge | — | `180f318` | ✅ |
+| 1 | crypto_poll stack overflow | `c088f48` | ✅ DONE + pushed |
+| 4 | brightness range | `7879caf` | ✅ DONE + pushed |
+| 2 | LVGL watchdog hang | `5e219f0` | ✅ DONE + pushed |
+| 3 | POST /config validation | `ecf01b9` | ✅ DONE + pushed |
+| 5 | slideshow lock timeout | `9e7837c` | ✅ DONE + pushed |
+| 6 | FAT atomic write | `94b0170` | ✅ DONE + pushed |
+| 7 | Bonus debug commands | `3e920b0` | ✅ DONE + pushed |
+
+**Branch**: `bugfix/2026-06-24-p0-fixes` → pushed to `origin`
+**PR URL**: https://github.com/cryptoclocks/2026-Pro/pull/new/bugfix/2026-06-24-p0-fixes
+
+### Critical findings ระหว่างทำ
+1. **Main branch build ไม่ได้** — ต้อง merge wip-snapshot ก่อน (cc_aes.h missing) — checkpoint 1
+2. **idf.py ต้อง manual PATH + venv python** — wrapper `/tmp/ccp_idf.sh`
+3. **Section 2 fix เห็นผลจริง**: watchdog ตอนนี้ระบุได้ชัดว่า `lvgl` ค้าง (ไม่ใช่ IDLE1 อีกต่อไป)
+4. **Section 3 rollback ทำงานจริง**: ตอน Test 4 ของ Section 6, home_ui_reload fail → rollback สำเร็จ → device.json ไม่เสีย
+5. **Section 7 ค้น stack overflow ซ้ำ** ใน console task — fix ด้วย separate task 8KB
+
+### ปัญหาที่ยังเหลือ (out of scope รอบนี้)
+- **LVGL hang จริง** — ตอนนี้เห็นชัดว่า lvgl task ค้างเป็นบางครั้ง (backtrace addresses 0x4203xxxx-0x4205xxxx) — ต้อง debug เพิ่ม
+- **LCD transfer timeout storm** — SPI/QSPI starvation ตอน crypto page — เป็น separate issue
+- **Section 6 Plan B** (.new/.ok marker + recovery) — ยังไม่ได้ทำ (ใช้แค่ fflush+fsync)
+
+### ถ้าต้องการ revert ทั้งหมด
+```bash
+git reset --hard 7f9bf29   # กลับไปก่อน merge wip-snapshot (baseline + docs only)
+# หรือ
+git reset --hard 180f318   # กลับไป wip-snapshot merged (ก่อน bugfix)
+```
+
