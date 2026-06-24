@@ -654,12 +654,19 @@ static void crypto_render(void)
 }
 
 static void candle_render(void);
+static void candle_render_under_lock(void);
 
 static void crypto_apply_quote(double last, double chg_pct)
 {
-    if (!display_engine_lock(200)) {
+    /* Hold the display lock once for the whole update: crypto_render() (label
+     * updates) + candle_render_under_lock() (canvas repaint). The previous
+     * code released and reacquired the lock between these two steps, opening
+     * a window where the LVGL task could be starved mid-flush by a concurrent
+     * HTTP request. (Fix A: crypto_apply_quote single-lock pattern.) */
+    if (!display_engine_lock(500)) {
         return;
     }
+    display_engine_lock_set_state("crypto_quote");
     s.last_usd_price = last;
     s.last_chg_pct = chg_pct;
     crypto_render();
@@ -672,12 +679,10 @@ static void crypto_apply_quote(double last, double chg_pct)
         s.candles[i].c = p;
         if (p > s.candles[i].h) s.candles[i].h = p;
         if (p < s.candles[i].l) s.candles[i].l = p;
+        candle_render_under_lock();
     }
     s.last_quote_ms = (int64_t)(lv_tick_get());
     display_engine_unlock();
-    if (s.candle_canvas && s.candle_count > 0) {
-        candle_render(); /* re-locks internally */
-    }
 }
 
 /** GET url into buf; returns body length or <0. Logs failures. */
@@ -793,15 +798,16 @@ static void candle_fill_rect(int x0, int y0, int x1, int y1, lv_color_t col)
     }
 }
 
-/* draw all candles green/red onto the canvas (TradingView-style) */
-static void candle_render(void)
+/* draw all candles green/red onto the canvas (TradingView-style).
+ * Caller MUST hold the display lock; this function only does the LVGL
+ * work (no acquire/release) so it can be composed with other LVGL ops
+ * inside a single lock window. (Fix B: split heavy work + under-lock API.) */
+static void candle_render_under_lock(void)
 {
     if (!s.candle_canvas || s.candle_count <= 0) {
         return;
     }
-    if (!display_engine_lock(500)) {
-        return;
-    }
+    display_engine_lock_set_state("candle_render");
     int n = s.candle_count;
     float lo = s.candles[0].l, hi = s.candles[0].h;
     for (int i = 1; i < n; i++) {
@@ -844,6 +850,19 @@ static void candle_render(void)
     }
     lv_display_enable_invalidation(disp, true);
     lv_obj_invalidate(s.candle_canvas);
+}
+
+/* Public-style wrapper for callers that don't already hold the lock.
+ * Used by fetch_klines() in the crypto_poll task context. */
+static void candle_render(void)
+{
+    if (!s.candle_canvas || s.candle_count <= 0) {
+        return;
+    }
+    if (!display_engine_lock(500)) {
+        return;
+    }
+    candle_render_under_lock();
     display_engine_unlock();
 }
 
