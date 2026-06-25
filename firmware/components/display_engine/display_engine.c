@@ -99,6 +99,8 @@ typedef struct {
     uint32_t fps_window_start_ms;
     uint32_t fps_window_frames;
     float fps;
+    uint32_t flush_timeouts;         /* consecutive flush_cb transfer timeouts */
+    uint32_t recover_count;          /* consecutive panel-recover attempts */
 } display_ctx_t;
 
 static display_ctx_t s_ctx;
@@ -158,6 +160,38 @@ static void fill_band(uint16_t *dst, const uint16_t *frame, int py0, int rows)
 }
 
 /*
+ * Recover a wedged QSPI bus. Rapid full-frame flushes (fast page swiping, a
+ * config reload that reloads the screen) under PSRAM/WiFi contention can lose
+ * the color-transfer completion callback — the trans_done credit then sticks at
+ * 0 and every later flush times out forever, freezing the screen until a power
+ * cycle. Re-init the panel and force the bus-idle credit back so rendering
+ * resumes on its own.
+ */
+static void recover_panel(void)
+{
+    /* A panel reset+init clears the AXS15231B controller. If the ESP QSPI/DMA
+     * peripheral itself is wedged (the lost completion callback never returns),
+     * that alone won't take and the storm resumes — so after a few failed
+     * recoveries fall back to a clean reboot. That is exactly what a user does
+     * by power-cycling, just automatic, instead of a frozen screen. The count
+     * is cleared the moment a flush succeeds again. */
+    if (++s_ctx.recover_count >= 3) {
+        ESP_LOGE(TAG, "LCD bus stuck after %u resets — rebooting to recover",
+                 (unsigned)s_ctx.recover_count);
+        fflush(stdout);
+        vTaskDelay(pdMS_TO_TICKS(60));
+        esp_restart();
+    }
+    ESP_LOGW(TAG, "LCD bus wedged — resetting panel (attempt %u)", (unsigned)s_ctx.recover_count);
+    esp_lcd_panel_reset(s_ctx.panel);
+    esp_lcd_panel_init(s_ctx.panel);
+    /* Restore the bus-idle credit. The counting sem is capped at 1, so a late
+     * callback from the abandoned transfer is a harmless no-op. */
+    xSemaphoreGive(s_ctx.trans_done);
+    s_ctx.flush_timeouts = 0;
+}
+
+/*
  * Full-frame flush. AXS15231B in QSPI mode takes CASET only: the first band
  * (y=0) goes out with RAMWR, subsequent bands with RAMWRC continuation —
  * which is why we always stream the whole frame top to bottom.
@@ -173,9 +207,17 @@ static void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map)
 
     if (xSemaphoreTake(s_ctx.trans_done, pdMS_TO_TICKS(250)) != pdTRUE) {
         ESP_LOGE(TAG, "LCD transfer timeout");
+        /* A few isolated misses are fine (the credit comes back on the next
+         * completion). A sustained run means the callback is lost and the bus
+         * is wedged — recover so the screen un-freezes without a power cycle. */
+        if (++s_ctx.flush_timeouts >= 4) {
+            recover_panel();
+        }
         lv_display_flush_ready(disp);
         return;
     }
+    s_ctx.flush_timeouts = 0;   /* got the credit — the bus is healthy again */
+    s_ctx.recover_count = 0;
 
     /* Build one panel-native frame in PSRAM, then submit it as one color
      * transaction chain. Re-opening the SPI bus for every band can deadlock
