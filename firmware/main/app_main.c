@@ -393,13 +393,6 @@ static void settings_sync_from_server_inner(bool force)
             }
         }
     }
-    /* A new asset (e.g. the profile avatar) lands on disk above, but a plain
-     * home_ui_reload only re-adopts the already-loaded package screen and keeps
-     * showing the cached image. Re-activate the active package so the renderer
-     * re-reads its layout + assets from disk and the new avatar appears. */
-    if (assets_changed) {
-        load_active_or_recovery();
-    }
     cJSON_Delete(root);
 
     /* ACK the applied revision so the Hub shows applied == desired */
@@ -423,6 +416,18 @@ static void settings_sync_from_server_inner(bool force)
         esp_http_client_cleanup(ac);
     }
     ESP_LOGI(TAG, "config applied (rev %d)", revision);
+
+    /* A changed asset (e.g. a new profile avatar) is now on disk and the
+     * revision is acked. The loaded package caches its images, and a live
+     * package re-activation is heavy enough to stutter the display — so for the
+     * rare case of an actual asset change, reboot cleanly: the package re-reads
+     * avatar.png on boot and the new image shows without a frozen screen. Text-
+     * only saves don't reach here (sha matches → assets_changed stays false). */
+    if (assets_changed) {
+        ESP_LOGI(TAG, "asset changed — rebooting to apply");
+        vTaskDelay(pdMS_TO_TICKS(250));
+        esp_restart();
+    }
 }
 
 void settings_sync_from_server(void)
