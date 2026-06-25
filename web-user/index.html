@@ -624,7 +624,10 @@ function drawSystem(){
   el('app').querySelectorAll('[data-pg]').forEach(t=>t.onchange=()=>{ if(!c.setPageEnabled(t.dataset.pg, t.checked)){ t.checked=false; toast('Rotation is full ('+MAX_PAGES+' max)','err'); } else drawSystem(); });
   el('app').querySelectorAll('[data-mv]').forEach(b=>b.onclick=()=>{ const[p,d]=b.dataset.mv.split('|'); c.movePage(p,parseInt(d)); drawSystem(); });
   el('dmode').onchange=()=>{ el('delayWrap').style.display = el('dmode').value==='dynamic'?'':'none'; };
-  const br=el('bright'); br.oninput=()=>{ el('bval').textContent=br.value+'%'; c.brightness=parseInt(br.value); }; br.onchange=()=>c.api.setBrightness(parseInt(br.value));
+  const br=el('bright'); let blast=0;
+  br.oninput=()=>{ el('bval').textContent=br.value+'%'; c.brightness=parseInt(br.value);
+    const now=Date.now(); if(now-blast>130){ blast=now; c.api.setBrightness(parseInt(br.value)); } };
+  br.onchange=()=>c.api.setBrightness(parseInt(br.value));
   el('wifi').onclick=()=>{ if(confirm('Reset WiFi? The display reboots into its setup portal.')){ c.api.wifiReset(); toast('Resetting WiFi…'); } };
 }
 
@@ -648,7 +651,7 @@ function drawClock(){
       ${toggleRow('Show date','cdate', s.show_date!==false)}
       ${toggleRow('Show logo','clogo', s.show_logo===true)}
       ${selectRow('Date format','cdfmt', s.date_format||'D MMM YYYY', ['D MMM YYYY','DD/MM/YYYY','MM/DD/YYYY','YYYY-MM-DD'])}
-      ${field('Timezone offset (minutes)','ctz', s.tz_offset_min??420, 'number')}</div>
+      ${selectRow('Timezone','ctz', String(s.tz_offset_min??420), [['0','London (UTC+0)'],['60','Berlin / Paris (UTC+1)'],['180','Moscow (UTC+3)'],['240','Dubai (UTC+4)'],['330','India (UTC+5:30)'],['420','Bangkok / Jakarta / Hanoi (UTC+7)'],['480','Singapore / Manila / Perth (UTC+8)'],['540','Tokyo / Seoul (UTC+9)'],['600','Sydney (UTC+10)'],['-300','New York (UTC-5)'],['-360','Chicago (UTC-6)'],['-480','Los Angeles (UTC-8)']])}</div>
     <div class="panel">${selectRow('Theme preset','ctheme','', [['','— custom —'],...Object.keys(CLOCK_THEMES)])}
       ${colorField('Time colour','ctimec', s.time_color||'#00D1FF')}
       ${colorField('Seconds colour','csecc', s.sec_color||'#FF9500')}
@@ -728,10 +731,6 @@ async function refreshProfileAvatar(c, s){
 
 function drawProfile(){
   const c=App.ctrl, s=c.section('profile');
-  const social=(plat,label,url,fol,fwg,sec)=>`<div class="panel"><div class="ttl" style="margin-bottom:6px">${label}</div>
-    ${field('Profile URL','p_'+plat+'_url', s[plat+'_url']||'')}
-    <div class="grid2">${field('Followers','p_'+plat+'_fol', s[plat+'_followers']||'')}${field('Following','p_'+plat+'_fwg', s[plat+'_following']||'')}</div>
-    ${field('Secondary label','p_'+plat+'_sec', s[plat+'_secondary_label']||'')}</div>`;
   const avSrc = c.api.mode==='lan'&&c.api.supportsFiles&&s.avatar ? c.api.fileUrl(s.avatar)+'&t='+Date.now() : '';
   const avPanel = `<div class="panel"><div class="row">
     <div id="avwrap" style="width:64px;height:64px;border-radius:16px;overflow:hidden;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:30px;flex:none;box-shadow:0 0 0 1px rgba(255,255,255,.05) inset">${avSrc?`<img src="${avSrc}" style="width:100%;height:100%;object-fit:cover">`:'👤'}</div>
@@ -753,13 +752,10 @@ function drawProfile(){
       ${colorField('Name','p_namec', s.name_color||'#F0B90B')}${colorField('Role','p_rolec', s.role_color||'#848E9C')}
       ${colorField('Company','p_compc', s.company_color||'#848E9C')}${colorField('Verify badge','p_verc', s.verify_color||'#00D1FF')}
       ${colorField('Background','p_bgc', s.bg_color||'#0B0E11')}</div>
-    ${social('fb','Facebook')}${social('yt','YouTube')}${social('tt','TikTok')}${social('ig','Instagram')}
-    <button id="resolveSoc" style="width:100%">⟳ Auto-fill follower counts from URLs</button>
   `, (c)=>{ const g=(id)=>el(id).value.trim();
     c.patch('profile','show',el('p_show').checked);
     c.patch('profile','name',g('p_name')); c.patch('profile','nickname',g('p_nick')); c.patch('profile','role',g('p_role')); c.patch('profile','motto',g('p_motto')); c.patch('profile','company',g('p_company'));
     c.patch('profile','name_color',g('p_namec')); c.patch('profile','role_color',g('p_rolec')); c.patch('profile','company_color',g('p_compc')); c.patch('profile','verify_color',g('p_verc')); c.patch('profile','bg_color',g('p_bgc'));
-    for(const p of ['fb','yt','tt','ig']){ c.patch('profile',p+'_url',g('p_'+p+'_url')); c.patch('profile',p+'_followers',g('p_'+p+'_fol')); c.patch('profile',p+'_following',g('p_'+p+'_fwg')); c.patch('profile',p+'_secondary_label',g('p_'+p+'_sec')); }
   });
   refreshProfileAvatar(c, s);
   if(el('avup')) el('avup').onclick=()=>el('avfile').click();
@@ -776,14 +772,6 @@ function drawProfile(){
       toast('Photo uploaded — press Save to apply','ok');
     }catch(e){ toast('Upload failed: '+e,'err'); }
     el('avup').disabled=false; el('avup').textContent='Upload'; };
-  el('resolveSoc').onclick=async()=>{ const map={fb:'facebook',yt:'youtube',tt:'tiktok',ig:'instagram'};
-    const todo=Object.keys(map).filter(p=>el('p_'+p+'_url').value.trim());
-    if(!todo.length) return toast('Add at least one social URL first','err');
-    const b=el('resolveSoc'); b.disabled=true; b.textContent='Fetching…'; let n=0;
-    for(const p of todo){ const d=await Hub.resolveSocial(el('p_'+p+'_url').value.trim(), map[p]);
-      if(d.error){ toast(p.toUpperCase()+': '+d.error,'err'); continue; }
-      el('p_'+p+'_fol').value=(d.followers??d.likes??'')+''; el('p_'+p+'_fwg').value=(d.secondaryValue??d.following??d.talkingAbout??'')+''; n++; }
-    b.disabled=false; b.textContent='⟳ Auto-fill follower counts from URLs'; if(n) toast('Updated '+n+' — press Save','ok'); };
 }
 
 async function drawPhotos(){
