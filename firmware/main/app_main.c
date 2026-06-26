@@ -283,25 +283,34 @@ static void schedule_saved_page_settings_replay(void)
 /* Download one manifest asset to its SD path (sha-verified by conn_http_download).
  * download_url is absolute (PUBLIC_API_URL); the device token rides in the query
  * since the firmware HTTP downloader can't set headers. */
-static void bootstrap_fetch_asset(const cJSON *a, const char *token)
+/* Returns true only when a NEW/CHANGED file was written, so the caller knows
+ * whether a package re-activation is actually needed (a force sync re-lists
+ * every asset even on a text-only save). */
+static bool bootstrap_fetch_asset(const cJSON *a, const char *token)
 {
     const char *lp = cJSON_GetStringValue(cJSON_GetObjectItem(a, "local_path"));
     const char *du = cJSON_GetStringValue(cJSON_GetObjectItem(a, "download_url"));
     const char *sh = cJSON_GetStringValue(cJSON_GetObjectItem(a, "sha256"));
     if (!lp || !du || !storage_sd_mounted()) {
-        return;
+        return false;
     }
     char dest[200];
     snprintf(dest, sizeof(dest), "%s/%s", STORAGE_SD_BASE, lp);
     char *slash = strrchr(dest, '/');
     if (slash) { *slash = '\0'; storage_mkdirs(dest); *slash = '/'; }
+    /* Already current? skip the download (and skip re-activating the package). */
+    char local_sha[65];
+    if (sh && conn_sha256_file(dest, local_sha) == ESP_OK && !strcmp(local_sha, sh)) {
+        return false;
+    }
     char url[640];
     snprintf(url, sizeof(url), "%s?did=%s&token=%s", du, device_security_id(), token ? token : "");
     if (conn_http_download(url, dest, sh, 20000) == ESP_OK) {
-        ESP_LOGI(TAG, "asset %s ok", lp);
-    } else {
-        ESP_LOGW(TAG, "asset %s download failed", lp);
+        ESP_LOGI(TAG, "asset %s updated", lp);
+        return true;
     }
+    ESP_LOGW(TAG, "asset %s download failed", lp);
+    return false;
 }
 
 /*
@@ -375,10 +384,13 @@ static void settings_sync_from_server_inner(bool force)
     if (cJSON_IsObject(jcfg)) {
         apply_server_settings(revision, jcfg);
     }
+    bool assets_changed = false;
     if (cJSON_IsArray(jassets)) {
         const cJSON *a;
         cJSON_ArrayForEach(a, jassets) {
-            bootstrap_fetch_asset(a, token);
+            if (bootstrap_fetch_asset(a, token)) {
+                assets_changed = true;
+            }
         }
     }
     cJSON_Delete(root);
@@ -404,6 +416,18 @@ static void settings_sync_from_server_inner(bool force)
         esp_http_client_cleanup(ac);
     }
     ESP_LOGI(TAG, "config applied (rev %d)", revision);
+
+    /* A changed asset (e.g. a new profile avatar) is now on disk and the
+     * revision is acked. The loaded package caches its images, and a live
+     * package re-activation is heavy enough to stutter the display — so for the
+     * rare case of an actual asset change, reboot cleanly: the package re-reads
+     * avatar.png on boot and the new image shows without a frozen screen. Text-
+     * only saves don't reach here (sha matches → assets_changed stays false). */
+    if (assets_changed) {
+        ESP_LOGI(TAG, "asset changed — rebooting to apply");
+        vTaskDelay(pdMS_TO_TICKS(250));
+        esp_restart();
+    }
 }
 
 void settings_sync_from_server(void)
