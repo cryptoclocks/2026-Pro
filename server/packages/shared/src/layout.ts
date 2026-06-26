@@ -140,7 +140,17 @@ export const LayoutSchema = z.object({
         type: z.enum(["text", "number", "color", "select", "toggle"]),
         group: z.string().max(32).optional(),
         default: z.union([z.string(), z.number(), z.boolean()]).optional(),
-        options: z.array(z.string().max(32)).optional(), // for select
+        options: z
+          .array(
+            z.union([
+              z.string().max(32),
+              z.object({
+                value: z.union([z.string().max(32), z.number()]),
+                label: z.string().max(48),
+              }),
+            ]),
+          )
+          .optional(), // for select
         min: z.number().optional(),
         max: z.number().optional(),
         placeholder: z.string().max(48).optional(),

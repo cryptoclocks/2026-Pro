@@ -29,17 +29,33 @@ export type AssetEntry = {
   sizeBytes?: number;
 };
 export type SettingsFieldType = "text" | "number" | "color" | "select" | "toggle";
+export type SettingsOption = string | { value: string | number; label: string };
 export type SettingsField = {
   key: string;
   label: string;
   type: SettingsFieldType;
   group?: string;
   default?: string | number | boolean;
-  options?: string[];
+  options?: SettingsOption[];
   min?: number;
   max?: number;
   placeholder?: string;
 };
+
+export const CLOCK_TIMEZONE_OPTIONS: SettingsOption[] = [
+  { value: 0, label: "London (UTC+0)" },
+  { value: 60, label: "Berlin / Paris (UTC+1)" },
+  { value: 180, label: "Moscow (UTC+3)" },
+  { value: 240, label: "Dubai (UTC+4)" },
+  { value: 330, label: "India (UTC+5:30)" },
+  { value: 420, label: "Bangkok / Jakarta / Hanoi (UTC+7)" },
+  { value: 480, label: "Singapore / Manila / Perth (UTC+8)" },
+  { value: 540, label: "Tokyo / Seoul (UTC+9)" },
+  { value: 600, label: "Sydney (UTC+10)" },
+  { value: -300, label: "New York (UTC-5)" },
+  { value: -360, label: "Chicago (UTC-6)" },
+  { value: -480, label: "Los Angeles (UTC-8)" },
+];
 
 /** Built-in weather GIFs (Lottie→GIF), served from web/public, one per theme. */
 export const WEATHER_ASSETS: AssetEntry[] = (
@@ -201,7 +217,7 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 /* Real working clock logic — same time-keeping approach as the native clock
    (ask the host for epoch seconds every tick; host = SNTP on device, the
-   real system clock in the browser simulator). Widget ids: time / sec / date. */
+   real system clock in the browser simulator). Widget ids: time / sec / ampm / date. */
 export const CLOCK_LOGIC_SOURCE = `#![no_std]
 
 const CCP_ABI_VERSION: u32 = 1;
@@ -221,6 +237,7 @@ extern "C" {
 
 static mut W_TIME: i32 = -1;
 static mut W_SEC: i32 = -1;
+static mut W_AMPM: i32 = -1;
 static mut W_DATE: i32 = -1;
 static mut LAST: i64 = -1;
 
@@ -232,6 +249,7 @@ pub extern "C" fn ccp_on_init(abi_version: u32) -> i32 {
     unsafe {
         W_TIME = ccp_ui_get_widget(b"time".as_ptr(), 4);
         W_SEC = ccp_ui_get_widget(b"sec".as_ptr(), 3);
+        W_AMPM = ccp_ui_get_widget(b"ampm".as_ptr(), 4);
         W_DATE = ccp_ui_get_widget(b"date".as_ptr(), 4);
         ccp_request_tick(250); // check 4x/s so the seconds flip cleanly
     }
@@ -246,6 +264,7 @@ pub extern "C" fn ccp_on_tick(_now_ms: u64) {
             // device: SNTP not synced yet (never happens in the browser sim)
             set_text(W_TIME, b"--:--");
             set_text(W_SEC, b"");
+            set_text(W_AMPM, b"");
             set_text(W_DATE, b"Syncing time...");
             return;
         }
@@ -272,7 +291,7 @@ pub extern "C" fn ccp_on_tick(_now_ms: u64) {
         let m = (sod / 60) % 60;
         let s = sod % 60;
 
-        // time: 24h "HH:MM" or 12h "H:MM" (AM/PM shown in the seconds slot)
+        // time: 24h "HH:MM" or 12h "H:MM"; AM/PM uses its own widget.
         let (dh, pm) = if fmt24 {
             (h24, false)
         } else {
@@ -297,12 +316,15 @@ pub extern "C" fn ccp_on_tick(_now_ms: u64) {
         tn += 2;
         set_text(W_TIME, &tb[..tn]);
 
+        let mut sb = [0u8; 2]; // "SS"
+        put2(&mut sb[0..2], s);
+        set_text(W_SEC, &sb);
         if fmt24 {
-            let mut sb = [0u8; 2]; // "SS"
-            put2(&mut sb[0..2], s);
-            set_text(W_SEC, &sb);
+            set_text(W_AMPM, b"");
+        } else if pm {
+            set_text(W_AMPM, b"PM");
         } else {
-            set_text(W_SEC, if pm { b"PM" } else { b"AM" });
+            set_text(W_AMPM, b"AM");
         }
 
         let days = local.div_euclid(86400);
@@ -1712,7 +1734,7 @@ export const useBuilder = create<BuilderState>((set, get) => ({
             { key: "show_date", label: "Show date", type: "toggle" as const, default: true },
             { key: "date_format", label: "Date format", type: "select" as const, options: ["long", "dmy", "mdy", "iso"], default: "long" },
             { key: "show_logo", label: "Show logo", type: "toggle" as const, default: true },
-            { key: "tz_offset_min", label: "Timezone offset (min)", type: "number" as const, default: 420 },
+            { key: "tz_offset_min", label: "Timezone", type: "select" as const, options: CLOCK_TIMEZONE_OPTIONS, default: 420 },
             { key: "time_color", label: "Time colour", type: "color" as const, group: "Colours", default: "#00D1FF" },
             { key: "sec_color", label: "Seconds colour", type: "color" as const, group: "Colours", default: "#FF9500" },
             { key: "date_color", label: "Date colour", type: "color" as const, group: "Colours", default: "#848E9C" },

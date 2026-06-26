@@ -7,13 +7,14 @@
  */
 
 export type SettingsFieldType = "text" | "number" | "color" | "select" | "toggle";
+export type SettingsOption = string | { value: string | number; label: string };
 export type SettingsField = {
   key: string;
   label: string;
   type: SettingsFieldType;
   group?: string;
   default?: string | number | boolean;
-  options?: string[];
+  options?: SettingsOption[];
   min?: number;
   max?: number;
   placeholder?: string;
@@ -98,11 +99,26 @@ function Field({
     );
   }
   if (f.type === "select") {
+    const opts = f.options ?? [];
+    const valueOf = (o: SettingsOption) => typeof o === "string" ? o : o.value;
+    const labelOf = (o: SettingsOption) => typeof o === "string" ? o : o.label;
+    const coerce = (raw: string | number) => {
+      if (typeof raw === "number") return raw;
+      if (typeof f.default === "number" && raw !== "" && !Number.isNaN(Number(raw))) return Number(raw);
+      return raw;
+    };
     return (
       <select className="select text-xs px-2 py-1" disabled={disabled}
-        value={String(value ?? f.default ?? "")} onChange={(e) => onChange(e.target.value)}>
+        value={String(value ?? f.default ?? "")}
+        onChange={(e) => {
+          const hit = opts.find((o) => String(valueOf(o)) === e.target.value);
+          onChange(coerce(hit ? valueOf(hit) : e.target.value));
+        }}>
         <option value="">—</option>
-        {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+        {opts.map((o) => {
+          const v = valueOf(o);
+          return <option key={String(v)} value={String(v)}>{labelOf(o)}</option>;
+        })}
       </select>
     );
   }

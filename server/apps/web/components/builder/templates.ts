@@ -198,7 +198,8 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
   blank: { name: "Blank", widgets: [] },
 
   /* Mirrors the native clock page (home_ui.c): date above, big 80px-capable
-     time, small orange seconds at the minutes' baseline, 48x48 brand logo bottom-center.
+     time, small orange seconds at the minutes' baseline, separate AM/PM label
+     for 12-hour mode, 48x48 brand logo bottom-center.
      Driven by CLOCK_LOGIC_SOURCE (real wasm) — not by mock bindings. */
   clock: {
     name: "Clock",
@@ -225,7 +226,7 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
         bindings: [{ prop: "style.text_color", source: "settings", path: "time_color" }],
       },
       {
-        // seconds, or AM/PM when 12-hour — text driven by CLOCK_LOGIC_SOURCE wasm
+        // seconds only — AM/PM has its own widget so 12-hour mode never overlaps it
         type: "label", id: "sec", x: 424, y: 190, w: 48, h: 26,
         props: { text: "" },
         style: { text_color: "#FF9500", align: "left", font: "montserrat_20" },
@@ -233,6 +234,12 @@ export const TEMPLATES: Record<TemplateKey, { name: string; widgets: WidgetNode[
           { prop: "visible", source: "settings", path: "show_seconds" },
           { prop: "style.text_color", source: "settings", path: "sec_color" },
         ],
+      },
+      {
+        type: "label", id: "ampm", x: 424, y: 160, w: 48, h: 26,
+        props: { text: "" },
+        style: { text_color: "#FF9500", align: "left", font: "montserrat_20" },
+        bindings: [{ prop: "style.text_color", source: "settings", path: "sec_color" }],
       },
       {
         type: "image", id: "logo", x: 216, y: 266, w: 48, h: 48,

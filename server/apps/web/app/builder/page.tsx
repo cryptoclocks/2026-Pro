@@ -11,7 +11,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import type { Layout, WidgetNode, WidgetType } from "@ccp/shared";
-import { NOOP_LOGIC_SOURCE, UNAVAILABLE_LOGIC_SOURCE, useBuilder, type AssetEntry, type CompiledWasm, type WasmModuleConfig } from "@/components/builder/store";
+import { NOOP_LOGIC_SOURCE, UNAVAILABLE_LOGIC_SOURCE, useBuilder, type AssetEntry, type CompiledWasm, type SettingsOption, type WasmModuleConfig } from "@/components/builder/store";
 import { WidgetPalette } from "@/components/builder/WidgetPalette";
 import { BuilderCanvas } from "@/components/builder/BuilderCanvas";
 import { Inspector } from "@/components/builder/Inspector";
@@ -899,7 +899,7 @@ function SettingsSchemaPanel() {
               <input className="input text-xs px-2 py-1 min-w-0" value={f.default === undefined ? "" : String(f.default)} placeholder="default" onChange={(e) => update(i, { default: e.target.value || undefined })} />
             </div>
             {f.type === "select" && (
-              <input className="input text-xs px-2 py-1 w-full" value={(f.options ?? []).join(",")} placeholder="options (comma-separated)" onChange={(e) => update(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
+              <input className="input text-xs px-2 py-1 w-full" value={settingsOptionsText(f.options)} placeholder="options: value|label, value|label" onChange={(e) => update(i, { options: parseSettingsOptions(e.target.value) })} />
             )}
           </div>
         ))}
@@ -912,6 +912,24 @@ function SettingsSchemaPanel() {
       )}
     </section>
   );
+}
+
+function settingsOptionsText(options: SettingsOption[] | undefined): string {
+  return (options ?? []).map((o) => {
+    if (typeof o === "string") return o;
+    return `${o.value}|${o.label}`;
+  }).join(",");
+}
+
+function parseSettingsOptions(text: string): SettingsOption[] {
+  return text.split(",").map((raw) => raw.trim()).filter(Boolean).map((raw) => {
+    const sep = raw.indexOf("|");
+    if (sep < 0) return raw;
+    const value = raw.slice(0, sep).trim();
+    const label = raw.slice(sep + 1).trim();
+    const n = Number(value);
+    return { value: value !== "" && !Number.isNaN(n) ? n : value, label: label || value };
+  });
 }
 
 const MAX_ASSET_BYTES = 4 * 1024 * 1024;

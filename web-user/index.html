@@ -633,12 +633,13 @@ function drawSystem(){
 
 const CLOCK_THEMES={ Cyan:{time:'#00D1FF',sec:'#FF9500',date:'#848E9C',bg:'#0B0E11'}, Gold:{time:'#F0B90B',sec:'#FF9500',date:'#848E9C',bg:'#0B0E11'}, Mint:{time:'#0ECB81',sec:'#A0F0D0',date:'#7A8A85',bg:'#06120E'}, Neon:{time:'#FF2E97',sec:'#00E5FF',date:'#9A6A8A',bg:'#0A0014'}, Mono:{time:'#FFFFFF',sec:'#BBBBBB',date:'#888888',bg:'#000000'} };
 const DOW=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-function daysLabel(d){ d=d||[]; if(!d.length)return'Once'; if(d.length===7)return'Every day'; if(JSON.stringify([...d].sort())===JSON.stringify([1,2,3,4,5]))return'Weekdays'; return [...d].sort().map(n=>DOW[n-1]).join(' '); }
+function daysLabel(d){ d=d||[]; if(!d.length||d.length===7)return'Every day'; if(JSON.stringify([...d].sort())===JSON.stringify([1,2,3,4,5]))return'Weekdays'; return [...d].sort().map(n=>DOW[n-1]).join(' '); }
 function drawClock(){
   const c=App.ctrl, s=c.section('clock');
   const alarms=(s.alarms||[]).map(a=>typeof a==='object'?a:{});
   const alarmsPanel = c.has('clock-alarm') ? `
     <div class="panel"><div class="ttl" style="margin-bottom:8px">Alarm <span class="sub">(${alarms.length}/8)</span></div>
+      <div class="sub" style="margin:-4px 0 8px">Rings on the display with sound, Snooze 5m, and Stop.</div>
       <div>${alarms.length?alarms.map((a,i)=>`<div class="row" style="margin:9px 0"><div class="grow"><div class="ttl">${esc(a.time||'--:--')}${a.label?' · '+esc(a.label):''}</div><div class="sub">${esc(daysLabel(a.days))}</div></div><label class="switch"><input type="checkbox" data-aen="${i}" ${a.enabled!==false?'checked':''}><span></span></label><button class="danger" data-adel="${i}">✕</button></div>`).join(''):'<div class="muted small">No alarms yet.</div>'}</div>
       <div style="margin-top:10px;border-top:1px solid var(--line);padding-top:12px">
         <div class="row" style="gap:8px"><input id="am_time" type="time" value="07:00" style="width:auto"><input id="am_label" type="text" placeholder="Label (optional)" class="grow"></div>
@@ -663,7 +664,7 @@ function drawClock(){
   bindLocked(el('app'), c);
   const nd=new Set();
   el('app').querySelectorAll('[data-day]').forEach(ch=>ch.onclick=()=>{ const n=+ch.dataset.day; if(nd.has(n)){ nd.delete(n); ch.style.background=''; ch.style.color=''; } else { nd.add(n); ch.style.background='rgba(240,185,11,.22)'; ch.style.color='var(--accent)'; } });
-  if(el('am_add')) el('am_add').onclick=()=>{ if(alarms.length>=8) return toast('Max 8 alarms','err'); c.patch('clock','alarms',[...alarms,{time:el('am_time').value,label:el('am_label').value.trim(),days:[...nd].sort((a,b)=>a-b),enabled:true,sound:'beep'}]); drawClock(); };
+  if(el('am_add')) el('am_add').onclick=()=>{ if(alarms.length>=8) return toast('Max 8 alarms','err'); c.patch('clock','alarms',[...alarms,{time:el('am_time').value,label:el('am_label').value.trim(),days:[...nd].sort((a,b)=>a-b),enabled:true,sound:'beep',snooze:5}]); drawClock(); };
   el('app').querySelectorAll('[data-aen]').forEach(t=>t.onchange=()=>{ const i=+t.dataset.aen; c.patch('clock','alarms',alarms.map((a,x)=>x===i?{...a,enabled:t.checked}:a)); });
   el('app').querySelectorAll('[data-adel]').forEach(b=>b.onclick=()=>{ c.patch('clock','alarms',alarms.filter((_,i)=>i!==+b.dataset.adel)); drawClock(); });
 }
